@@ -1,7 +1,11 @@
 # Test plan
 
-Normal verification is `./scripts/verify.sh`. It requires no GPU, network, model download,
+Normal verification is `pwsh -NoProfile -File scripts/verify.ps1`. It requires no GPU, network, model download,
 container runtime, or cached model.
+
+The end-to-end mock gateway smoke is
+`pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local
+services around both generation-family checks.
 
 Unit tests cover profiles, cache resolution and state, fingerprints, launch arguments,
 redaction, and hardware probe resilience. Contract tests prove AR traces and diffusion

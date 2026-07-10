@@ -24,6 +24,6 @@ than silently assuming the target is installed.
 
 ## Development
 
-Use the project `.venv`, run `./scripts/verify.sh`, and mark physical GPU tests with the
+Use PowerShell scripts only for project operations. Use the project `.venv`, run
+`pwsh -NoProfile -File scripts/verify.ps1`, and mark physical GPU tests with the
 `hardware`, `rocm`, `large_model`, or `long_running` pytest markers as appropriate.
-

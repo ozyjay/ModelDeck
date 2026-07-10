@@ -11,9 +11,9 @@ are introduced.
 
 ## Quick start
 
-```bash
-./scripts/setup_fedora.sh
-./scripts/run_dev.sh
+```powershell
+pwsh -NoProfile -File scripts/setup.ps1
+pwsh -NoProfile -File scripts/run_dev.ps1
 ```
 
 - Management dashboard: <http://127.0.0.1:3600>
@@ -22,10 +22,9 @@ are introduced.
 
 Start a mock worker from the dashboard or with:
 
-```bash
-curl -X POST http://127.0.0.1:3600/api/workers/mock-ar/start
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/mock-ar/start
 ```
 
-Stop both services with `./scripts/stop_dev.sh`. See [Start here](docs/START_HERE.md)
+Stop both services with `pwsh -NoProfile -File scripts/stop_dev.ps1`. See [Start here](docs/START_HERE.md)
 and the [build plan](docs/BUILD_PLAN.md) for current scope and next steps.
-

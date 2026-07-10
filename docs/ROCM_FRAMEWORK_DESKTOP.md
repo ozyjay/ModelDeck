@@ -30,12 +30,33 @@ Cached repositories included Qwen 0.5B/1.5B/3B instruct variants,
 `google/diffusiongemma-26B-A4B-it`, Red Hat Gemma and GPT-OSS variants, and OpenAI
 GPT-OSS. Cache presence is not compatibility evidence.
 
+## Current online support status
+
+AMD's ROCm 7.2 Radeon/Ryzen support matrix explicitly lists `gfx1151` and the AMD Ryzen
+AI Max+ 395. It lists PyTorch 2.9, ROCm 7.2, and Python 3.12 as production-supported,
+with FP16 officially validated. This confirms that ROCm 7.2 supports the Framework
+Desktop's processor and GPU architecture.
+
+The OS qualification is narrower: AMD's matrix lists Ubuntu 24.04.3, while Fedora's
+Fedora 44 package catalogue still provides ROCm 7.1.0. Fedora Rawhide/Fedora 45 carries
+7.2 packages. Consequently, “ROCm 7.2 supports the Framework Desktop hardware” is
+confirmed, but “Fedora 44's standard ROCm packages provide 7.2” is currently false.
+Community reports demonstrate working Framework Desktop 7.2.1 configurations, primarily
+on Ubuntu or with separately installed ROCm/TheRock components.
+
+Sources:
+
+- <https://rocm.docs.amd.com/projects/radeon-ryzen/en/docs-7.2/docs/compatibility/compatibilityryz/native_linux/native_linux_compatibility.html>
+- <https://packages.fedoraproject.org/pkgs/rocm/rocm/>
+- <https://community.frame.work/t/step-by-step-guide-ubuntu-24-04-rocm-7-2-1-llama-cpp-on-framework-desktop/81721>
+
 ## Probe and smoke policy
 
-Run `./scripts/check_environment.sh`. The optional physical allocation check is:
+Run `pwsh -NoProfile -File scripts/check_environment.ps1`. The optional physical
+allocation check is:
 
-```bash
-./scripts/check_environment.sh --allocation-test
+```powershell
+pwsh -NoProfile -File scripts/check_environment.ps1 --allocation-test
 ```
 
 ROCm PyTorch deliberately exposes devices through the `cuda` API, so
@@ -49,9 +70,10 @@ is required. ModelDeck will not change the parent process environment globally.
 ## Known-good and known-failed configurations
 
 No physical model run was performed in this slice. The SQLite compatibility registry
-therefore contains no invented hardware success. The detected 7.1.x/target 7.2.x
-mismatch is a go/no-go blocker for Phase 3 until a project-local, pinned stack is tested.
+therefore contains no invented hardware success. Official hardware support does not
+replace local evidence: the detected system 7.1.x stack must be kept isolated from a
+project-local, pinned 7.2 stack and that stack must pass allocation and model smoke tests
+before Phase 3 is accepted.
 
 Upgrade events create new fingerprints; they do not overwrite older positive or negative
 records.
-
