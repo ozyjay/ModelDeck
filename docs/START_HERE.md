@@ -12,5 +12,7 @@ loads nor downloads models.
 4. Start with `pwsh -NoProfile -File scripts/run_dev.ps1`.
 
 Real Transformers integration is deliberately gated on a project Python 3.12 ROCm
-environment and new compatibility evidence. The detected host system ROCm packages were
-7.1.x during Phase 0, not the configured 7.2.x target.
+environment and compatibility evidence. The isolated ROCm 7.2.1 Qwen worker has now
+passed its initial hardware smoke; Fedora's system ROCm packages remain unchanged at
+7.1.x. Run `pwsh -NoProfile -File scripts/setup_rocm72.ps1` only when preparing that
+optional worker.

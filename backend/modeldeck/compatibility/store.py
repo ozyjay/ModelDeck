@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -88,3 +89,66 @@ class CompatibilityStore:
             }
             for row in rows
         ]
+
+    def record_test(
+        self,
+        evidence: Mapping[str, Any],
+        *,
+        result: str,
+        failure_class: str | None = None,
+    ) -> dict[str, Any]:
+        tested_at = datetime.now(UTC).isoformat()
+        fingerprint = evidence_fingerprint(evidence)
+        document = dict(evidence)
+        document.update(
+            {
+                "result": result,
+                "failure_class": failure_class,
+                "tested_at": tested_at,
+            }
+        )
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute(
+                "INSERT INTO compatibility_tests "
+                "(fingerprint, result, failure_class, evidence_json, tested_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    fingerprint,
+                    result,
+                    failure_class,
+                    json.dumps(document, sort_keys=True, default=str),
+                    tested_at,
+                ),
+            )
+            test_id = int(cursor.lastrowid)
+        return {
+            "id": test_id,
+            "fingerprint": fingerprint,
+            "result": result,
+            "failure_class": failure_class,
+            "evidence": document,
+            "tested_at": tested_at,
+        }
+
+    def update_test_evidence(self, test_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT fingerprint, result, failure_class, evidence_json, tested_at "
+                "FROM compatibility_tests WHERE id = ?",
+                (test_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown compatibility test: {test_id}")
+            evidence = json.loads(row[3])
+            evidence.update(dict(updates))
+            database.execute(
+                "UPDATE compatibility_tests SET evidence_json = ? WHERE id = ?",
+                (json.dumps(evidence, sort_keys=True, default=str), test_id),
+            )
+        return {
+            "id": test_id,
+            "fingerprint": row[0],
+            "result": row[1],
+            "failure_class": row[2],
+            "evidence": evidence,
+            "tested_at": row[4],
+        }

@@ -7,6 +7,23 @@ The end-to-end mock gateway smoke is
 `pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local
 services around both generation-family checks.
 
+The optional physical AR smoke is
+`pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1`. It loads the pinned cached
+Qwen worker, records stack/latency/torch-memory evidence, confirms process exit, and stops
+all services it started. It never downloads a model.
+
+In-flight hardware cancellation is checked separately with
+`pwsh -NoProfile -File scripts/smoke_rocm_cancellation.ps1`.
+
+The 30-minute acceptance run is
+`pwsh -NoProfile -File scripts/stability_rocm_autoregressive.ps1`. It records duration,
+request count, failures, shutdown and process-exit evidence against the compatibility
+fingerprint.
+
+The recorded Qwen run lasted 1,808.851 seconds and completed 343 gateway requests with
+zero failures. The in-flight cancellation and repeated start/stop checks also passed on
+the physical Framework Desktop.
+
 Unit tests cover profiles, cache resolution and state, fingerprints, launch arguments,
 redaction, and hardware probe resilience. Contract tests prove AR traces and diffusion
 frames remain distinct and that gateway failures are local and structured. Integration

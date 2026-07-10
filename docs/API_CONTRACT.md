@@ -15,7 +15,7 @@ route. Requests route only to ready loopback workers. Unavailable responses use 
 `local_provider_unavailable`, required family, alias, and
 `cloud_fallback_attempted: false`.
 
-Streaming proxy support, gateway cancellation propagation, job event forwarding, and
-OpenAI-compatible SSE chunks are Phase 3/4/6 work. Worker-native SSE is already proved by
-the mock diffusion contract.
-
+The gateway forwards SSE streams without buffering and propagates cancellation through
+`POST /v1/requests/{request_id}/cancel`. `fast-chat` and `token-explainer` prefer the live
+Qwen worker when ready and fall back explicitly to the mock AR worker. Native job-event
+forwarding and stricter OpenAI SSE compatibility remain later work.

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -82,13 +84,19 @@ class WorkerSupervisor:
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 raise RuntimeError(worker.last_error)
 
-            command = build_mock_worker_command(worker.profile)
+            try:
+                launch = build_worker_launch(worker.profile)
+            except ValueError as error:
+                worker.last_error = str(error)
+                await self._transition(worker, WorkerState.FAILED, worker.last_error)
+                raise RuntimeError(worker.last_error) from error
             await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
             try:
                 worker.process = await asyncio.create_subprocess_exec(
-                    *command,
+                    *launch.command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=launch.environment,
                 )
             except OSError as error:
                 worker.last_error = str(error)
@@ -103,11 +111,17 @@ class WorkerSupervisor:
             }
             await self._transition(worker, WorkerState.LOADING, "Waiting for worker health and model load")
             try:
-                await asyncio.wait_for(self._wait_until_ready(worker), timeout=self.startup_timeout)
+                startup_timeout = float(
+                    worker.profile.settings.get("startup_timeout_seconds", self.startup_timeout)
+                )
+                await asyncio.wait_for(self._wait_until_loaded(worker), timeout=startup_timeout)
                 await self._transition(worker, WorkerState.WARMING, "Running configured warmup")
-                async with httpx.AsyncClient(timeout=2.0) as client:
+                warmup_timeout = float(worker.profile.settings.get("warmup_timeout_seconds", 10.0))
+                async with httpx.AsyncClient(timeout=warmup_timeout) as client:
                     response = await client.post(f"http://127.0.0.1:{worker.profile.port}/warmup")
                     response.raise_for_status()
+                    if response.json().get("ready") is not True:
+                        raise RuntimeError("worker warmup did not report readiness")
                 await self._transition(worker, WorkerState.READY, "Worker passed health and warmup checks")
             except Exception as error:
                 worker.last_error = f"Startup failed: {type(error).__name__}: {error}"
@@ -152,7 +166,7 @@ class WorkerSupervisor:
     def event_history(self) -> list[dict[str, Any]]:
         return [event.model_dump(mode="json") for event in self._event_history]
 
-    async def _wait_until_ready(self, worker: ManagedWorker) -> None:
+    async def _wait_until_loaded(self, worker: ManagedWorker) -> None:
         url = f"http://127.0.0.1:{worker.profile.port}/health"
         async with httpx.AsyncClient(timeout=0.5) as client:
             while True:
@@ -161,7 +175,11 @@ class WorkerSupervisor:
                 try:
                     response = await client.get(url)
                     payload = response.json()
-                    if response.is_success and payload.get("ready") is True:
+                    if payload.get("state") == WorkerState.FAILED:
+                        raise RuntimeError(payload.get("error") or "worker model load failed")
+                    if response.is_success and (
+                        payload.get("ready") is True or payload.get("state") == WorkerState.WARMING
+                    ):
                         return
                 except (httpx.HTTPError, ValueError):
                     pass
@@ -231,24 +249,67 @@ class WorkerSupervisor:
             raise KeyError(f"Unknown worker: {worker_id}") from error
 
 
-def build_mock_worker_command(profile: ModelProfile) -> list[str]:
-    if profile.preferred_runtime != "mock":
-        raise ValueError("The initial supervisor only launches allowlisted mock workers")
-    return [
-        sys.executable,
-        "-m",
-        "modeldeck.workers.mock_worker",
+@dataclass(frozen=True)
+class WorkerLaunch:
+    command: list[str]
+    environment: dict[str, str]
+
+
+def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "PYTHONUNBUFFERED": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    common = [
         "--worker-id",
         profile.id,
         "--model-id",
         profile.model_id,
         "--revision",
         profile.revision,
-        "--family",
-        profile.generation_family.value,
         "--port",
         str(profile.port),
     ]
+    if profile.preferred_runtime == "mock":
+        command = [
+            sys.executable,
+            "-m",
+            "modeldeck.workers.mock_worker",
+            *common,
+            "--family",
+            profile.generation_family.value,
+        ]
+        return WorkerLaunch(command=command, environment=environment)
+    if profile.preferred_runtime == "transformers-rocm":
+        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+        if not python.is_file():
+            raise ValueError(
+                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup_rocm72.ps1"
+            )
+        command = [
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.autoregressive_worker",
+            *common,
+            "--dtype",
+            profile.dtype,
+            "--context-length",
+            str(profile.settings.get("context_length", 2048)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 128)),
+        ]
+        return WorkerLaunch(command=command, environment=environment)
+    raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
+
+
+def build_mock_worker_command(profile: ModelProfile) -> list[str]:
+    if profile.preferred_runtime != "mock":
+        raise ValueError("Profile is not a mock runtime")
+    return build_worker_launch(profile).command
 
 
 def port_available(port: int, host: str = "127.0.0.1") -> bool:

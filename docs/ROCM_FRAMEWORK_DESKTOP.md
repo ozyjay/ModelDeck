@@ -69,11 +69,29 @@ is required. ModelDeck will not change the parent process environment globally.
 
 ## Known-good and known-failed configurations
 
-No physical model run was performed in this slice. The SQLite compatibility registry
-therefore contains no invented hardware success. Official hardware support does not
-replace local evidence: the detected system 7.1.x stack must be kept isolated from a
-project-local, pinned 7.2 stack and that stack must pass allocation and model smoke tests
-before Phase 3 is accepted.
+An initial physical smoke passed on 10 July 2026 with:
+
+- Fedora 44 and kernel `7.1.3-200.fc44.x86_64`;
+- Radeon 8060S / `gfx1151`;
+- isolated Python 3.12 `.venv-rocm72`;
+- PyTorch `2.9.1+rocm7.2.1.gitff65f5bc`, HIP `7.2.53211-e1a6bc5663`;
+- Transformers `5.13.0`;
+- `Qwen/Qwen2.5-0.5B-Instruct` revision
+  `7ae557604adf67be50417f59c2c2f167def9a775`;
+- FP16, local-files-only, trusted remote code disabled;
+- no `LD_PRELOAD`, no `HSA_OVERRIDE_GFX_VERSION`, and offline Hub/Transformers mode.
+
+The four-token compatibility smoke measured a 0.478-second cached load, 0.019-second
+first output, approximately 65.6 tokens/second, 1.116 GB peak torch allocation, and 1.110 GB
+steady torch allocation. These short-smoke figures are evidence for this fingerprint,
+not general benchmark claims. In-flight cancellation through the stable gateway passed.
+A 1,808.851-second stability run completed 343 gateway requests with zero failures, then
+shut down cleanly. Multiple subsequent worker loads also passed. Process exit was
+confirmed after every run; full unified-memory recovery was not directly measured by a
+reliable system-wide counter.
+
+No current negative Qwen evidence has been recorded. Official hardware support still
+does not replace local evidence for other models, dtypes, revisions, or package versions.
 
 Upgrade events create new fingerprints; they do not overwrite older positive or negative
 records.

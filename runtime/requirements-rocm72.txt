@@ -1,0 +1,9 @@
+# AMD-published ROCm 7.2.1 wheels validated locally on gfx1151 with Python 3.12.
+torch @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl#sha256=fb45ace0a27e9f0d0e3c4c6efd8932162743f8376f2aa4752a4d31ef5a1bd3d7
+triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl#sha256=07787af1d28c273852f897bfeaa7bca29f2fa4a13ca0f28f535832b240ce7016
+fastapi==0.139.0
+uvicorn==0.51.0
+transformers==5.13.0
+accelerate==1.14.0
+safetensors==0.8.0
+huggingface_hub==1.22.0

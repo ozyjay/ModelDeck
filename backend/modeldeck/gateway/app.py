@@ -1,36 +1,40 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.config import Settings
-from modeldeck.profiles import default_model_profiles
+from modeldeck.profiles import ModelProfile, default_model_profiles
 
 
-def create_gateway_app() -> FastAPI:
-    app = FastAPI(title="ModelDeck stable local gateway", version="0.1.0")
-    profiles = {profile.alias: profile for profile in default_model_profiles()}
+def create_gateway_app(
+    alias_routes: dict[str, list[ModelProfile]] | None = None,
+) -> FastAPI:
+    app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
+    defaults = {profile.id: profile for profile in default_model_profiles()}
+    routes = alias_routes or {
+        "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
+        "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
+        "text-diffusion": [defaults["mock-diffusion"]],
+    }
+    profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
 
     async def providers() -> list[dict[str, Any]]:
         result = []
         async with httpx.AsyncClient(timeout=0.3) as client:
             for profile in profiles.values():
-                try:
-                    response = await client.get(f"http://127.0.0.1:{profile.port}/health")
-                    health = response.json()
-                    ready = response.is_success and health.get("ready") is True
-                except (httpx.HTTPError, ValueError):
-                    health, ready = None, False
+                health, ready = await provider_health(client, profile)
                 result.append(
                     {
                         "id": profile.id,
                         "alias": profile.alias,
                         "generation_family": profile.generation_family,
-                        "endpoint": f"http://127.0.0.1:{profile.port}",
+                        "endpoint": endpoint(profile),
                         "ready": ready,
                         "health": health,
                     }
@@ -43,28 +47,31 @@ def create_gateway_app() -> FastAPI:
         return {
             "status": "ok",
             "service": "modeldeck-gateway",
-            "ready_providers": sum(p["ready"] for p in states),
+            "ready_providers": sum(provider["ready"] for provider in states),
         }
 
     @app.get("/v1/models")
     async def models():
-        states = await providers()
+        states = {state["id"]: state for state in await providers()}
         return {
             "object": "list",
             "data": [
                 {
-                    "id": profile.alias,
+                    "id": alias,
                     "object": "model",
                     "owned_by": "modeldeck-local",
-                    "ready": state["ready"],
+                    "ready": any(states[profile.id]["ready"] for profile in candidates),
+                    "effective_provider": next(
+                        (profile.id for profile in candidates if states[profile.id]["ready"]), None
+                    ),
                 }
-                for profile, state in zip(profiles.values(), states, strict=True)
+                for alias, candidates in routes.items()
             ],
         }
 
     @app.get("/v1/capabilities")
     async def capabilities():
-        return {alias: profile.capabilities.model_dump() for alias, profile in profiles.items()}
+        return {alias: candidates[0].capabilities.model_dump() for alias, candidates in routes.items()}
 
     @app.get("/v1/providers")
     async def provider_list():
@@ -72,43 +79,124 @@ def create_gateway_app() -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
-        return await proxy_json(request, profiles["fast-chat"], "/v1/chat/completions")
+        return await proxy_request(request, routes, "/v1/chat/completions", "fast-chat")
 
     @app.post("/v1/completions")
     async def completions(request: Request):
-        return await proxy_json(request, profiles["fast-chat"], "/v1/completions")
+        return await proxy_request(request, routes, "/v1/completions", "fast-chat")
 
     @app.post("/native/autoregressive/trace")
     async def trace(request: Request):
-        return await proxy_json(request, profiles["fast-chat"], "/native/autoregressive/trace")
+        return await proxy_request(request, routes, "/native/autoregressive/trace", "token-explainer")
 
     @app.post("/v1/refine")
     async def refine(request: Request):
-        return await proxy_json(request, profiles["text-diffusion"], "/v1/refine")
+        return await proxy_request(request, routes, "/v1/refine", "text-diffusion")
 
     @app.post("/v1/diffuse")
     async def diffuse(request: Request):
-        return await proxy_json(request, profiles["text-diffusion"], "/v1/diffuse")
+        return await proxy_request(request, routes, "/v1/diffuse", "text-diffusion")
+
+    @app.post("/v1/requests/{request_id}/cancel")
+    async def cancel(request_id: str):
+        cancelled = []
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            for profile in profiles.values():
+                health_payload, ready = await provider_health(client, profile)
+                if not ready or not health_payload:
+                    continue
+                try:
+                    response = await client.post(
+                        f"{endpoint(profile)}/cancel", json={"request_id": request_id}
+                    )
+                    if response.is_success and response.json().get("ok"):
+                        cancelled.append(profile.id)
+                except (httpx.HTTPError, ValueError):
+                    continue
+        return {"ok": bool(cancelled), "request_id": request_id, "providers": cancelled}
 
     @app.post("/v1/vision/analyse")
     async def vision():
-        raise HTTPException(501, "No vision worker is implemented in this slice")
+        raise HTTPException(501, "No vision worker is implemented in this phase")
 
     return app
 
 
-async def proxy_json(request: Request, profile, path: str):
+async def proxy_request(
+    request: Request,
+    routes: dict[str, list[ModelProfile]],
+    path: str,
+    default_alias: str,
+):
     body = await request.json()
-    body.setdefault("model", profile.alias)
+    alias = str(body.get("model") or default_alias)
+    candidates = routes.get(alias)
+    if not candidates:
+        return unavailable(alias, "unknown")
+    client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=0.5))
+    selected = None
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            health = await client.get(f"http://127.0.0.1:{profile.port}/health")
-            if not health.is_success or health.json().get("ready") is not True:
-                return unavailable(profile.alias, profile.generation_family.value)
-            response = await client.post(f"http://127.0.0.1:{profile.port}{path}", json=body)
+        for profile in candidates:
+            _, ready = await provider_health(client, profile)
+            if ready:
+                selected = profile
+                break
+        if selected is None:
+            await client.aclose()
+            return unavailable(alias, candidates[0].generation_family.value)
+        body["model"] = alias
+        upstream = client.build_request("POST", f"{endpoint(selected)}{path}", json=body)
+        response = await client.send(upstream, stream=bool(body.get("stream")))
     except (httpx.HTTPError, ValueError):
-        return unavailable(profile.alias, profile.generation_family.value)
-    return JSONResponse(response.json(), status_code=response.status_code)
+        await client.aclose()
+        return unavailable(alias, candidates[0].generation_family.value)
+    if body.get("stream"):
+        return StreamingResponse(
+            forward_stream(response, client),
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type", "text/event-stream"),
+            headers={"x-modeldeck-provider": selected.id},
+        )
+    try:
+        payload = await response.aread()
+        return JSONResponse(
+            json_loads(payload),
+            status_code=response.status_code,
+            headers={"x-modeldeck-provider": selected.id},
+        )
+    finally:
+        await response.aclose()
+        await client.aclose()
+
+
+async def forward_stream(response: httpx.Response, client: httpx.AsyncClient) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in response.aiter_bytes():
+            yield chunk
+    finally:
+        await response.aclose()
+        await client.aclose()
+
+
+async def provider_health(
+    client: httpx.AsyncClient, profile: ModelProfile
+) -> tuple[dict[str, Any] | None, bool]:
+    try:
+        response = await client.get(f"{endpoint(profile)}/health")
+        health = response.json()
+        return health, response.is_success and health.get("ready") is True
+    except (httpx.HTTPError, ValueError):
+        return None, False
+
+
+def endpoint(profile: ModelProfile) -> str:
+    return f"http://127.0.0.1:{profile.port}"
+
+
+def json_loads(payload: bytes) -> Any:
+    import json
+
+    return json.loads(payload)
 
 
 def unavailable(alias: str, family: str) -> JSONResponse:

@@ -1,0 +1,32 @@
+{
+  "id": "qwen-small-rocm",
+  "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "alias": "token-explainer",
+  "generation_family": "autoregressive",
+  "preferred_runtime": "transformers-rocm",
+  "lifecycle": "resident",
+  "port": 8620,
+  "local_files_only": true,
+  "trust_remote_code": false,
+  "dtype": "float16",
+  "capabilities": {
+    "chat": true,
+    "completions": true,
+    "streaming": true,
+    "cancellation": true,
+    "logits": true,
+    "top_k_trace": true,
+    "hidden_states": "optional",
+    "iterative_refinement": false,
+    "intermediate_frames": false,
+    "seeded_generation": true
+  },
+  "settings": {
+    "context_length": 2048,
+    "maximum_new_tokens": 128,
+    "top_k": 5,
+    "startup_timeout_seconds": 300,
+    "warmup_timeout_seconds": 60
+  }
+}

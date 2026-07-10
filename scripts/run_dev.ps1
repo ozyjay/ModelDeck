@@ -9,3 +9,4 @@ Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
 Write-Host 'Management: http://127.0.0.1:3600'
 Write-Host 'Gateway:    http://127.0.0.1:8600/v1/health'
+Write-Host 'Workers:    mock AR 8610, mock diffusion 8611, Qwen ROCm 8620 (stopped until requested)'

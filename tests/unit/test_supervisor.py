@@ -2,16 +2,37 @@ from __future__ import annotations
 
 import sys
 
+import pytest
 from modeldeck.profiles import default_model_profiles
-from modeldeck.supervisor.service import build_mock_worker_command, redact_log
+from modeldeck.supervisor.service import build_mock_worker_command, build_worker_launch, redact_log
 
 
 def test_worker_command_is_an_argument_array_with_allowlisted_values() -> None:
-    profile = default_model_profiles()[0]
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
     command = build_mock_worker_command(profile)
     assert command[:3] == [sys.executable, "-m", "modeldeck.workers.mock_worker"]
-    assert command[-2:] == ["--port", "8610"]
+    port_index = command.index("--port")
+    assert command[port_index : port_index + 2] == ["--port", "8610"]
     assert all(";" not in argument for argument in command)
+
+
+def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
+    missing = tmp_path / "missing-python"
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(missing))
+    with pytest.raises(ValueError, match="setup_rocm72.ps1"):
+        build_worker_launch(profile)
+
+
+def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+    launch = build_worker_launch(profile)
+    assert launch.command[0] == str(runtime_python.absolute())
+    assert launch.command[0] != str(runtime_python.resolve())
 
 
 def test_log_redaction_removes_prompt_and_credentials() -> None:

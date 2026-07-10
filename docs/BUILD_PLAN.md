@@ -50,8 +50,11 @@ optional later refinement if dashboard complexity warrants it.
 2. **Implemented lifecycle proof:** allowlisted subprocess supervisor, state machine,
    serial load lock, health/warmup readiness, logs, graceful/forced stop, mock AR and
    diffusion workers, contracts, tests.
-3. **AR Transformers:** pin Python/ROCm environment; implement one proven cached Qwen,
-   streaming/cancellation/trace/metrics; record evidence and 30-minute smoke.
+3. **AR Transformers — implemented:** pinned isolated Python/ROCm environment,
+   cached Qwen 0.5B load, streaming/cancellation/trace/metrics, gateway preference and
+   compatibility evidence. The 30-minute stability run completed 343 requests with zero
+   failures; real in-flight gateway cancellation, repeated lifecycle, graceful shutdown,
+   and process exit passed.
 4. **Text diffusion:** adapt proven DiffusionGemma engine behind native job/frame API,
    evidence-gated HSA preload, cancellation and replay.
 5. **Scheduler and compatibility execution:** measured memory/reserve/conflicts, lifecycle
@@ -79,8 +82,8 @@ structured no-cloud gateway failure.
 
 ## Risks and mitigations
 
-- **ROCm mismatch:** block real model phases until a pinned project environment passes the
-  allocation smoke; preserve detected versions.
+- **ROCm mismatch:** the isolated pinned ROCm 7.2.1 environment passed allocation and Qwen
+  smoke while Fedora's 7.1 RPMs remained untouched; continue preserving both fingerprints.
 - **Unified memory exhaustion:** one load at a time now; add measured reserve scheduling
   before large workers.
 - **Port migration:** keep 8600 stable and provide explicit compatibility routes/adapters;
@@ -109,7 +112,7 @@ workers automatically, both mock families repeatedly start/stop without leaked p
 wrong-family routes fail, fixed-port collisions are refused, and the full non-hardware
 test suite passes.
 
-Phase 3 is **no-go** until the ROCm mismatch is resolved or explicitly accepted with a
-tested project stack, model revisions are pinned and complete locally, port ownership is
-rehearsed, and compatibility evidence storage is wired to the real test runner.
-
+Phase 3 is a **go** for the recorded Qwen fingerprint. A reliable direct measurement of
+whole-system unified-memory recovery remains desirable scheduler evidence, but process
+exit and repeated successful reloads passed. This does not generalise to larger Qwen
+variants, other dtypes, revisions, or runtimes.

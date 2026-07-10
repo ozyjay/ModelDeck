@@ -17,7 +17,7 @@ def free_port() -> int:
 
 
 def make_profile(port: int) -> ModelProfile:
-    document = default_model_profiles()[0].model_dump()
+    document = next(profile for profile in default_model_profiles() if profile.id == "mock-ar").model_dump()
     document.update({"id": "integration-ar", "alias": "integration-ar", "port": port})
     return ModelProfile.model_validate(document)
 

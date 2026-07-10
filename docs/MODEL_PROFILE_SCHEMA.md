@@ -7,12 +7,14 @@ Required fields include `id`, exact `model_id`, pinned `revision`, stable `alias
 `generation_family`, `preferred_runtime`, lifecycle class, fixed port, local-files-only
 policy, trusted-remote-code policy, dtype, capabilities, and family-specific settings.
 
-Initial real candidates, subject to cache and hardware evidence, are:
+Initial real profiles are:
 
-- `Qwen/Qwen2.5-0.5B-Instruct` as a small AR profile, `fast-chat`, resident, local only;
+- `Qwen/Qwen2.5-0.5B-Instruct` revision
+  `7ae557604adf67be50417f59c2c2f167def9a775` as the tested small AR profile,
+  `token-explainer`, resident, FP16 and local only;
 - `google/diffusiongemma-26B-A4B-it` as text diffusion, `text-diffusion`, exclusive,
-  local only.
+  local only and still awaiting its ModelDeck hardware phase.
 
-Their profiles must pin resolved snapshot commits before Phase 3/4 and must not be marked
-runnable until load, warmup, smoke, shutdown, and memory-recovery evidence exists.
-
+The Qwen profile has load, warmup, smoke, cancellation, 30-minute stability, shutdown and
+process-exit evidence. DiffusionGemma must pin its resolved snapshot and must not be marked
+runnable until equivalent Phase 4 evidence exists.

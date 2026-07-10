@@ -59,6 +59,32 @@ class ModelProfile(BaseModel):
 def default_model_profiles() -> list[ModelProfile]:
     return [
         ModelProfile(
+            id="qwen-small-rocm",
+            model_id="Qwen/Qwen2.5-0.5B-Instruct",
+            revision="7ae557604adf67be50417f59c2c2f167def9a775",
+            alias="token-explainer",
+            generation_family="autoregressive",
+            preferred_runtime="transformers-rocm",
+            lifecycle="resident",
+            port=8620,
+            dtype="float16",
+            capabilities=CapabilitySet(
+                chat=True,
+                completions=True,
+                logits=True,
+                top_k_trace=True,
+                hidden_states="optional",
+                seeded_generation=True,
+            ),
+            settings={
+                "context_length": 2048,
+                "maximum_new_tokens": 128,
+                "top_k": 5,
+                "startup_timeout_seconds": 300,
+                "warmup_timeout_seconds": 60,
+            },
+        ),
+        ModelProfile(
             id="mock-ar",
             model_id="modeldeck/mock-autoregressive",
             revision="fixture-v1",
@@ -73,6 +99,7 @@ def default_model_profiles() -> list[ModelProfile]:
                 logits=True,
                 top_k_trace=True,
                 hidden_states="optional",
+                seeded_generation=True,
             ),
             settings={"maximum_new_tokens": 64, "top_k": 5},
         ),
