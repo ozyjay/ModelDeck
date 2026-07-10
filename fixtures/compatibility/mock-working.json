@@ -1,0 +1,12 @@
+{
+  "hardware_profile": "ci-no-gpu",
+  "model_id": "modeldeck/mock-autoregressive",
+  "model_revision": "fixture-v1",
+  "runtime": "mock",
+  "dtype": "none",
+  "result": "tested-working",
+  "load_result": "success",
+  "warmup_result": "success",
+  "smoke_result": "success"
+}
+

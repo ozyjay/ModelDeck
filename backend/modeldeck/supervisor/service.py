@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import socket
+import sys
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+
+from modeldeck.profiles import ModelProfile
+from modeldeck.protocol import WorkerEvent, WorkerState
+
+
+@dataclass
+class ManagedWorker:
+    profile: ModelProfile
+    state: WorkerState = WorkerState.STOPPED
+    process: asyncio.subprocess.Process | None = None
+    started_at: datetime | None = None
+    last_error: str | None = None
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "id": self.profile.id,
+            "state": self.state,
+            "model_id": self.profile.model_id,
+            "generation_family": self.profile.generation_family,
+            "runtime": self.profile.preferred_runtime,
+            "lifecycle": self.profile.lifecycle,
+            "alias": self.profile.alias,
+            "endpoint": f"http://127.0.0.1:{self.profile.port}",
+            "port": self.profile.port,
+            "pid": self.process.pid if self.process and self.process.returncode is None else None,
+            "started_at": self.started_at,
+            "last_error": self.last_error,
+            "capabilities": self.profile.capabilities.model_dump(),
+        }
+
+
+class WorkerSupervisor:
+    def __init__(
+        self,
+        profiles: list[ModelProfile],
+        *,
+        startup_timeout: float = 10.0,
+        stop_timeout: float = 4.0,
+    ) -> None:
+        self.workers = {profile.id: ManagedWorker(profile=profile) for profile in profiles}
+        self.startup_timeout = startup_timeout
+        self.stop_timeout = stop_timeout
+        self._load_lock = asyncio.Lock()
+        self._worker_locks = defaultdict(asyncio.Lock)
+        self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue(maxsize=256)
+        self._event_history: deque[WorkerEvent] = deque(maxlen=256)
+        self._logs: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=500))
+
+    def list_workers(self) -> list[dict[str, Any]]:
+        self._refresh_exits()
+        return [worker.snapshot() for worker in self.workers.values()]
+
+    def get_worker(self, worker_id: str) -> dict[str, Any]:
+        self._refresh_exits()
+        return self._require(worker_id).snapshot()
+
+    def logs(self, worker_id: str) -> list[dict[str, Any]]:
+        self._require(worker_id)
+        return list(self._logs[worker_id])
+
+    async def start(self, worker_id: str) -> dict[str, Any]:
+        worker = self._require(worker_id)
+        async with self._worker_locks[worker_id], self._load_lock:
+            if worker.process and worker.process.returncode is None:
+                return worker.snapshot()
+            await self._transition(worker, WorkerState.VALIDATING, "Validating allowlisted worker manifest")
+            if not port_available(worker.profile.port):
+                worker.last_error = f"Port {worker.profile.port} is already in use"
+                await self._transition(worker, WorkerState.FAILED, worker.last_error)
+                raise RuntimeError(worker.last_error)
+
+            command = build_mock_worker_command(worker.profile)
+            await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
+            try:
+                worker.process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as error:
+                worker.last_error = str(error)
+                await self._transition(worker, WorkerState.FAILED, f"Worker launch failed: {error}")
+                raise RuntimeError(worker.last_error) from error
+            worker.started_at = datetime.now(UTC)
+            worker.last_error = None
+            worker.tasks = {
+                asyncio.create_task(self._capture(worker, worker.process.stdout, "stdout")),
+                asyncio.create_task(self._capture(worker, worker.process.stderr, "stderr")),
+                asyncio.create_task(self._watch_exit(worker)),
+            }
+            await self._transition(worker, WorkerState.LOADING, "Waiting for worker health and model load")
+            try:
+                await asyncio.wait_for(self._wait_until_ready(worker), timeout=self.startup_timeout)
+                await self._transition(worker, WorkerState.WARMING, "Running configured warmup")
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    response = await client.post(f"http://127.0.0.1:{worker.profile.port}/warmup")
+                    response.raise_for_status()
+                await self._transition(worker, WorkerState.READY, "Worker passed health and warmup checks")
+            except Exception as error:
+                worker.last_error = f"Startup failed: {type(error).__name__}: {error}"
+                await self._transition(worker, WorkerState.FAILED, worker.last_error)
+                await self._terminate(worker)
+                raise RuntimeError(worker.last_error) from error
+            return worker.snapshot()
+
+    async def stop(self, worker_id: str) -> dict[str, Any]:
+        worker = self._require(worker_id)
+        async with self._worker_locks[worker_id]:
+            if not worker.process or worker.process.returncode is not None:
+                worker.process = None
+                await self._transition(worker, WorkerState.STOPPED, "Worker is stopped")
+                return worker.snapshot()
+            await self._transition(worker, WorkerState.STOPPING, "Requesting graceful worker shutdown")
+            try:
+                async with httpx.AsyncClient(timeout=1.5) as client:
+                    await client.post(f"http://127.0.0.1:{worker.profile.port}/shutdown")
+            except httpx.HTTPError:
+                pass
+            try:
+                await asyncio.wait_for(worker.process.wait(), timeout=self.stop_timeout)
+            except TimeoutError:
+                await self._terminate(worker)
+            worker.process = None
+            worker.started_at = None
+            await self._transition(worker, WorkerState.STOPPED, "Worker stopped and process exited")
+            return worker.snapshot()
+
+    async def restart(self, worker_id: str) -> dict[str, Any]:
+        await self.stop(worker_id)
+        return await self.start(worker_id)
+
+    async def stop_all(self) -> None:
+        for worker_id in self.workers:
+            await self.stop(worker_id)
+
+    async def next_event(self) -> WorkerEvent:
+        return await self._events.get()
+
+    def event_history(self) -> list[dict[str, Any]]:
+        return [event.model_dump(mode="json") for event in self._event_history]
+
+    async def _wait_until_ready(self, worker: ManagedWorker) -> None:
+        url = f"http://127.0.0.1:{worker.profile.port}/health"
+        async with httpx.AsyncClient(timeout=0.5) as client:
+            while True:
+                if worker.process is None or worker.process.returncode is not None:
+                    raise RuntimeError("worker exited before readiness")
+                try:
+                    response = await client.get(url)
+                    payload = response.json()
+                    if response.is_success and payload.get("ready") is True:
+                        return
+                except (httpx.HTTPError, ValueError):
+                    pass
+                await asyncio.sleep(0.05)
+
+    async def _capture(
+        self,
+        worker: ManagedWorker,
+        stream: asyncio.StreamReader | None,
+        source: str,
+    ) -> None:
+        if stream is None:
+            return
+        while line := await stream.readline():
+            message = redact_log(line.decode(errors="replace").rstrip())
+            if message:
+                self._logs[worker.profile.id].append(
+                    {"timestamp": datetime.now(UTC).isoformat(), "source": source, "message": message}
+                )
+
+    async def _watch_exit(self, worker: ManagedWorker) -> None:
+        process = worker.process
+        if process is None:
+            return
+        return_code = await process.wait()
+        if worker.state not in {WorkerState.STOPPING, WorkerState.STOPPED, WorkerState.FAILED}:
+            worker.last_error = f"Worker process exited unexpectedly with code {return_code}"
+            await self._transition(worker, WorkerState.FAILED, worker.last_error)
+
+    async def _terminate(self, worker: ManagedWorker) -> None:
+        process = worker.process
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=1.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+
+    async def _transition(self, worker: ManagedWorker, state: WorkerState, message: str) -> None:
+        worker.state = state
+        event = WorkerEvent(worker_id=worker.profile.id, state=state, message=message)
+        self._event_history.append(event)
+        if self._events.full():
+            self._events.get_nowait()
+        self._events.put_nowait(event)
+
+    def _refresh_exits(self) -> None:
+        for worker in self.workers.values():
+            if (
+                worker.process
+                and worker.process.returncode is not None
+                and worker.state
+                not in {
+                    WorkerState.STOPPED,
+                    WorkerState.FAILED,
+                }
+            ):
+                worker.state = WorkerState.FAILED
+                worker.last_error = f"Worker process exited with code {worker.process.returncode}"
+
+    def _require(self, worker_id: str) -> ManagedWorker:
+        try:
+            return self.workers[worker_id]
+        except KeyError as error:
+            raise KeyError(f"Unknown worker: {worker_id}") from error
+
+
+def build_mock_worker_command(profile: ModelProfile) -> list[str]:
+    if profile.preferred_runtime != "mock":
+        raise ValueError("The initial supervisor only launches allowlisted mock workers")
+    return [
+        sys.executable,
+        "-m",
+        "modeldeck.workers.mock_worker",
+        "--worker-id",
+        profile.id,
+        "--model-id",
+        profile.model_id,
+        "--revision",
+        profile.revision,
+        "--family",
+        profile.generation_family.value,
+        "--port",
+        str(profile.port),
+    ]
+
+
+def port_available(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def redact_log(message: str) -> str:
+    lowered = message.lower()
+    for marker in ("authorization:", "hf_token=", "api_key=", "prompt=", "generated_text="):
+        index = lowered.find(marker)
+        if index >= 0:
+            return f"{message[:index]}{marker}[redacted]"
+    if message.startswith("{"):
+        try:
+            payload = json.loads(message)
+            for key in ("prompt", "messages", "generated_text", "token", "api_key", "authorization"):
+                if key in payload:
+                    payload[key] = "[redacted]"
+            return json.dumps(payload, separators=(",", ":"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return message

@@ -1,0 +1,35 @@
+{
+  "id": "framework-desktop-rocm72",
+  "display_name": "Framework Desktop ROCm 7.2",
+  "configured": {
+    "os_family": "fedora",
+    "os_version": "44",
+    "gpu_vendor": "amd",
+    "gpu_name": "AMD Radeon 8060S Graphics",
+    "gpu_architecture": "gfx1151",
+    "accelerator_runtime": "rocm",
+    "accelerator_runtime_version": "7.2.x",
+    "torch_build": "rocm7.2",
+    "device_nodes": ["/dev/kfd", "/dev/dri"],
+    "hsa_runtime_preload": {
+      "mode": "auto",
+      "candidate_paths": ["/usr/lib64/libhsa-runtime64.so.1"]
+    },
+    "storage": {
+      "work_mount": "/mnt/work",
+      "huggingface_cache_candidates": [
+        "${HF_HUB_CACHE}",
+        "${HF_HOME}/hub",
+        "~/.cache/huggingface/hub",
+        "/mnt/work/models/huggingface/hub"
+      ]
+    },
+    "policy": {
+      "maximum_simultaneous_model_loads": 1,
+      "default_large_model_lifecycle": "exclusive"
+    }
+  },
+  "detected": null,
+  "last_tested": null
+}
+

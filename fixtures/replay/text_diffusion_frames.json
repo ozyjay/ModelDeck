@@ -1,0 +1,6 @@
+{
+  "fixture": "modeldeck-diffusion-v1",
+  "seed": 11,
+  "frames": ["A robot …", "A robot arrives at …", "A robot arrives at orientation."]
+}
+

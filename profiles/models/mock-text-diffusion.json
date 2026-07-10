@@ -1,0 +1,27 @@
+{
+  "id": "mock-diffusion",
+  "model_id": "modeldeck/mock-text-diffusion",
+  "revision": "fixture-v1",
+  "alias": "text-diffusion",
+  "generation_family": "text-diffusion",
+  "preferred_runtime": "mock",
+  "lifecycle": "exclusive",
+  "port": 8611,
+  "local_files_only": true,
+  "trust_remote_code": false,
+  "dtype": "auto",
+  "capabilities": {
+    "chat": false,
+    "completions": false,
+    "streaming": true,
+    "cancellation": true,
+    "logits": "model-specific",
+    "top_k_trace": false,
+    "hidden_states": false,
+    "iterative_refinement": true,
+    "intermediate_frames": true,
+    "seeded_generation": true
+  },
+  "settings": {"denoising_steps": 8, "block_length": 16, "maximum_length": 64}
+}
+

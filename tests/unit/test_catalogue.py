@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from modeldeck.catalogue import discover_huggingface_models, resolve_cache_paths
+
+
+def test_cache_path_precedence(tmp_path: Path) -> None:
+    paths = resolve_cache_paths(
+        {"HOME": str(tmp_path), "HF_HOME": str(tmp_path / "hf-home"), "HF_HUB_CACHE": str(tmp_path / "exact")}
+    )
+    assert paths[:3] == [tmp_path / "exact", tmp_path / "hf-home/hub", tmp_path / ".cache/huggingface/hub"]
+    assert Path("/mnt/work/models/huggingface/hub") in paths
+
+
+def test_discovers_complete_cache_without_claiming_compatibility(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Qwen--Demo" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps({"architectures": ["DemoForCausalLM"]}), encoding="utf-8"
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    models = discover_huggingface_models([tmp_path])
+
+    assert models[0]["model_id"] == "Qwen/Demo"
+    assert models[0]["download_state"] == "installed-untested"
+    assert models[0]["generation_family_hint"] == "autoregressive"
+    assert models[0]["runnable"] is False
+
+
+def test_marks_incomplete_snapshot_partial(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Org--Partial" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (snapshot / "weights.incomplete").write_bytes(b"partial")
+    assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"

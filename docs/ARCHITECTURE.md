@@ -1,0 +1,60 @@
+# Architecture
+
+## Boundaries
+
+```text
+Dashboard/API :3600 ---- WorkerSupervisor ---- one allowlisted process per model :8610+
+       |                                      |-- autoregressive contract
+       |                                      `-- text-diffusion contract
+       `---- read-only cache + hardware + SQLite evidence
+
+Demo clients ---- Stable gateway :8600 ---- capability alias ---- ready local worker
+                                                   `---- structured unavailable result
+```
+
+HuggingFacePull owns Hugging Face acquisition and cleanup. OllamaPull will own Ollama
+registry storage when inspected. ModelDeck owns profiles, runtime process lifecycle,
+scheduling, evidence, fixed local routing, and management presentation. Demos retain
+public wording, interaction state, reset, and prepared replay assets.
+
+## Process and failure model
+
+The management API does not import model libraries or hold model tensors. Each worker is
+an isolated subprocess launched with a fixed argument array derived from a validated
+profile. The supervisor serialises loads, checks fixed ports, captures stdout/stderr,
+polls health, runs warmup, detects exit, requests graceful shutdown, and terminates only
+after a timeout. Terminating the worker is the memory-recovery boundary.
+
+States are `discovered`, `stopped`, `validating`, `starting`, `loading`, `warming`,
+`ready`, `busy`, `degraded`, `stopping`, `failed`, `orphaned`, and `incompatible`.
+Process existence alone never means ready.
+
+## Gateway and routing
+
+Aliases route by declared generation family and capability. `fast-chat` maps to the mock
+AR worker and `text-diffusion` maps to the mock refinement worker in this slice. A stopped
+worker returns a structured local unavailable response; no cloud request occurs. The
+gateway and management API are separate processes and ports so demo clients have a
+stable contract while management restarts evolve independently.
+
+## Scheduler
+
+The first scheduler invariant is a single global model-load lock. Profiles declare
+`resident`, `on-demand`, or `exclusive`. Later measured peak/steady memory, context/KV
+growth, temperature, reserve, process use, and compatibility evidence will inform launch
+decisions. Parameter count alone will not.
+
+## Cache integration
+
+The scanner resolves `HF_HUB_CACHE`, `${HF_HOME}/hub`, the normal user cache, then
+`/mnt/work/models/huggingface/hub`. It reads snapshots, config hints, incomplete markers,
+revision refs, and physical size. It never calls the Hub and never treats files as proof
+that a model is runnable.
+
+## Data and security
+
+SQLite stores model profiles, compatibility tests, worker events, and presets. Logs are
+bounded in memory in this slice and redact prompt/output/credential-shaped fields.
+Services bind to loopback. The API has no shell, arbitrary environment, filesystem
+browser, token, Docker socket, upload, camera, or cloud inference surface.
+

@@ -1,0 +1,6 @@
+{
+  "fixture": "modeldeck-ar-v1",
+  "prompt": "Explain the local model gateway.",
+  "tokens": ["The", " gateway", " routes", " locally", "."]
+}
+
