@@ -1,5 +1,5 @@
 .venv*/
-.venv-rocm72/
+.venv-rocm*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
