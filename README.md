@@ -34,11 +34,13 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/mock-ar/st
 Stop both services with `pwsh -NoProfile -File scripts/stop_dev.ps1`. See [Start here](docs/START_HERE.md)
 and the [build plan](docs/BUILD_PLAN.md) for current scope and next steps.
 
-## Optional ROCm autoregressive worker
+## Optional ROCm model workers
 
 ```powershell
 pwsh -NoProfile -File scripts/setup_rocm72.ps1
 pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1
+# After the initial Phase 4 implementation, test the separate diffusion engine with:
+pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1
 ```
 
 This optional setup creates a second environment, `.venv-rocm72`, containing the pinned
@@ -49,3 +51,8 @@ gateway, mocks, replay, or ordinary tests. Model loading remains local-files-onl
 Run each setup script initially and again when its requirements change. Compatible real
 GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
+
+The Qwen smoke is compatibility-tested on the target hardware. The DiffusionGemma smoke
+uses its complete pinned local snapshot at `/mnt/work/models/huggingface/hub` but remains
+unverified on physical hardware until that script succeeds and records evidence. Neither
+smoke downloads model files.

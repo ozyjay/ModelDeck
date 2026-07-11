@@ -55,8 +55,10 @@ optional later refinement if dashboard complexity warrants it.
    compatibility evidence. The 30-minute stability run completed 343 requests with zero
    failures; real in-flight gateway cancellation, repeated lifecycle, graceful shutdown,
    and process exit passed.
-4. **Text diffusion:** adapt proven DiffusionGemma engine behind native job/frame API,
-   evidence-gated HSA preload, cancellation and replay.
+4. **Text diffusion — implementation ready for hardware evidence:** pinned local
+   DiffusionGemma load behind the native job/frame API, draft frames, seeded generation,
+   cancellation, mock fallback, and evidence-gated HSA preload. Physical smoke, repeated
+   lifecycle, and stability evidence remain required before this phase is a go.
 5. **Scheduler and compatibility execution:** measured memory/reserve/conflicts, lifecycle
    classes, preset transition approval, append-only tests.
 6. **Gateway completion:** streaming proxy, cancellation, aliases and explicit local

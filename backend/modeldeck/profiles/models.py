@@ -59,6 +59,31 @@ class ModelProfile(BaseModel):
 def default_model_profiles() -> list[ModelProfile]:
     return [
         ModelProfile(
+            id="diffusiongemma-rocm",
+            model_id="google/diffusiongemma-26B-A4B-it",
+            revision="52de6b914ee1749a7d4933202505ddf5b414ec43",
+            alias="text-diffusion",
+            generation_family="text-diffusion",
+            preferred_runtime="text-diffusion-transformers-rocm",
+            lifecycle="exclusive",
+            port=8621,
+            dtype="bfloat16",
+            capabilities=CapabilitySet(
+                iterative_refinement=True,
+                intermediate_frames=True,
+                seeded_generation=True,
+                logits="model-specific",
+            ),
+            settings={
+                "maximum_new_tokens": 256,
+                "maximum_denoising_steps": 48,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 300,
+                "hsa_preload_evidence": False,
+                "cache_root": "/mnt/work/models/huggingface/hub",
+            },
+        ),
+        ModelProfile(
             id="qwen-small-rocm",
             model_id="Qwen/Qwen2.5-0.5B-Instruct",
             revision="7ae557604adf67be50417f59c2c2f167def9a775",

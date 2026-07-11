@@ -35,6 +35,24 @@ def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_p
     assert launch.command[0] != str(runtime_python.resolve())
 
 
+def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-rocm")
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+    launch = build_worker_launch(profile)
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.text_diffusion_worker",
+    ]
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["HF_HUB_CACHE"] == "/mnt/work/models/huggingface/hub"
+    assert "LD_PRELOAD" not in launch.environment
+
+
 def test_log_redaction_removes_prompt_and_credentials() -> None:
     assert redact_log("prompt=private visitor words") == "prompt=[redacted]"
     assert "secret" not in redact_log('{"api_key":"secret","status":"failed"}')

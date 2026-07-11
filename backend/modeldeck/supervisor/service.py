@@ -303,6 +303,32 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_new_tokens", 128)),
         ]
         return WorkerLaunch(command=command, environment=environment)
+    if profile.preferred_runtime == "text-diffusion-transformers-rocm":
+        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+        if not python.is_file():
+            raise ValueError(
+                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup_rocm72.ps1"
+            )
+        environment.pop("LD_PRELOAD", None)
+        environment["HF_HUB_CACHE"] = str(profile.settings["cache_root"])
+        if profile.settings.get("hsa_preload_evidence"):
+            hsa_runtime = Path("/usr/lib64/libhsa-runtime64.so.1")
+            if not hsa_runtime.is_file():
+                raise ValueError("Evidence-gated HSA runtime preload library is missing")
+            environment["LD_PRELOAD"] = str(hsa_runtime)
+        command = [
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.text_diffusion_worker",
+            *common,
+            "--dtype",
+            profile.dtype,
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 256)),
+            "--maximum-denoising-steps",
+            str(profile.settings.get("maximum_denoising_steps", 48)),
+        ]
+        return WorkerLaunch(command=command, environment=environment)
     raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
 
 

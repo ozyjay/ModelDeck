@@ -18,7 +18,9 @@ This slice is an operational rehearsal with mock workers, not final Open Day rea
   retry an unchanged known incompatibility.
 - The gateway returns a structured unavailable result and never calls cloud inference.
 - Use `POST /api/presets/stop-all` for one-click managed-worker shutdown.
-- Use `pwsh -NoProfile -File scripts/stop_dev.ps1` to stop gateway and management services.
+- Use `pwsh -NoProfile -File scripts/stop_dev.ps1` to stop workers, gateway, and management
+  services. Startup also cleans stale allowlisted ModelDeck workers when the management
+  service is absent; it never terminates an unknown process merely because it owns a port.
 
 Logs are under `var/log`. They must not contain visitor prompts or generated content.
 Before final readiness, pin every dependency/model revision, complete the selected

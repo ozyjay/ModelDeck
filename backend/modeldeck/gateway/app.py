@@ -20,7 +20,7 @@ def create_gateway_app(
     routes = alias_routes or {
         "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
-        "text-diffusion": [defaults["mock-diffusion"]],
+        "text-diffusion": [defaults["diffusiongemma-rocm"], defaults["mock-diffusion"]],
     }
     profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
 

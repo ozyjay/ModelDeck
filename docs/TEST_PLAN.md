@@ -15,6 +15,12 @@ all services it started. It never downloads a model.
 In-flight hardware cancellation is checked separately with
 `pwsh -NoProfile -File scripts/smoke_rocm_cancellation.ps1`.
 
+The optional physical text-diffusion smoke is
+`pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1`. It loads the pinned local
+DiffusionGemma snapshot through its separate native diffusion worker, records frame-shaped
+smoke evidence, confirms process exit, and never downloads a model. It must pass before
+the profile is described as tested-working on the target hardware.
+
 The 30-minute acceptance run is
 `pwsh -NoProfile -File scripts/stability_rocm_autoregressive.ps1`. It records duration,
 request count, failures, shutdown and process-exit evidence against the compatibility
