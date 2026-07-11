@@ -10,7 +10,7 @@ from modeldeck.main import create_app
 
 @pytest.mark.asyncio
 async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: Path) -> None:
-    app = create_app(Settings(data_dir=tmp_path))
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -30,7 +30,7 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) -> None:
-    app = create_app(Settings(data_dir=tmp_path))
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"

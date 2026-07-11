@@ -9,7 +9,8 @@ cloud endpoints. Worker IDs select prevalidated manifests. Subprocesses use argu
 arrays without a shell.
 
 Visitor prompts and generated content are not stored or logged. Supervisor log capture is
-bounded and redacts prompt, output, authorisation, API-key, and token-shaped fields. Full
-diagnostic capture is not implemented in this slice. SQLite holds configuration and
-compatibility evidence, not content history.
-
+bounded to the latest 500 records per worker and redacts prompt, output, authorisation,
+API-key, and token-shaped fields before persisting JSON Lines files under
+`var/log/workers`. The location can be changed with `MODELDECK_LOG_DIR`. Full diagnostic
+capture is not implemented in this slice. SQLite holds configuration and compatibility
+evidence, not content history.

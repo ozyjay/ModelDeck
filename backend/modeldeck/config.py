@@ -18,6 +18,7 @@ class Settings:
     management_port: int = 3600
     gateway_port: int = 8600
     data_dir: Path = Path(".modeldeck")
+    log_dir: Path = Path("var/log/workers")
     open_day: bool = False
     allow_downloads: bool = False
     diagnostic_capture: bool = False
@@ -31,6 +32,7 @@ class Settings:
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
             data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),
+            log_dir=Path(os.getenv("MODELDECK_LOG_DIR", "var/log/workers")),
             open_day=open_day,
             allow_downloads=allow_downloads,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),

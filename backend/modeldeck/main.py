@@ -52,7 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
-    app.state.supervisor = WorkerSupervisor(profiles)
+    app.state.supervisor = WorkerSupervisor(profiles, log_dir=configured.log_dir)
     app.state.profiles = profiles
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)

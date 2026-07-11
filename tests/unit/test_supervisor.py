@@ -4,7 +4,12 @@ import sys
 
 import pytest
 from modeldeck.profiles import default_model_profiles
-from modeldeck.supervisor.service import build_mock_worker_command, build_worker_launch, redact_log
+from modeldeck.supervisor.service import (
+    WorkerSupervisor,
+    build_mock_worker_command,
+    build_worker_launch,
+    redact_log,
+)
 
 
 def test_worker_command_is_an_argument_array_with_allowlisted_values() -> None:
@@ -56,3 +61,19 @@ def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path)
 def test_log_redaction_removes_prompt_and_credentials() -> None:
     assert redact_log("prompt=private visitor words") == "prompt=[redacted]"
     assert "secret" not in redact_log('{"api_key":"secret","status":"failed"}')
+
+
+def test_worker_logs_are_redacted_bounded_and_restored(tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile], log_dir=tmp_path)
+    supervisor._append_log(profile.id, "stderr", "prompt=private visitor words")
+    for index in range(501):
+        supervisor._append_log(profile.id, "stderr", f"diagnostic {index}")
+
+    restored = WorkerSupervisor([profile], log_dir=tmp_path)
+    logs = restored.logs(profile.id)
+
+    assert len(logs) == 500
+    assert all("private visitor words" not in item["message"] for item in logs)
+    assert logs[-1]["message"] == "diagnostic 500"
+    assert len((tmp_path / "mock-ar.jsonl").read_text().splitlines()) == 500

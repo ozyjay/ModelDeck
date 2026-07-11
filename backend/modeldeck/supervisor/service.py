@@ -45,12 +45,15 @@ class ManagedWorker:
 
 
 class WorkerSupervisor:
+    _MAX_LOG_RECORDS = 500
+
     def __init__(
         self,
         profiles: list[ModelProfile],
         *,
         startup_timeout: float = 10.0,
         stop_timeout: float = 4.0,
+        log_dir: Path | None = None,
     ) -> None:
         self.workers = {profile.id: ManagedWorker(profile=profile) for profile in profiles}
         self.startup_timeout = startup_timeout
@@ -59,7 +62,13 @@ class WorkerSupervisor:
         self._worker_locks = defaultdict(asyncio.Lock)
         self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue(maxsize=256)
         self._event_history: deque[WorkerEvent] = deque(maxlen=256)
-        self._logs: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=500))
+        self._logs: dict[str, deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=self._MAX_LOG_RECORDS)
+        )
+        self.log_dir = log_dir
+        if self.log_dir is not None:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            self._load_persisted_logs()
 
     def list_workers(self) -> list[dict[str, Any]]:
         self._refresh_exits()
@@ -196,9 +205,50 @@ class WorkerSupervisor:
         while line := await stream.readline():
             message = redact_log(line.decode(errors="replace").rstrip())
             if message:
-                self._logs[worker.profile.id].append(
-                    {"timestamp": datetime.now(UTC).isoformat(), "source": source, "message": message}
-                )
+                self._append_log(worker.profile.id, source, message)
+
+    def _append_log(self, worker_id: str, source: str, message: str) -> None:
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "source": source,
+            "message": redact_log(message),
+        }
+        logs = self._logs[worker_id]
+        was_full = len(logs) == self._MAX_LOG_RECORDS
+        logs.append(record)
+        if self.log_dir is None:
+            return
+        path = self.log_dir / f"{worker_id}.jsonl"
+        if was_full:
+            self._write_log_file(path, logs)
+        else:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+    def _load_persisted_logs(self) -> None:
+        if self.log_dir is None:
+            return
+        for worker_id in self.workers:
+            path = self.log_dir / f"{worker_id}.jsonl"
+            if not path.is_file():
+                continue
+            logs = self._logs[worker_id]
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(record, dict) and {"timestamp", "source", "message"} <= record.keys():
+                    logs.append(record)
+            self._write_log_file(path, logs)
+
+    @staticmethod
+    def _write_log_file(path: Path, logs: deque[dict[str, Any]]) -> None:
+        temporary = path.with_suffix(".jsonl.tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            for record in logs:
+                handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+        temporary.replace(path)
 
     async def _watch_exit(self, worker: ManagedWorker) -> None:
         process = worker.process
