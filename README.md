@@ -14,8 +14,7 @@ diagnosis remain useful when the target hardware is unavailable.
 
 ```powershell
 pwsh -NoProfile -File scripts/setup.ps1
-pwsh -NoProfile -File scripts/setup_rocm72.ps1
-pwsh -NoProfile -File scripts/run_dev.ps1
+pwsh -NoProfile -File scripts/run.ps1
 ```
 
 ModelDeck deliberately uses two environments with different responsibilities:
@@ -33,9 +32,9 @@ boundary.
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
-For lightweight development or CI on a machine without the target GPU, run only
-`scripts/setup.ps1`. The control plane and fallbacks remain usable, but that mode is not a
-complete target deployment.
+For lightweight development or CI on a machine without the target GPU, run
+`pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
+fallbacks remain usable, but that mode is not a complete target deployment.
 
 Start the selected ROCm worker from the dashboard or through the management API:
 
@@ -45,14 +44,14 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/qwen-small
 ```
 
 Mock and replay workers remain explicit fallback/test choices. Stop all ModelDeck workers
-and services with `pwsh -NoProfile -File scripts/stop_dev.ps1`. See
+and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
 and next steps.
 
 ## Core ROCm model workers
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_rocm72.ps1
+pwsh -NoProfile -File scripts/setup.ps1
 pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1
 pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1
 ```
@@ -61,8 +60,8 @@ The ROCm setup prepares the primary inference environment without replacing Fedo
 It is not required merely to execute control-plane tests, but it is required for the
 target product. Model loading remains local-files-only.
 
-Run each setup script initially and again when its requirements change. Compatible real
-GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
+Run the setup script initially and again when either environment's requirements change.
+Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
 The Qwen smoke is compatibility-tested on the target hardware. The DiffusionGemma smoke

@@ -1,3 +1,6 @@
+[CmdletBinding()]
+param([switch]$ControlPlaneOnly)
+
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 $Candidates = @()
@@ -21,4 +24,23 @@ if (-not (Test-Path '.venv')) {
 if ($LASTEXITCODE -ne 0) { throw 'Could not update pip in the project virtual environment.' }
 & .venv/bin/python -m pip install -e '.[dev]'
 if ($LASTEXITCODE -ne 0) { throw 'Could not install ModelDeck in the project virtual environment.' }
-Write-Host "ModelDeck environment ready at $PWD/.venv"
+
+if ($ControlPlaneOnly) {
+    Write-Host 'ModelDeck control-plane environment is ready.'
+} else {
+    $Runtime = '.venv-rocm72'
+    if (-not (Test-Path "$Runtime/bin/python")) {
+        & $Python -m venv $Runtime
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated ROCm 7.2 environment.' }
+    }
+    & "$Runtime/bin/python" -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw 'Could not update pip in the ROCm environment.' }
+    & "$Runtime/bin/python" -m pip install -r runtime/requirements-rocm72.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned ROCm runtime.' }
+    & "$Runtime/bin/python" -m pip install --no-deps -e .
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install the ModelDeck worker into the ROCm environment.' }
+
+    & "$Runtime/bin/python" -c "import PIL, torch, transformers; from transformers import AutoProcessor, DiffusionGemmaForBlockDiffusion; print('torch', torch.__version__); print('hip', torch.version.hip); print('transformers', transformers.__version__); print('pillow', PIL.__version__); print('diffusiongemma_import', 'ok'); print('cuda_available', torch.cuda.is_available()); print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not visible in this session')"
+    if ($LASTEXITCODE -ne 0) { throw 'The ROCm runtime import probe failed.' }
+    Write-Host 'ModelDeck control-plane and ROCm environments are ready.'
+}

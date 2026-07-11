@@ -25,7 +25,7 @@ def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> No
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     missing = tmp_path / "missing-python"
     monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(missing))
-    with pytest.raises(ValueError, match="setup_rocm72.ps1"):
+    with pytest.raises(ValueError, match="setup.ps1"):
         build_worker_launch(profile)
 
 

@@ -1,5 +1,12 @@
+[CmdletBinding()]
+param([switch]$OpenDay)
+
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+if ($OpenDay) {
+    $Env:MODELDECK_OPEN_DAY = '1'
+    $Env:MODELDECK_ALLOW_DOWNLOADS = '0'
+}
 if (-not (Test-Path '.venv/bin/modeldeck')) { throw 'Run scripts/setup.ps1 first.' }
 & (Join-Path $PSScriptRoot 'check_ports.ps1')
 New-Item -ItemType Directory -Force -Path var/log,var/run | Out-Null

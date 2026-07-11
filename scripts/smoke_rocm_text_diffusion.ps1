@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 if (-not (Test-Path '.venv-rocm72/bin/python')) {
-    throw 'Run pwsh -NoProfile -File scripts/setup_rocm72.ps1 first.'
+    throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
 }
 $ManagementUrl = 'http://127.0.0.1:3600'
 $StartedServices = $false
@@ -13,8 +13,8 @@ try {
         if ('diffusiongemma-rocm' -notin @($Profiles.id)) { throw 'Stale management service.' }
     }
     catch {
-        & (Join-Path $PSScriptRoot 'stop_dev.ps1')
-        & (Join-Path $PSScriptRoot 'run_dev.ps1')
+        & (Join-Path $PSScriptRoot 'stop.ps1')
+        & (Join-Path $PSScriptRoot 'run.ps1')
         $StartedServices = $true
         Start-Sleep -Seconds 1
     }
@@ -47,5 +47,5 @@ finally {
         }
         catch { Write-Warning "Could not request worker shutdown: $_" }
     }
-    if ($StartedServices) { & (Join-Path $PSScriptRoot 'stop_dev.ps1') }
+    if ($StartedServices) { & (Join-Path $PSScriptRoot 'stop.ps1') }
 }

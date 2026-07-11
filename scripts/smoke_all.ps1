@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$RunScript = Join-Path $PSScriptRoot 'run_dev.ps1'
-$StopScript = Join-Path $PSScriptRoot 'stop_dev.ps1'
+$RunScript = Join-Path $PSScriptRoot 'run.ps1'
+$StopScript = Join-Path $PSScriptRoot 'stop.ps1'
 $Started = $false
 try {
     & $RunScript

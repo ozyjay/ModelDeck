@@ -9,7 +9,7 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
    at the event.
 2. Run `pwsh -NoProfile -File scripts/check_ports.ps1` and
    `pwsh -NoProfile -File scripts/check_environment.ps1`.
-3. Run `pwsh -NoProfile -File scripts/run_open_day.ps1`. It forces downloads off.
+3. Run `pwsh -NoProfile -File scripts/run.ps1 -OpenDay`. It forces downloads off.
 4. Open `http://127.0.0.1:3600`; confirm gateway health and `/mnt/work` status.
 5. Start the selected ROCm worker and wait for `ready`, not merely a PID. Confirm the
    gateway reports that ROCm profile as the effective provider before opening the demo.
@@ -21,7 +21,7 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
   retry an unchanged known incompatibility.
 - The gateway returns a structured unavailable result and never calls cloud inference.
 - Use `POST /api/presets/stop-all` for one-click managed-worker shutdown.
-- Use `pwsh -NoProfile -File scripts/stop_dev.ps1` to stop workers, gateway, and management
+- Use `pwsh -NoProfile -File scripts/stop.ps1` to stop workers, gateway, and management
   services. Startup also cleans stale allowlisted ModelDeck workers when the management
   service is absent; it never terminates an unknown process merely because it owns a port.
 

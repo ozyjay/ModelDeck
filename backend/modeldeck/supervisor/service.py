@@ -337,9 +337,7 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
     if profile.preferred_runtime == "transformers-rocm":
         python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
         if not python.is_file():
-            raise ValueError(
-                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup_rocm72.ps1"
-            )
+            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
         command = [
             str(python.absolute()),
             "-m",
@@ -356,9 +354,7 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
     if profile.preferred_runtime == "text-diffusion-transformers-rocm":
         python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
         if not python.is_file():
-            raise ValueError(
-                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup_rocm72.ps1"
-            )
+            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
         environment.pop("LD_PRELOAD", None)
         environment["HF_HUB_CACHE"] = str(profile.settings["cache_root"])
         if profile.settings.get("hsa_preload_evidence"):

@@ -6,7 +6,7 @@ foreach ($Port in @(3600, 8600)) {
     try { $Listener.Start() } catch { $ServiceBusy += $Port } finally { $Listener.Stop() }
 }
 if ($ServiceBusy.Count) {
-    throw "ModelDeck service ports are occupied: $($ServiceBusy -join ', '). Run scripts/stop_dev.ps1 first."
+    throw "ModelDeck service ports are occupied: $($ServiceBusy -join ', '). Run scripts/stop.ps1 first."
 }
 
 & (Join-Path $PSScriptRoot 'stop_stale_workers.ps1') -Quiet
