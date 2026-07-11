@@ -49,6 +49,28 @@ class FakeDiffusionEngine:
         ]
 
 
+class FailingDiffusionEngine(FakeDiffusionEngine):
+    def load(self) -> None:
+        raise RuntimeError("ROCm device unavailable")
+
+
+@pytest.mark.asyncio
+async def test_diffusion_load_failure_is_logged_and_reported(caplog) -> None:
+    config = EngineConfig(model_id="google/diffusiongemma", revision="pinned")
+    app = create_app(worker_id="diffusion-test", config=config, engine=FailingDiffusionEngine())
+
+    with caplog.at_level("ERROR", logger="uvicorn.error"):
+        async with app.router.lifespan_context(app):
+            await app.state.load_task
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                health = await client.get("/health")
+
+    assert health.json()["state"] == "failed"
+    assert health.json()["error"] == "Load failed: RuntimeError: ROCm device unavailable"
+    assert "Diffusion engine load failed: ROCm device unavailable" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_real_diffusion_contract_uses_native_frames() -> None:
     config = EngineConfig(model_id="google/diffusiongemma", revision="pinned")

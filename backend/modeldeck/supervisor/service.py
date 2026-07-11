@@ -192,7 +192,7 @@ class WorkerSupervisor:
                         return
                 except (httpx.HTTPError, ValueError):
                     pass
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.5)
 
     async def _capture(
         self,

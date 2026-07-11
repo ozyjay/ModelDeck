@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import logging
 import threading
 import time
 import uuid
@@ -18,6 +19,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -422,6 +425,7 @@ async def _load_engine(app: FastAPI, engine: DiffusionEngine, *, threaded: bool)
     except Exception as error:
         app.state.load_error = f"Load failed: {type(error).__name__}: {error}"
         app.state.worker_state = WorkerState.FAILED
+        LOGGER.exception("Diffusion engine load failed: %s", error)
 
 
 def _ensure_ready(app: FastAPI) -> None:
@@ -449,7 +453,15 @@ def main() -> None:
             maximum_denoising_steps=args.maximum_denoising_steps,
         ),
     )
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="info"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=args.port,
+            log_level="info",
+            access_log=False,
+        )
+    )
     app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
     server.run()
 
