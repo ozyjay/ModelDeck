@@ -7,7 +7,7 @@ The end-to-end mock gateway smoke is
 `pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local
 services around both generation-family checks.
 
-The optional physical AR smoke is
+The hardware-gated AR acceptance smoke is
 `pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1`. It loads the pinned cached
 Qwen worker, records stack/latency/torch-memory evidence, confirms process exit, and stops
 all services it started. It never downloads a model.
@@ -15,7 +15,7 @@ all services it started. It never downloads a model.
 In-flight hardware cancellation is checked separately with
 `pwsh -NoProfile -File scripts/smoke_rocm_cancellation.ps1`.
 
-The optional physical text-diffusion smoke is
+The hardware-gated text-diffusion acceptance smoke is
 `pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1`. It loads the pinned local
 DiffusionGemma snapshot through its separate native diffusion worker, records frame-shaped
 smoke evidence, confirms process exit, and never downloads a model. It must pass before
@@ -36,7 +36,8 @@ frames remain distinct and that gateway failures are local and structured. Integ
 tests launch real isolated mock subprocesses for readiness, restart, shutdown, port
 collision, and crash detection.
 
-Later physical tests are marked `hardware`, `rocm`, `large_model`, or `long_running` and
-are excluded from normal CI. Phase 3/4 requires allocation, load, stream/frame,
+Physical tests are marked `hardware`, `rocm`, `large_model`, or `long_running` and are
+excluded from normal CI, but remain required for target-product acceptance. Phase 3/4
+requires allocation, load, stream/frame,
 cancellation, memory recovery, repeated lifecycle, 30-minute per-worker, and selected
 preset two-hour tests.

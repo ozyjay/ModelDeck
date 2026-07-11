@@ -1,15 +1,18 @@
 # Open Day runbook
 
-This slice is an operational rehearsal with mock workers, not final Open Day readiness.
+The Open Day target uses the core ROCm workers. Mock/replay workers are rehearsed
+fallbacks for a demonstrated hardware or model failure, not the primary presentation.
 
 ## Cold start
 
-1. Confirm `.venv` already exists; never install or update dependencies at the event.
+1. Confirm `.venv` and `.venv-rocm72` already exist; never install or update dependencies
+   at the event.
 2. Run `pwsh -NoProfile -File scripts/check_ports.ps1` and
    `pwsh -NoProfile -File scripts/check_environment.ps1`.
 3. Run `pwsh -NoProfile -File scripts/run_open_day.ps1`. It forces downloads off.
 4. Open `http://127.0.0.1:3600`; confirm gateway health and `/mnt/work` status.
-5. Start the required workers and wait for `ready`, not merely a PID.
+5. Start the selected ROCm worker and wait for `ready`, not merely a PID. Confirm the
+   gateway reports that ROCm profile as the effective provider before opening the demo.
 
 ## Switching and recovery
 

@@ -2,51 +2,64 @@
 
 ModelDeck is a local management service for isolated model workers on the Framework
 Desktop. It provides evidence-based cache discovery, hardware diagnostics, explicit
-worker lifecycle states, mock autoregressive and text-diffusion workers, and a stable
-local gateway.
+worker lifecycle states, isolated ROCm autoregressive and text-diffusion workers, useful
+mock/replay fallbacks, and a stable local gateway.
 
-This first implementation slice deliberately does **not** load or download a model. It
-runs without a GPU by default. An optional isolated ROCm 7.2.1 worker now serves the
-pinned, locally cached Qwen 2.5 0.5B model without changing Fedora's stock packages.
+ROCm workers are core ModelDeck functionality for the target Framework Desktop. They load
+only when explicitly started and never download weights. The management plane, gateway,
+fallbacks, and normal verification still run without GPU access so development and
+diagnosis remain useful when the target hardware is unavailable.
 
-## Quick start
+## Target setup
 
 ```powershell
 pwsh -NoProfile -File scripts/setup.ps1
+pwsh -NoProfile -File scripts/setup_rocm72.ps1
 pwsh -NoProfile -File scripts/run_dev.ps1
 ```
 
-The standard setup creates `.venv`. It contains the lightweight ModelDeck management
-service, gateway, mock and replay workers, and development tests. It does not install the
-ROCm model runtime, and is all that is required for ordinary development without a
-physical GPU worker.
+ModelDeck deliberately uses two environments with different responsibilities:
+
+- `.venv` is the control plane: management service, supervisor, gateway, catalogue,
+  mock/replay fallbacks, and development tests.
+- `.venv-rocm72` is the primary inference runtime: the pinned ROCm, PyTorch, and
+  Transformers stack for Qwen and DiffusionGemma.
+
+Both are part of the target installation. Keeping model libraries outside the control
+plane preserves dependency isolation and makes worker process exit the memory-recovery
+boundary.
 
 - Management dashboard: <http://127.0.0.1:3600>
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
-Start a mock worker from the dashboard or with:
+For lightweight development or CI on a machine without the target GPU, run only
+`scripts/setup.ps1`. The control plane and fallbacks remain usable, but that mode is not a
+complete target deployment.
+
+Start the selected ROCm worker from the dashboard or through the management API:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/mock-ar/start
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/qwen-small-rocm/start `
+    -TimeoutSec 360
 ```
 
-Stop both services with `pwsh -NoProfile -File scripts/stop_dev.ps1`. See [Start here](docs/START_HERE.md)
-and the [build plan](docs/BUILD_PLAN.md) for current scope and next steps.
+Mock and replay workers remain explicit fallback/test choices. Stop all ModelDeck workers
+and services with `pwsh -NoProfile -File scripts/stop_dev.ps1`. See
+[Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
+and next steps.
 
-## Optional ROCm model workers
+## Core ROCm model workers
 
 ```powershell
 pwsh -NoProfile -File scripts/setup_rocm72.ps1
 pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1
-# After the initial Phase 4 implementation, test the separate diffusion engine with:
 pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1
 ```
 
-This optional setup creates a second environment, `.venv-rocm72`, containing the pinned
-AMD ROCm 7.2.1 PyTorch and Transformers stack used by real GPU model workers. It can
-coexist with `.venv`, does not replace Fedora RPMs, and is unnecessary for the dashboard,
-gateway, mocks, replay, or ordinary tests. Model loading remains local-files-only.
+The ROCm setup prepares the primary inference environment without replacing Fedora RPMs.
+It is not required merely to execute control-plane tests, but it is required for the
+target product. Model loading remains local-files-only.
 
 Run each setup script initially and again when its requirements change. Compatible real
 GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded

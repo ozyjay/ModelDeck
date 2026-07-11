@@ -12,6 +12,8 @@ trace implementation.
 The final boundary is management/dashboard, isolated family-specific workers, stable
 gateway, read-only catalogue, evidence registry, and later scheduler. Acquisition remains
 external. AR and diffusion contracts are separate in [worker protocol](WORKER_PROTOCOL.md).
+The `.venv` control plane and `.venv-rocm72` primary inference runtime are both target
+components and remain isolated by design.
 
 ## Database tables
 
@@ -31,6 +33,8 @@ queries. Migrations will be versioned before user-editable persistence begins.
 | Stable model gateway | 8600 | Existing TokenTrail trace and TextDiffusion adapter convention; those routes need migration wrappers |
 | Mock/first AR worker | 8610 | Start of managed worker range |
 | Mock/first diffusion worker | 8611 | Separate process and generation family |
+| Core Qwen ROCm worker | 8620 | Isolated autoregressive runtime |
+| Core DiffusionGemma ROCm worker | 8621 | Isolated, exclusive text-diffusion runtime |
 | External vLLM | 8000 | Existing SceneChat/TextDiffusion convention; unmanaged initially |
 
 No random fallback port is used outside tests.
@@ -63,7 +67,8 @@ optional later refinement if dashboard complexity warrants it.
    classes, preset transition approval, append-only tests.
 6. **Gateway completion:** streaming proxy, cancellation, aliases and explicit local
    alternates, demo adapters.
-7. **Optional providers:** one evidence-backed adapter at a time.
+7. **Additional providers:** optional adapters added one evidence-backed runtime at a time;
+   these do not replace the core ROCm workers.
 8. **Read-only HuggingFacePull integration:** API or metadata contract, including transport
    evidence; no second downloader.
 9. **Fedora/Open Day hardening:** launcher/service, frozen revisions, presets, runbook,
@@ -99,7 +104,8 @@ structured no-cloud gateway failure.
 ## Unresolved assumptions
 
 - The approved project-local PyTorch/ROCm 7.2 wheel set and exact Transformers version.
-- Resolved commits and disk completeness of the first Qwen and DiffusionGemma candidates.
+- Physical DiffusionGemma compatibility, lifecycle, memory, and stability evidence for the
+  pinned complete work-SSD snapshot.
 - Whether HuggingFacePull will expose transport-requested/used evidence through its API or
   a read-only marker.
 - Final shared Open Day port registry and compatibility path for existing `8600` clients.
@@ -113,6 +119,10 @@ The foundation is a **go** when it starts without GPU access, starts neither dow
 workers automatically, both mock families repeatedly start/stop without leaked processes,
 wrong-family routes fail, fixed-port collisions are refused, and the full non-hardware
 test suite passes.
+
+Target-product acceptance additionally requires the selected core ROCm workers to pass
+their hardware-gated smoke, cancellation, repeated lifecycle, memory-recovery, and
+stability requirements. Passing mock tests alone is never target acceptance.
 
 Phase 3 is a **go** for the recorded Qwen fingerprint. A reliable direct measurement of
 whole-system unified-memory recovery remains desirable scheduler evidence, but process

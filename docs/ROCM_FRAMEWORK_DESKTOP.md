@@ -52,8 +52,8 @@ Sources:
 
 ## Probe and smoke policy
 
-Run `pwsh -NoProfile -File scripts/check_environment.ps1`. The optional physical
-allocation check is:
+Run `pwsh -NoProfile -File scripts/check_environment.ps1`. The hardware-gated allocation
+check required for target acceptance is:
 
 ```powershell
 pwsh -NoProfile -File scripts/check_environment.ps1 --allocation-test
@@ -61,7 +61,8 @@ pwsh -NoProfile -File scripts/check_environment.ps1 --allocation-test
 
 ROCm PyTorch deliberately exposes devices through the `cuda` API, so
 `torch.ones((2, 2), device="cuda")` can test an AMD device. It is not evidence of an
-NVIDIA GPU. Normal CI never runs this allocation.
+NVIDIA GPU. Normal CI never runs this allocation because CI is not evidence for the
+physical target.
 
 The HSA runtime candidate may be added to a **single worker's** `LD_PRELOAD` only when
 the file exists, its hardware/runtime profile enables `auto`, and smoke evidence says it

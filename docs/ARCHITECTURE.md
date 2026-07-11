@@ -12,6 +12,15 @@ Demo clients ---- Stable gateway :8600 ---- capability alias ---- ready local wo
                                                    `---- structured unavailable result
 ```
 
+## Runtime environments
+
+`.venv` is ModelDeck's control-plane runtime: API, dashboard, supervisor, gateway,
+catalogue, evidence store, fallbacks, and tests. `.venv-rocm72` is the primary target
+inference runtime used by the core Qwen and DiffusionGemma worker processes. Both belong
+to the target installation, but they remain separate so GPU dependencies and tensors
+never enter the management process. A GPU-free `.venv` run is a useful development or
+recovery mode, not the primary inference configuration.
+
 HuggingFacePull owns Hugging Face acquisition and cleanup. OllamaPull will own Ollama
 registry storage when inspected. ModelDeck owns profiles, runtime process lifecycle,
 scheduling, evidence, fixed local routing, and management presentation. Demos retain
@@ -31,11 +40,13 @@ Process existence alone never means ready.
 
 ## Gateway and routing
 
-Aliases route by declared generation family and capability. `fast-chat` maps to the mock
-AR worker and `text-diffusion` maps to the mock refinement worker in this slice. A stopped
-worker returns a structured local unavailable response; no cloud request occurs. The
-gateway and management API are separate processes and ports so demo clients have a
-stable contract while management restarts evolve independently.
+Aliases route by declared generation family and capability. `fast-chat` prefers the core
+Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
+worker. Each alias retains an explicit mock fallback for GPU-unavailable demonstrations
+and contract testing. When no candidate is ready, the gateway returns a structured local
+unavailable response; no cloud request occurs. The gateway and management API are
+separate processes and ports so demo clients have a stable contract while management
+restarts evolve independently.
 
 ## Scheduler
 
@@ -57,4 +68,3 @@ SQLite stores model profiles, compatibility tests, worker events, and presets. L
 bounded in memory in this slice and redact prompt/output/credential-shaped fields.
 Services bind to loopback. The API has no shell, arbitrary environment, filesystem
 browser, token, Docker socket, upload, camera, or cloud inference surface.
-

@@ -35,3 +35,10 @@ arrays derived from strict profiles; the UI cannot provide commands or raw argum
 Compatibility records are append-only by complete stack fingerprint. A negative result
 is current-stack evidence, not a universal claim.
 
+## ADR-008 — Separate control-plane and primary inference environments
+
+`.venv` runs ModelDeck management, routing, fallbacks, and tests. `.venv-rocm72` is the
+primary target inference runtime for core ROCm workers. Both are required for the target
+installation, but remain separate to preserve dependency isolation, bounded process
+ownership, and process-exit memory recovery. GPU-free operation is a development and
+recovery mode rather than the primary product configuration.
