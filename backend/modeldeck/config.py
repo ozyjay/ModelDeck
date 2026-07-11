@@ -22,6 +22,7 @@ class Settings:
     open_day: bool = False
     allow_downloads: bool = False
     diagnostic_capture: bool = False
+    diffusion_timeout_seconds: float = 900.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -36,4 +37,5 @@ class Settings:
             open_day=open_day,
             allow_downloads=allow_downloads,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
+            diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),
         )

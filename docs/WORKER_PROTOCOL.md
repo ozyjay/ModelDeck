@@ -23,7 +23,8 @@ Canonical routes are `POST /v1/refine`, `/v1/diffuse`, `GET /v1/jobs/{job_id}`, 
 /v1/jobs/{job_id}/cancel`, and `GET /v1/jobs/{job_id}/events`. Frame events contain step,
 total steps, text, masked/stable token counts where available, completion, and seed.
 Native iterative refinement is canonical; it is not implemented by calling an AR token
-loop.
+loop. Job event streams publish refinement frames as the engine produces them rather than
+waiting to replay the completed frame collection.
 
 The mock is deterministic and contract-shaped. It is not evidence that a real model or
 ROCm stack works.

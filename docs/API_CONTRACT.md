@@ -16,6 +16,10 @@ route. Requests route only to ready loopback workers. Unavailable responses use 
 `cloud_fallback_attempted: false`.
 
 The gateway forwards SSE streams without buffering and propagates cancellation through
-`POST /v1/requests/{request_id}/cancel`. `fast-chat` and `token-explainer` prefer the live
-Qwen worker when ready and fall back explicitly to the mock AR worker. Native job-event
-forwarding and stricter OpenAI SSE compatibility remain later work.
+`POST /v1/requests/{request_id}/cancel`. Text-diffusion jobs are available through
+`GET /v1/jobs/{job_id}`, `GET /v1/jobs/{job_id}/events`, and
+`POST /v1/jobs/{job_id}/cancel`; the gateway retains provider affinity and can rediscover
+jobs from local diffusion providers after a gateway restart. Diffusion request timeouts
+default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECONDS`.
+`fast-chat` and `token-explainer` prefer the live Qwen worker when ready and fall back
+explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.

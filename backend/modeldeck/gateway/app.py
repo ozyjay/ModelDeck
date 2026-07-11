@@ -14,7 +14,9 @@ from modeldeck.profiles import ModelProfile, default_model_profiles
 
 def create_gateway_app(
     alias_routes: dict[str, list[ModelProfile]] | None = None,
+    settings: Settings | None = None,
 ) -> FastAPI:
+    configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
     defaults = {profile.id: profile for profile in default_model_profiles()}
     routes = alias_routes or {
@@ -23,6 +25,7 @@ def create_gateway_app(
         "text-diffusion": [defaults["diffusiongemma-rocm"], defaults["mock-diffusion"]],
     }
     profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
+    job_routes: dict[str, ModelProfile] = {}
 
     async def providers() -> list[dict[str, Any]]:
         result = []
@@ -91,11 +94,44 @@ def create_gateway_app(
 
     @app.post("/v1/refine")
     async def refine(request: Request):
-        return await proxy_request(request, routes, "/v1/refine", "text-diffusion")
+        return await proxy_request(
+            request,
+            routes,
+            "/v1/refine",
+            "text-diffusion",
+            timeout_seconds=configured.diffusion_timeout_seconds,
+        )
 
     @app.post("/v1/diffuse")
     async def diffuse(request: Request):
-        return await proxy_request(request, routes, "/v1/diffuse", "text-diffusion")
+        response = await proxy_request(request, routes, "/v1/diffuse", "text-diffusion")
+        if isinstance(response, JSONResponse) and response.status_code < 300:
+            payload = json_loads(response.body)
+            provider_id = response.headers.get("x-modeldeck-provider")
+            if payload.get("job_id") and provider_id in profiles:
+                job_routes[str(payload["job_id"])] = profiles[provider_id]
+        return response
+
+    @app.get("/v1/jobs/{job_id}")
+    async def diffusion_job(job_id: str):
+        provider = await resolve_job_provider(job_id, job_routes, routes)
+        if provider is None:
+            raise HTTPException(404, "Unknown diffusion job")
+        return await proxy_job_request(provider, f"/v1/jobs/{job_id}")
+
+    @app.get("/v1/jobs/{job_id}/events")
+    async def diffusion_job_events(job_id: str):
+        provider = await resolve_job_provider(job_id, job_routes, routes)
+        if provider is None:
+            raise HTTPException(404, "Unknown diffusion job")
+        return await proxy_job_events(provider, f"/v1/jobs/{job_id}/events")
+
+    @app.post("/v1/jobs/{job_id}/cancel")
+    async def cancel_diffusion_job(job_id: str):
+        provider = await resolve_job_provider(job_id, job_routes, routes)
+        if provider is None:
+            raise HTTPException(404, "Unknown diffusion job")
+        return await proxy_job_request(provider, f"/v1/jobs/{job_id}/cancel", method="POST")
 
     @app.post("/v1/requests/{request_id}/cancel")
     async def cancel(request_id: str):
@@ -127,13 +163,15 @@ async def proxy_request(
     routes: dict[str, list[ModelProfile]],
     path: str,
     default_alias: str,
+    *,
+    timeout_seconds: float = 60.0,
 ):
     body = await request.json()
     alias = str(body.get("model") or default_alias)
     candidates = routes.get(alias)
     if not candidates:
         return unavailable(alias, "unknown")
-    client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=0.5))
+    client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
     selected = None
     try:
         for profile in candidates:
@@ -178,6 +216,62 @@ async def forward_stream(response: httpx.Response, client: httpx.AsyncClient) ->
         await client.aclose()
 
 
+async def resolve_job_provider(
+    job_id: str,
+    job_routes: dict[str, ModelProfile],
+    routes: dict[str, list[ModelProfile]],
+) -> ModelProfile | None:
+    if provider := job_routes.get(job_id):
+        return provider
+    async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as client:
+        for candidate in routes.get("text-diffusion", []):
+            try:
+                response = await client.get(f"{endpoint(candidate)}/v1/jobs/{job_id}")
+            except httpx.HTTPError:
+                continue
+            if response.status_code != 404:
+                job_routes[job_id] = candidate
+                return candidate
+    return None
+
+
+async def proxy_job_request(
+    provider: ModelProfile,
+    path: str,
+    *,
+    method: str = "GET",
+) -> JSONResponse:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=0.5)) as client:
+            response = await client.request(method, f"{endpoint(provider)}{path}")
+            payload = json_loads(await response.aread())
+    except (httpx.HTTPError, ValueError):
+        return unavailable("text-diffusion", "text-diffusion")
+    return JSONResponse(
+        payload,
+        status_code=response.status_code,
+        headers={"x-modeldeck-provider": provider.id},
+    )
+
+
+async def proxy_job_events(provider: ModelProfile, path: str) -> StreamingResponse | JSONResponse:
+    client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=0.5))
+    try:
+        response = await client.send(
+            client.build_request("GET", f"{endpoint(provider)}{path}"),
+            stream=True,
+        )
+    except httpx.HTTPError:
+        await client.aclose()
+        return unavailable("text-diffusion", "text-diffusion")
+    return StreamingResponse(
+        forward_stream(response, client),
+        status_code=response.status_code,
+        media_type=response.headers.get("content-type", "text/event-stream"),
+        headers={"x-modeldeck-provider": provider.id},
+    )
+
+
 async def provider_health(
     client: httpx.AsyncClient, profile: ModelProfile
 ) -> tuple[dict[str, Any] | None, bool]:
@@ -216,7 +310,12 @@ def unavailable(alias: str, family: str) -> JSONResponse:
 
 def main() -> None:
     settings = Settings.from_env()
-    uvicorn.run(create_gateway_app(), host=settings.host, port=settings.gateway_port, log_level="info")
+    uvicorn.run(
+        create_gateway_app(settings=settings),
+        host=settings.host,
+        port=settings.gateway_port,
+        log_level="info",
+    )
 
 
 if __name__ == "__main__":

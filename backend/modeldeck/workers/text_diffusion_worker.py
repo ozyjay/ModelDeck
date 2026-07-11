@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -52,7 +52,12 @@ class DiffusionEngine(Protocol):
 
     def memory_metrics(self) -> dict[str, int]: ...
 
-    def refine(self, body: DiffusionRequest, cancellation: threading.Event) -> list[dict[str, Any]]: ...
+    def refine(
+        self,
+        body: DiffusionRequest,
+        cancellation: threading.Event,
+        frame_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]: ...
 
 
 class FrameStreamer:
@@ -60,10 +65,17 @@ class FrameStreamer:
 
     _takes_logits = False
 
-    def __init__(self, tokenizer: Any, total_steps: int, cancellation: threading.Event) -> None:
+    def __init__(
+        self,
+        tokenizer: Any,
+        total_steps: int,
+        cancellation: threading.Event,
+        frame_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.tokenizer = tokenizer
         self.total_steps = total_steps
         self.cancellation = cancellation
+        self.frame_callback = frame_callback
         self.frames: list[dict[str, Any]] = []
         self._previous: list[int] = []
         self._prompt_seen = False
@@ -74,16 +86,17 @@ class FrameStreamer:
         token_ids = value[0].tolist() if len(value.shape) > 1 else value.tolist()
         stable = sum(a == b for a, b in zip(self._previous, token_ids, strict=False))
         self._previous = token_ids
-        self.frames.append(
-            {
-                "step": len(self.frames) + 1,
-                "total_steps": self.total_steps,
-                "text": self.tokenizer.decode(token_ids, skip_special_tokens=True),
-                "masked_tokens": None,
-                "stable_tokens": stable,
-                "complete": False,
-            }
-        )
+        frame = {
+            "step": len(self.frames) + 1,
+            "total_steps": self.total_steps,
+            "text": self.tokenizer.decode(token_ids, skip_special_tokens=True),
+            "masked_tokens": None,
+            "stable_tokens": stable,
+            "complete": False,
+        }
+        self.frames.append(frame)
+        if self.frame_callback:
+            self.frame_callback(frame)
 
     def put(self, value: Any) -> None:
         # The first confirmed value is the prompt. Confirmed canvases are represented
@@ -172,7 +185,12 @@ class TransformersDiffusionEngine:
             "peak_memory_reserved_bytes": int(self.torch.cuda.max_memory_reserved(0)),
         }
 
-    def refine(self, body: DiffusionRequest, cancellation: threading.Event) -> list[dict[str, Any]]:
+    def refine(
+        self,
+        body: DiffusionRequest,
+        cancellation: threading.Event,
+        frame_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]:
         from transformers import StoppingCriteriaList
 
         torch = self.torch
@@ -185,7 +203,12 @@ class TransformersDiffusionEngine:
             return_tensors="pt",
         ).to(self.device)
         prompt_length = int(inputs["input_ids"].shape[-1])
-        streamer = FrameStreamer(self.processor.tokenizer, body.denoising_steps, cancellation)
+        streamer = FrameStreamer(
+            self.processor.tokenizer,
+            body.denoising_steps,
+            cancellation,
+            frame_callback,
+        )
         output = self.model.generate(
             **inputs,
             streamer=streamer,
@@ -219,7 +242,7 @@ def _terminal_frame(
 
 def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine | None = None) -> FastAPI:
     runtime = engine or TransformersDiffusionEngine(config)
-    load_in_thread = engine is None
+    run_in_thread = True
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -231,8 +254,8 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         app.state.job_events = {}
         app.state.cancellations = {}
         app.state.generation_lock = asyncio.Lock()
-        app.state.run_in_thread = load_in_thread
-        app.state.load_task = asyncio.create_task(_load_engine(app, runtime, threaded=load_in_thread))
+        app.state.run_in_thread = run_in_thread
+        app.state.load_task = asyncio.create_task(_load_engine(app, runtime, threaded=run_in_thread))
         yield
         if not app.state.load_task.done():
             app.state.load_task.cancel()
@@ -318,14 +341,20 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         app.state.cancellations[job_id] = cancellation
         completion_event = app.state.job_events.setdefault(job_id, asyncio.Event())
         app.state.jobs[job_id] = {"job_id": job_id, "state": "running", "frames": []}
+        loop = asyncio.get_running_loop()
+
+        def publish_frame(frame: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(_record_job_frame, app, job_id, frame)
+
         async with app.state.generation_lock:
             app.state.worker_state = WorkerState.BUSY
             started = time.perf_counter()
             try:
                 if app.state.run_in_thread:
-                    frames = await asyncio.to_thread(runtime.refine, body, cancellation)
+                    frames = await asyncio.to_thread(runtime.refine, body, cancellation, publish_frame)
                 else:
-                    frames = runtime.refine(body, cancellation)
+                    frames = runtime.refine(body, cancellation, publish_frame)
+                await asyncio.sleep(0)
                 result = {
                     "job_id": job_id,
                     "state": "cancelled" if frames[-1].get("cancelled") else "complete",
@@ -336,6 +365,7 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
                     "metrics": {"total_seconds": round(time.perf_counter() - started, 4)},
                 }
                 app.state.jobs[job_id] = result
+                completion_event.set()
                 return result
             except Exception as error:
                 app.state.jobs[job_id] = {
@@ -344,9 +374,9 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
                     "frames": [],
                     "error": f"{type(error).__name__}: {error}",
                 }
+                completion_event.set()
                 raise
             finally:
-                completion_event.set()
                 app.state.cancellations.pop(job_id, None)
                 app.state.worker_state = WorkerState.READY
 
@@ -372,7 +402,7 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         if job_id not in app.state.jobs:
             raise HTTPException(404, "Unknown diffusion job")
         result = app.state.jobs[job_id]
-        return {"job_id": job_id, "state": result["state"], "frame_count": len(result["frames"])}
+        return {**result, "frame_count": len(result["frames"])}
 
     @app.post("/v1/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str) -> dict[str, Any]:
@@ -388,10 +418,27 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
             raise HTTPException(404, "Unknown diffusion job")
 
         async def events() -> AsyncIterator[str]:
-            await app.state.job_events[job_id].wait()
-            for frame in app.state.jobs[job_id]["frames"]:
-                yield f"event: frame\ndata: {json.dumps(frame)}\n\n"
-                await asyncio.sleep(0)
+            sent = 0
+            while True:
+                result = app.state.jobs[job_id]
+                frames = result["frames"]
+                for frame in frames[sent:]:
+                    yield f"event: frame\ndata: {json.dumps(frame)}\n\n"
+                    sent += 1
+                if result["state"] in {"complete", "cancelled"}:
+                    return
+                if result["state"] == "failed":
+                    yield f"event: error\ndata: {json.dumps({'error': result['error']})}\n\n"
+                    return
+                update = app.state.job_events[job_id]
+                update.clear()
+                current = app.state.jobs[job_id]
+                if len(current["frames"]) == sent and current["state"] not in {
+                    "complete",
+                    "cancelled",
+                    "failed",
+                }:
+                    await update.wait()
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -413,6 +460,14 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         return {"ok": True}
 
     return app
+
+
+def _record_job_frame(app: FastAPI, job_id: str, frame: dict[str, Any]) -> None:
+    job = app.state.jobs.get(job_id)
+    if job is None or job["state"] not in {"queued", "running"}:
+        return
+    job["frames"].append(frame)
+    app.state.job_events[job_id].set()
 
 
 async def _load_engine(app: FastAPI, engine: DiffusionEngine, *, threaded: bool) -> None:
