@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-root",
         type=Path,
-        default=Path(os.environ.get("HF_HUB_CACHE", DEFAULT_CACHE_ROOT)),
+        default=Path(DEFAULT_CACHE_ROOT),
     )
     parser.add_argument("--layer", type=int, default=29)
     parser.add_argument("--expert", type=int, default=85)
