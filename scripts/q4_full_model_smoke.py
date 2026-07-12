@@ -12,6 +12,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 from gptqmodel.nn_modules.qlinear.tritonv2 import TritonV2Linear
+from safetensors.torch import save_file
 from transformers import AutoProcessor, DiffusionGemmaForBlockDiffusion
 
 from q4_calibration_coverage import load_prompts
@@ -36,6 +37,7 @@ from q4_inventory import (
     find_local_snapshot,
 )
 from q4_kernel_probe import make_runtime, packed_storage_bytes
+from q4_runtime_roundtrip import checkpoint_tensors
 
 GIB = 1024**3
 
@@ -74,6 +76,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("var/q4-full-model-smoke.json"),
     )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        help=(
+            "Optionally write one packed expert safetensors shard per layer "
+            "plus q4-manifest.json. The artifact references the pinned base "
+            "snapshot for non-expert weights."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -101,6 +112,99 @@ def write_progress(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def save_q4_layer(
+    checkpoint_dir: Path,
+    *,
+    layer: int,
+    module: FullQ4Experts,
+) -> dict[str, Any]:
+    tensors: dict[str, torch.Tensor] = {}
+    for projection, runtimes in (
+        ("gate_up", module.gate_up),
+        ("down", module.down),
+    ):
+        for expert, runtime in enumerate(runtimes):
+            for name, tensor in checkpoint_tensors(runtime).items():
+                tensors[f"{projection}.{expert}.{name}"] = tensor
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"experts-layer-{layer:02d}.safetensors"
+    path = checkpoint_dir / filename
+    save_file(
+        tensors,
+        str(path),
+        metadata={
+            "format": "modeldeck-diffusiongemma-expert-gptq-v1",
+            "layer": str(layer),
+            "bits": "4",
+            "group_size": "32",
+            "sym": "true",
+            "desc_act": "false",
+            "qzero_format": "2",
+        },
+    )
+    tensor_bytes = sum(
+        tensor.numel() * tensor.element_size() for tensor in tensors.values()
+    )
+    file_bytes = path.stat().st_size
+    del tensors
+    return {
+        "layer": layer,
+        "file": filename,
+        "tensor_bytes": tensor_bytes,
+        "file_bytes": file_bytes,
+    }
+
+
+def write_manifest(
+    checkpoint_dir: Path,
+    *,
+    model_id: str,
+    revision: str,
+    layers: list[dict[str, Any]],
+    state: str,
+) -> None:
+    manifest = {
+        "format": "modeldeck-diffusiongemma-expert-gptq",
+        "format_version": 1,
+        "state": state,
+        "base_model_id": model_id,
+        "base_model_revision": revision,
+        "generation_family": "text-diffusion",
+        "dtype": "bfloat16",
+        "quantization": {
+            "method": "gptq",
+            "bits": 4,
+            "group_size": 32,
+            "symmetric": True,
+            "desc_act": False,
+            "qzero_format": 2,
+            "runtime": "gptqmodel-triton-v2",
+        },
+        "experts": {
+            "layer_count": 30,
+            "experts_per_layer": 128,
+            "encoder_decoder_storage": "shared",
+            "gate_up_shape": [1408, 2816],
+            "down_shape": [2816, 704],
+            "state_tensors": ["qweight", "qzeros", "scales", "g_idx"],
+            "layers": layers,
+        },
+        "non_expert_weights": {
+            "source": "base_model",
+            "excluded_suffixes": [
+                ".experts.gate_up_proj",
+                ".experts.down_proj",
+            ],
+        },
+    }
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    (checkpoint_dir / "q4-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def quantize_layer(
@@ -400,9 +504,21 @@ def main() -> None:
         "total_captured_rows": total_captured_rows,
         "baseline_seconds": baseline_seconds,
         "baseline_text": baseline_text,
+        "checkpoint_dir": (
+            str(args.checkpoint_dir) if args.checkpoint_dir is not None else None
+        ),
     }
     layer_results: list[dict[str, Any]] = []
     q4_layers: list[FullQ4Experts] = []
+    checkpoint_layers: list[dict[str, Any]] = []
+    if args.checkpoint_dir is not None:
+        write_manifest(
+            args.checkpoint_dir,
+            model_id=args.model_id,
+            revision=args.revision,
+            layers=checkpoint_layers,
+            state="converting",
+        )
     write_progress(
         args.json_output,
         base=base_result,
@@ -423,6 +539,21 @@ def main() -> None:
             group_size=args.group_size,
             device=device,
         )
+        if args.checkpoint_dir is not None:
+            checkpoint_result = save_q4_layer(
+                args.checkpoint_dir,
+                layer=layer,
+                module=q4_experts,
+            )
+            checkpoint_layers.append(checkpoint_result)
+            result["checkpoint"] = checkpoint_result
+            write_manifest(
+                args.checkpoint_dir,
+                model_id=args.model_id,
+                revision=args.revision,
+                layers=checkpoint_layers,
+                state="converting",
+            )
         q4_layers.append(q4_experts)
         layer_results.append(result)
         del captures[layer]
@@ -521,8 +652,17 @@ def main() -> None:
                 ),
             },
             "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
+            "checkpoint_layers": checkpoint_layers,
         }
     )
+    if args.checkpoint_dir is not None:
+        write_manifest(
+            args.checkpoint_dir,
+            model_id=args.model_id,
+            revision=args.revision,
+            layers=checkpoint_layers,
+            state="complete",
+        )
     args.json_output.write_text(
         json.dumps(final_result, indent=2) + "\n",
         encoding="utf-8",
