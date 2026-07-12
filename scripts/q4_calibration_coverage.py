@@ -169,19 +169,37 @@ def main() -> None:
     load_seconds = time.perf_counter() - load_started
     print(f"Model load: {load_seconds:.3f} s")
 
-    layers = model.model.decoder.layers
-    num_experts = layers[0].experts.num_experts
-    counts = {
+    decoder_layers = model.model.decoder.layers
+    encoder_layers = model.model.encoder.language_model.layers
+    if len(encoder_layers) != len(decoder_layers):
+        raise SystemExit("Encoder and decoder layer counts do not match")
+    num_experts = decoder_layers[0].experts.num_experts
+    decoder_counts = {
         layer: torch.zeros(num_experts, dtype=torch.int64, device=device)
-        for layer in range(len(layers))
+        for layer in range(len(decoder_layers))
     }
-    calls = {layer: 0 for layer in range(len(layers))}
+    encoder_counts = {
+        layer: torch.zeros(num_experts, dtype=torch.int64, device=device)
+        for layer in range(len(encoder_layers))
+    }
+    decoder_calls = {
+        layer: 0 for layer in range(len(decoder_layers))
+    }
+    encoder_calls = {
+        layer: 0 for layer in range(len(encoder_layers))
+    }
     handles = [
         layer.experts.register_forward_pre_hook(
-            counting_hook(index, counts, calls)
+            counting_hook(index, decoder_counts, decoder_calls)
         )
-        for index, layer in enumerate(layers)
+        for index, layer in enumerate(decoder_layers)
     ]
+    handles.extend(
+        layer.experts.register_forward_pre_hook(
+            counting_hook(index, encoder_counts, encoder_calls)
+        )
+        for index, layer in enumerate(encoder_layers)
+    )
 
     generation_seconds = 0.0
     try:
@@ -220,9 +238,23 @@ def main() -> None:
         for handle in handles:
             handle.remove()
 
+    decoder_summaries = [
+        layer_summary(layer, decoder_counts[layer].to("cpu"))
+        for layer in range(len(decoder_layers))
+    ]
+    encoder_summaries = [
+        layer_summary(layer, encoder_counts[layer].to("cpu"))
+        for layer in range(len(encoder_layers))
+    ]
     summaries = [
-        layer_summary(layer, counts[layer].to("cpu"))
-        for layer in range(len(layers))
+        layer_summary(
+            layer,
+            (
+                decoder_counts[layer]
+                + encoder_counts[layer]
+            ).to("cpu"),
+        )
+        for layer in range(len(decoder_layers))
     ]
     worst = sorted(
         (
@@ -238,13 +270,20 @@ def main() -> None:
     )
 
     print()
-    print("Layer  Calls  Hit  Min  Median    Mean    Max  >=128  >=512")
-    print("-" * 67)
+    print(
+        "Layer  EncCalls DecCalls EncHit DecHit Union  Min  "
+        "Median    Mean    Max  >=128  >=512"
+    )
+    print("-" * 92)
     for summary in summaries:
+        layer = summary["layer"]
         print(
-            f"{summary['layer']:>5}  "
-            f"{calls[summary['layer']]:>5}  "
-            f"{summary['experts_hit']:>3}  "
+            f"{layer:>5}  "
+            f"{encoder_calls[layer]:>8} "
+            f"{decoder_calls[layer]:>8} "
+            f"{encoder_summaries[layer]['experts_hit']:>6} "
+            f"{decoder_summaries[layer]['experts_hit']:>6} "
+            f"{summary['experts_hit']:>5}  "
             f"{summary['minimum']:>3}  "
             f"{summary['median']:>6.1f}  "
             f"{summary['mean']:>7.1f}  "
@@ -261,7 +300,7 @@ def main() -> None:
             f"samples={item['samples']}"
         )
 
-    total_pairs = len(layers) * num_experts
+    total_pairs = len(decoder_layers) * num_experts
     global_summary = {
         "layer_expert_pairs": total_pairs,
         "all_experts_hit": all(item["samples"] > 0 for item in worst),
@@ -289,10 +328,13 @@ def main() -> None:
         "seed": args.seed,
         "load_seconds": load_seconds,
         "generation_seconds": generation_seconds,
-        "calls_per_layer": calls,
+        "encoder_calls_per_layer": encoder_calls,
+        "decoder_calls_per_layer": decoder_calls,
         "global_summary": global_summary,
         "least_covered": worst[:50],
-        "layers": summaries,
+        "combined_layers": summaries,
+        "encoder_layers": encoder_summaries,
+        "decoder_layers": decoder_summaries,
         "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
     }
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
