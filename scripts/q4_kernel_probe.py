@@ -13,8 +13,6 @@ import torch.nn.functional as F
 
 from gptqmodel.nn_modules.qlinear.torch import TorchLinear
 from gptqmodel.nn_modules.qlinear.tritonv2 import TritonV2Linear
-from gptqmodel.utils.model import convert_gptq_v1_to_v2_format_module
-
 from q4_expert_probe import load_expert_slice, synchronise, tensor_metrics
 from q4_gptq_probe import GPTQLinearResult, quantize_linear_gptq
 from q4_inventory import (
@@ -96,11 +94,9 @@ def make_runtime(
         result.group_index.to("cpu", dtype=torch.int32),
         workers=1,
     )
-    convert_gptq_v1_to_v2_format_module(
-        runtime,
-        bits=4,
-        pack_dtype=torch.int32,
-    )
+    # pack_block emits direct logical zero points. Mark that layout as v2
+    # without applying the legacy v1 + 1 correction a second time.
+    runtime.qzero_format(format=2)
     runtime.to(device)
     runtime.eval()
     runtime.bias = None
@@ -113,6 +109,24 @@ def make_runtime(
 
     del source
     return runtime
+
+
+def logical_zero_points(module: TorchLinear) -> list[int]:
+    shifts = torch.arange(
+        0,
+        32,
+        4,
+        dtype=torch.int64,
+        device=module.qzeros.device,
+    )
+    unpacked = torch.bitwise_and(
+        torch.bitwise_right_shift(
+            module.qzeros.to(torch.int64).unsqueeze(-1),
+            shifts,
+        ),
+        0x0F,
+    )
+    return [int(value) for value in torch.unique(unpacked).tolist()]
 
 
 def packed_storage_bytes(module: TorchLinear) -> int:
@@ -260,6 +274,7 @@ def main() -> None:
     print("Packing standard GPTQ TorchLinear...")
     torch_runtime = make_runtime(TorchLinear, result, device)
     storage_bytes = packed_storage_bytes(torch_runtime)
+    torch_zero_points = logical_zero_points(torch_runtime)
     torch_result = runtime_probe(
         name="torch",
         operation=lambda: torch_runtime(inputs),
@@ -271,6 +286,7 @@ def main() -> None:
 
     print("Packing standard GPTQ TritonV2Linear...")
     triton_runtime = make_runtime(TritonV2Linear, result, device)
+    triton_zero_points = logical_zero_points(triton_runtime)
     triton_result = runtime_probe(
         name="triton_v2",
         operation=lambda: triton_runtime(inputs),
@@ -286,6 +302,10 @@ def main() -> None:
         "Standard packed storage: "
         f"{storage_bytes / MIB:.2f} MiB "
         f"({storage_bytes / (result.weight.numel() * 2):.2%} of BF16)"
+    )
+    print(
+        "Logical zero points: "
+        f"torch={torch_zero_points}, triton={triton_zero_points}"
     )
     for value in (torch_result, triton_result):
         if value["success"]:
@@ -315,6 +335,8 @@ def main() -> None:
         "reference_milliseconds": reference_ms,
         "packed_storage_bytes": storage_bytes,
         "packed_storage_ratio": storage_bytes / (result.weight.numel() * 2),
+        "torch_zero_points": torch_zero_points,
+        "triton_zero_points": triton_zero_points,
         "gptq_metadata": result.metadata,
         "runtimes": [torch_result, triton_result],
         "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
