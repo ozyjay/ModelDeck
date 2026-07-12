@@ -121,6 +121,10 @@ def is_expert_weight(name: str) -> bool:
     return name.endswith(EXPERT_SUFFIXES)
 
 
+def is_encoder_mirror(name: str) -> bool:
+    return name.startswith("model.encoder.language_model.")
+
+
 def load_q4_layers(
     *,
     model: DiffusionGemmaForBlockDiffusion,
@@ -222,7 +226,7 @@ def load_base_non_experts(
     weight_map = base_weight_map(snapshot)
     by_shard: dict[str, list[str]] = defaultdict(list)
     for name, shard in weight_map.items():
-        if not is_expert_weight(name):
+        if not is_expert_weight(name) and not is_encoder_mirror(name):
             by_shard[shard].append(name)
 
     loaded_tensors = 0
@@ -268,21 +272,36 @@ def tie_encoder_parameters(model: DiffusionGemmaForBlockDiffusion) -> int:
 
 def tie_output_heads(model: DiffusionGemmaForBlockDiffusion) -> int:
     tied = 0
-    loaded_embeddings = [
-        (name, parameter)
+    loaded_embeddings = {
+        name: parameter
         for name, parameter in model.named_parameters(remove_duplicate=False)
         if name.endswith("embed_tokens.weight") and not parameter.is_meta
-    ]
+    }
+    preferred_names = (
+        "model.decoder.embed_tokens.weight",
+        "model.embed_tokens.weight",
+    )
     for name, parameter in list(model.named_parameters(remove_duplicate=False)):
         if not parameter.is_meta or not name.endswith("lm_head.weight"):
             continue
-        matches = [
-            value
-            for _, value in loaded_embeddings
-            if value.shape == parameter.shape
-        ]
-        if len(matches) == 1:
-            set_object(model, name, matches[0])
+        candidate = next(
+            (
+                loaded_embeddings[value]
+                for value in preferred_names
+                if value in loaded_embeddings
+                and loaded_embeddings[value].shape == parameter.shape
+            ),
+            None,
+        )
+        if candidate is None:
+            unique_matches: dict[int, torch.Tensor] = {}
+            for value in loaded_embeddings.values():
+                if value.shape == parameter.shape:
+                    unique_matches[value.data_ptr()] = value
+            if len(unique_matches) == 1:
+                candidate = next(iter(unique_matches.values()))
+        if candidate is not None:
+            set_object(model, name, candidate)
             tied += 1
     return tied
 
