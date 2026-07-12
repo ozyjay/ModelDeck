@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument(
+        "--seed-repeats",
+        type=int,
+        default=1,
+        help="Repeat the prompt suite with distinct deterministic canvas seeds.",
+    )
+    parser.add_argument(
         "--prompts-file",
         type=Path,
         help="Optional JSON file containing a list of prompt strings.",
@@ -120,6 +126,8 @@ def main() -> None:
     prompts = load_prompts(args.prompts_file)
     if args.max_new_tokens < 1 or args.denoising_steps < 1:
         raise SystemExit("token and denoising limits must be positive")
+    if args.seed_repeats < 1:
+        raise SystemExit("--seed-repeats must be at least 1")
 
     device = torch.device(args.device)
     if device.type != "cuda" or not torch.cuda.is_available():
@@ -134,7 +142,10 @@ def main() -> None:
     print(f"Device: {torch.cuda.get_device_name(device)}")
     print(f"Torch: {torch.__version__}")
     print(f"HIP: {torch.version.hip}")
+    total_runs = len(prompts) * args.seed_repeats
     print(f"Prompts: {len(prompts)}")
+    print(f"Seed repetitions: {args.seed_repeats}")
+    print(f"Total generation runs: {total_runs}")
     print(f"Denoising steps per prompt: {args.denoising_steps}")
 
     torch.cuda.empty_cache()
@@ -174,32 +185,37 @@ def main() -> None:
 
     generation_seconds = 0.0
     try:
-        for prompt_index, prompt in enumerate(prompts):
-            inputs = processor.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            ).to(device)
-            torch.manual_seed(args.seed + prompt_index)
-            started = time.perf_counter()
-            with torch.inference_mode():
-                model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_new_tokens,
-                    max_denoising_steps=args.denoising_steps,
-                    t_max=args.temperature,
-                    t_min=min(0.4, args.temperature),
-                    disable_compile=True,
+        run_index = 0
+        for repeat in range(args.seed_repeats):
+            for prompt_index, prompt in enumerate(prompts):
+                run_index += 1
+                inputs = processor.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                ).to(device)
+                run_seed = args.seed + repeat * 10_000 + prompt_index
+                torch.manual_seed(run_seed)
+                started = time.perf_counter()
+                with torch.inference_mode():
+                    model.generate(
+                        **inputs,
+                        max_new_tokens=args.max_new_tokens,
+                        max_denoising_steps=args.denoising_steps,
+                        t_max=args.temperature,
+                        t_min=min(0.4, args.temperature),
+                        disable_compile=True,
+                    )
+                synchronise(device)
+                elapsed = time.perf_counter() - started
+                generation_seconds += elapsed
+                print(
+                    f"Run {run_index}/{total_runs}: "
+                    f"prompt={prompt_index + 1}, repeat={repeat + 1}, "
+                    f"seed={run_seed}, {elapsed:.3f} s"
                 )
-            synchronise(device)
-            elapsed = time.perf_counter() - started
-            generation_seconds += elapsed
-            print(
-                f"Prompt {prompt_index + 1}/{len(prompts)}: "
-                f"{elapsed:.3f} s"
-            )
     finally:
         for handle in handles:
             handle.remove()
@@ -265,6 +281,8 @@ def main() -> None:
         "hip_version": torch.version.hip,
         "device_name": torch.cuda.get_device_name(device),
         "prompt_count": len(prompts),
+        "seed_repeats": args.seed_repeats,
+        "generation_runs": total_runs,
         "prompts": prompts,
         "max_new_tokens": args.max_new_tokens,
         "denoising_steps": args.denoising_steps,
