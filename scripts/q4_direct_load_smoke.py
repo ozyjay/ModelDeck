@@ -360,7 +360,17 @@ def main() -> None:
     with init_empty_weights(include_buffers=False):
         model = DiffusionGemmaForBlockDiffusion(config)
     model.eval()
+    generation_config_path = snapshot / "generation_config.json"
+    if generation_config_path.is_file():
+        model.generation_config = model.generation_config_class.from_pretrained(
+            snapshot,
+            local_files_only=True,
+        )
+        generation_config_source = str(generation_config_path)
+    else:
+        generation_config_source = "model-config-defaults"
     print("Created meta model skeleton")
+    print(f"Generation config: {generation_config_source}")
 
     q4_layers, q4_bytes = load_q4_layers(
         model=model,
@@ -449,6 +459,7 @@ def main() -> None:
         "tied_output_heads": tied_heads,
         "remaining_meta_tensors": meta_names,
         "parameter_dtypes": dtype_summary,
+        "generation_config_source": generation_config_source,
         "load_seconds": load_seconds,
         "loaded_memory_bytes": loaded_memory,
         "generation_seconds": generation_seconds,
