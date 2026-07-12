@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,15 @@ from q4_inventory import (
 )
 
 GIB = 1024**3
+
+
+@dataclass(frozen=True)
+class GPTQLinearResult:
+    weight: torch.Tensor
+    scales: torch.Tensor
+    zeros: torch.Tensor
+    group_index: torch.Tensor
+    metadata: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,7 +92,7 @@ def quantize_linear_gptq(
     calibration_batch_size: int,
     block_size: int,
     damp_percent: float,
-) -> tuple[torch.Tensor, dict[str, Any]]:
+) -> GPTQLinearResult:
     linear = nn.Linear(
         weight.shape[1],
         weight.shape[0],
@@ -127,6 +137,12 @@ def quantize_linear_gptq(
     wall_seconds = time.perf_counter() - started
 
     result = quantized_weight.detach().clone()
+    stored_scales = scales.detach().clone()
+    stored_zeros = zeros.detach().clone()
+    stored_group_index = group_index.detach().to(torch.int64).clone()
+    unique_zero_points = torch.unique(
+        stored_zeros.round().clamp(0, 15).to(torch.uint8)
+    )
     metadata = {
         "samples": int(sample_count),
         "duration_seconds": float(duration),
@@ -136,10 +152,93 @@ def quantize_linear_gptq(
         "scale_shape": list(scales.shape),
         "zero_shape": list(zeros.shape),
         "group_index_shape": list(group_index.shape),
+        "zero_points": [int(value) for value in unique_zero_points.tolist()],
     }
     engine.free()
     del linear, engine, scales, zeros, group_index
-    return result, metadata
+    return GPTQLinearResult(
+        weight=result,
+        scales=stored_scales,
+        zeros=stored_zeros,
+        group_index=stored_group_index,
+        metadata=metadata,
+    )
+
+
+def pack_unsigned_int4(values: torch.Tensor) -> torch.Tensor:
+    flat = values.reshape(-1).to(torch.uint8)
+    if flat.numel() % 2:
+        flat = torch.nn.functional.pad(flat, (0, 1))
+    return torch.bitwise_or(
+        flat[0::2],
+        torch.bitwise_left_shift(flat[1::2], 4),
+    ).contiguous()
+
+
+def unpack_unsigned_int4(packed: torch.Tensor, count: int) -> torch.Tensor:
+    unpacked = torch.empty(
+        packed.numel() * 2,
+        dtype=torch.uint8,
+        device=packed.device,
+    )
+    unpacked[0::2] = torch.bitwise_and(packed, 0x0F)
+    unpacked[1::2] = torch.bitwise_right_shift(packed, 4)
+    return unpacked[:count]
+
+
+def pack_gptq_result(
+    value: GPTQLinearResult,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    group_index = value.group_index.to(torch.long)
+    scale_by_column = value.scales.float()[:, group_index]
+    zero_codes = value.zeros.round().clamp(0, 15).to(torch.uint8)
+    zero_by_column = zero_codes[:, group_index].float()
+
+    integer_codes = torch.round(
+        value.weight.float() / scale_by_column + zero_by_column
+    ).clamp(0, 15).to(torch.uint8)
+    packed = pack_unsigned_int4(integer_codes)
+    restored_codes = unpack_unsigned_int4(
+        packed,
+        value.weight.numel(),
+    ).reshape(value.weight.shape)
+
+    stored_scales = value.scales.to(torch.bfloat16)
+    stored_scale_by_column = stored_scales.float()[:, group_index]
+    reconstructed = (
+        restored_codes.float() - zero_by_column
+    ) * stored_scale_by_column
+    reconstructed = reconstructed.to(value.weight.dtype)
+
+    unique_zero_points = torch.unique(zero_codes)
+    constant_zero = unique_zero_points.numel() == 1
+    zero_storage_bytes = (
+        0 if constant_zero else (zero_codes.numel() + 1) // 2
+    )
+    storage_bytes = (
+        packed.numel()
+        + stored_scales.numel() * stored_scales.element_size()
+        + zero_storage_bytes
+    )
+    bf16_bytes = value.weight.numel() * 2
+    drift = tensor_metrics(value.weight, reconstructed)
+
+    metadata = {
+        "packed_shape": list(packed.shape),
+        "scale_shape": list(stored_scales.shape),
+        "zero_shape": list(zero_codes.shape),
+        "zero_points": [int(item) for item in unique_zero_points.tolist()],
+        "constant_zero_point": constant_zero,
+        "zero_storage_bytes": int(zero_storage_bytes),
+        "storage_bytes": int(storage_bytes),
+        "storage_ratio": storage_bytes / bf16_bytes,
+        "weight_roundtrip_cosine": drift["cosine_similarity"],
+        "weight_roundtrip_nrmse": drift["normalized_rmse"],
+        "weight_roundtrip_maximum_absolute_error": drift[
+            "maximum_absolute_error"
+        ],
+    }
+    return reconstructed, metadata
 
 
 def output_comparison(
@@ -288,7 +387,7 @@ def main() -> None:
         )
 
         print("Calibrating gate_up_proj with GPTQ...")
-        gptq_gate_weight, gate_metadata = quantize_linear_gptq(
+        gptq_gate_result = quantize_linear_gptq(
             weight=gate_up_weight,
             calibration_inputs=hidden_states,
             group_size=args.group_size,
@@ -296,6 +395,8 @@ def main() -> None:
             block_size=args.block_size,
             damp_percent=args.damp_percent,
         )
+        gptq_gate_weight = gptq_gate_result.weight
+        gate_metadata = gptq_gate_result.metadata
 
         gptq_gate, _ = expert_forward(
             module=expert_module,
@@ -311,7 +412,7 @@ def main() -> None:
         down_calibration_inputs = expert_module.act_fn(gate_values) * up_values
 
         print("Calibrating down_proj with GPTQ...")
-        gptq_down_weight, down_metadata = quantize_linear_gptq(
+        gptq_down_result = quantize_linear_gptq(
             weight=down_weight,
             calibration_inputs=down_calibration_inputs,
             group_size=args.group_size,
@@ -319,6 +420,8 @@ def main() -> None:
             block_size=args.block_size,
             damp_percent=args.damp_percent,
         )
+        gptq_down_weight = gptq_down_result.weight
+        down_metadata = gptq_down_result.metadata
 
         _, gptq_output = expert_forward(
             module=expert_module,
@@ -327,6 +430,20 @@ def main() -> None:
             gate_up_weight=gptq_gate_weight,
             down_weight=gptq_down_weight,
         )
+
+        packed_gate_weight, gate_pack_metadata = pack_gptq_result(
+            gptq_gate_result
+        )
+        packed_down_weight, down_pack_metadata = pack_gptq_result(
+            gptq_down_result
+        )
+        packed_gate, packed_output = expert_forward(
+            module=expert_module,
+            hidden_states=hidden_states,
+            route_weights=route_weights,
+            gate_up_weight=packed_gate_weight,
+            down_weight=packed_down_weight,
+        )
         synchronise(device)
 
     results = {
@@ -334,20 +451,31 @@ def main() -> None:
         "rtn_expert_output": output_comparison(reference_output, rtn_output),
         "gptq_gate": output_comparison(reference_gate, gptq_gate),
         "gptq_expert_output": output_comparison(reference_output, gptq_output),
+        "packed_gptq_gate": output_comparison(reference_gate, packed_gate),
+        "packed_gptq_expert_output": output_comparison(
+            reference_output,
+            packed_output,
+        ),
+        "packing_drift_expert_output": output_comparison(
+            gptq_output,
+            packed_output,
+        ),
     }
 
     print()
-    print("Method  Stage          Cosine      NRMSE       Mean abs     Max abs")
-    print("-" * 70)
+    print("Method       Stage          Cosine      NRMSE       Mean abs     Max abs")
+    print("-" * 75)
     for method, stage, key in (
         ("RTN", "gate", "rtn_gate"),
         ("RTN", "expert output", "rtn_expert_output"),
         ("GPTQ", "gate", "gptq_gate"),
         ("GPTQ", "expert output", "gptq_expert_output"),
+        ("GPTQ-pack", "gate", "packed_gptq_gate"),
+        ("GPTQ-pack", "expert output", "packed_gptq_expert_output"),
     ):
         value = results[key]
         print(
-            f"{method:<7} {stage:<14} "
+            f"{method:<12} {stage:<14} "
             f"{value['cosine']:.8f}  "
             f"{value['nrmse']:.6f}  "
             f"{value['mean_absolute_error']:.6f}  "
@@ -359,6 +487,22 @@ def main() -> None:
     improvement = (rtn_nrmse - gptq_nrmse) / rtn_nrmse
     print()
     print(f"GPTQ expert-output NRMSE improvement: {improvement:.2%}")
+    packing_drift = results["packing_drift_expert_output"]
+    print(
+        "Packing-only expert-output drift: "
+        f"NRMSE={packing_drift['nrmse']:.8f}, "
+        f"cosine={packing_drift['cosine']:.8f}"
+    )
+    print(
+        "Packed storage ratio: "
+        f"gate={gate_pack_metadata['storage_ratio']:.2%}, "
+        f"down={down_pack_metadata['storage_ratio']:.2%}"
+    )
+    print(
+        "Zero points: "
+        f"gate={gate_pack_metadata['zero_points']}, "
+        f"down={down_pack_metadata['zero_points']}"
+    )
 
     args.json_output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -376,6 +520,8 @@ def main() -> None:
         "results": results,
         "gptq_gate_metadata": gate_metadata,
         "gptq_down_metadata": down_metadata,
+        "gptq_gate_pack_metadata": gate_pack_metadata,
+        "gptq_down_pack_metadata": down_pack_metadata,
         "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
     }
     args.json_output.write_text(
