@@ -104,6 +104,9 @@ def quantize_linear_gptq(
         offload_to_disk=False,
     )
     engine = GPTQ(linear, qcfg=config)
+    # GPTQModel's whole-model loop normally performs this configuration.
+    # The packed-expert probe intentionally calls the low-level API directly.
+    engine.quantizer.configure(perchannel=True)
 
     for start in range(0, calibration_inputs.shape[0], calibration_batch_size):
         batch = calibration_inputs[start : start + calibration_batch_size]
