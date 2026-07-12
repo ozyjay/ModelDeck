@@ -5,7 +5,6 @@ import math
 import os
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
 from safetensors import safe_open
 from transformers import AutoConfig
 
@@ -45,6 +44,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def find_local_snapshot(cache_root: Path, model_id: str, revision: str) -> Path:
+    """Locate a pinned Hub snapshot without requiring every repository file."""
+    repository = cache_root / f"models--{model_id.replace('/', '--')}"
+    snapshot = repository / "snapshots" / revision
+    if snapshot.is_dir():
+        return snapshot.resolve()
+
+    reference = repository / "refs" / revision
+    if reference.is_file():
+        resolved_revision = reference.read_text(encoding="utf-8").strip()
+        referenced_snapshot = repository / "snapshots" / resolved_revision
+        if referenced_snapshot.is_dir():
+            return referenced_snapshot.resolve()
+
+    raise SystemExit(
+        "Local model snapshot was not found. Expected it beneath "
+        f"{repository / 'snapshots'} for revision {revision}."
+    )
+
+
 def q4_storage_bytes(shape: tuple[int, ...], group_size: int) -> int:
     """Estimate symmetric INT4 payload plus one BF16 scale per input group."""
     parameters = math.prod(shape)
@@ -62,18 +81,9 @@ def main() -> None:
     if args.show < 0:
         raise SystemExit("--show must be non-negative")
 
-    snapshot = Path(
-        snapshot_download(
-            repo_id=args.model_id,
-            revision=args.revision,
-            cache_dir=args.cache_root,
-            local_files_only=True,
-        )
-    )
+    snapshot = find_local_snapshot(args.cache_root, args.model_id, args.revision)
     config = AutoConfig.from_pretrained(
-        args.model_id,
-        revision=args.revision,
-        cache_dir=args.cache_root,
+        snapshot,
         local_files_only=True,
         trust_remote_code=False,
     )
