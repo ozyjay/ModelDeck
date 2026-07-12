@@ -5,7 +5,7 @@ import gc
 import json
 import os
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +241,7 @@ def load_base_non_experts(
                     name,
                     device,
                     value=tensor,
+                    dtype=tensor.dtype,
                 )
                 loaded_tensors += 1
                 loaded_bytes += tensor.numel() * tensor.element_size()
@@ -320,6 +321,15 @@ def remaining_meta(model: DiffusionGemmaForBlockDiffusion) -> list[str]:
     return sorted(set(names))
 
 
+def parameter_dtype_summary(
+    model: DiffusionGemmaForBlockDiffusion,
+) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for parameter in model.parameters():
+        counts[str(parameter.dtype)] += parameter.numel()
+    return dict(sorted(counts.items()))
+
+
 def main() -> None:
     args = parse_args()
     device = torch.device(args.device)
@@ -373,6 +383,19 @@ def main() -> None:
             f"Direct loader left {len(meta_names)} meta tensors:\n  {preview}"
         )
 
+    dtype_summary = parameter_dtype_summary(model)
+    unexpected_parameters = [
+        name
+        for name, parameter in model.named_parameters(remove_duplicate=False)
+        if parameter.is_floating_point()
+        and parameter.dtype != torch.bfloat16
+    ]
+    if unexpected_parameters:
+        preview = "\n  ".join(unexpected_parameters[:40])
+        raise RuntimeError(
+            "Direct loader produced non-BF16 model parameters:\n  " + preview
+        )
+
     model.to(device)
     model.eval()
     synchronise(device)
@@ -382,8 +405,13 @@ def main() -> None:
     print(f"Tied output heads: {tied_heads}")
     print(f"Loaded non-expert tensors: {non_expert_tensors}")
     print(f"Loaded non-expert storage: {non_expert_bytes / GIB:.3f} GiB")
+    print(f"Parameter dtypes: {dtype_summary}")
     print(f"Direct load: {load_seconds:.3f} s")
     print(f"Allocated after direct load: {loaded_memory / GIB:.3f} GiB")
+    if loaded_memory > int(20.5 * GIB):
+        raise RuntimeError(
+            "Direct-load allocation exceeded 20.5 GiB; refusing generation"
+        )
 
     inputs = make_inputs(processor, args.prompt, device)
     output, generation_seconds = generate(
@@ -420,6 +448,7 @@ def main() -> None:
         "tied_encoder_parameters": tied_encoder,
         "tied_output_heads": tied_heads,
         "remaining_meta_tensors": meta_names,
+        "parameter_dtypes": dtype_summary,
         "load_seconds": load_seconds,
         "loaded_memory_bytes": loaded_memory,
         "generation_seconds": generation_seconds,
