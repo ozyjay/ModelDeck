@@ -42,7 +42,9 @@ def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
         spec,
         (
             "The robot stepped outside as a sudden downpour drummed on its metal shell, "
-            "turning every reflected streetlight into a trembling constellation."
+            "turning every reflected streetlight into a trembling constellation. It raised "
+            "one careful hand, watched silver drops gather across its palm, and laughed "
+            "when thunder answered from the dark clouds."
         ),
     )
 
