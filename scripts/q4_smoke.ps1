@@ -1,9 +1,15 @@
+[CmdletBinding()]
+param(
+    [ValidateSet("text-diffusion", "text-diffusion-q4")]
+    [string]$Model = "text-diffusion"
+)
+
 $ErrorActionPreference = "Stop"
 
 $baseUri = "http://127.0.0.1:8600"
 
 $body = @{
-    model = "text-diffusion"
+    model = $Model
     prompt = "Explain why the sky appears blue in three concise sentences."
     max_length = 256
     denoising_steps = 48
