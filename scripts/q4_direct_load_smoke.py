@@ -372,6 +372,18 @@ def main() -> None:
     print("Created meta model skeleton")
     print(f"Generation config: {generation_config_source}")
 
+    non_expert_tensors, non_expert_bytes = load_base_non_experts(
+        model=model,
+        snapshot=snapshot,
+        device=device,
+    )
+    meta_before_tie = set(remaining_meta(model))
+    model.model.tie_weights()
+    model.tie_weights()
+    meta_after_tie = set(remaining_meta(model))
+    native_tied_tensors = len(meta_before_tie - meta_after_tie)
+    print(f"Native tie_weights resolved: {native_tied_tensors} tensors")
+
     q4_layers, q4_bytes = load_q4_layers(
         model=model,
         checkpoint_dir=args.checkpoint_dir,
@@ -379,13 +391,6 @@ def main() -> None:
         device=device,
     )
     print(f"Loaded packed Q4 experts: {q4_bytes / GIB:.3f} GiB")
-    non_expert_tensors, non_expert_bytes = load_base_non_experts(
-        model=model,
-        snapshot=snapshot,
-        device=device,
-    )
-    tied_encoder = tie_encoder_parameters(model)
-    tied_heads = tie_output_heads(model)
     meta_names = remaining_meta(model)
     if meta_names:
         preview = "\n  ".join(meta_names[:40])
@@ -411,8 +416,7 @@ def main() -> None:
     synchronise(device)
     load_seconds = time.perf_counter() - started
     loaded_memory = int(torch.cuda.memory_allocated(device))
-    print(f"Tied encoder parameters: {tied_encoder}")
-    print(f"Tied output heads: {tied_heads}")
+    print(f"Native tied tensors: {native_tied_tensors}")
     print(f"Loaded non-expert tensors: {non_expert_tensors}")
     print(f"Loaded non-expert storage: {non_expert_bytes / GIB:.3f} GiB")
     print(f"Parameter dtypes: {dtype_summary}")
@@ -455,8 +459,8 @@ def main() -> None:
         "q4_bytes": q4_bytes,
         "non_expert_tensors": non_expert_tensors,
         "non_expert_bytes": non_expert_bytes,
-        "tied_encoder_parameters": tied_encoder,
-        "tied_output_heads": tied_heads,
+        "tie_strategy": "native-before-q4-replacement",
+        "native_tied_tensors": native_tied_tensors,
         "remaining_meta_tensors": meta_names,
         "parameter_dtypes": dtype_summary,
         "generation_config_source": generation_config_source,
