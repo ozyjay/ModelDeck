@@ -27,6 +27,8 @@ LOGGER = logging.getLogger("uvicorn.error")
 class EngineConfig:
     model_id: str
     revision: str
+    cache_root: str | None = None
+    q4_checkpoint_dir: str | None = None
     dtype: str = "bfloat16"
     maximum_new_tokens: int = 256
     maximum_denoising_steps: int = 48
@@ -131,6 +133,7 @@ class TransformersDiffusionEngine:
         self.processor: Any = None
         self.model: Any = None
         self.device: Any = None
+        self.q4_layers: list[Any] = []
 
     def load(self) -> None:
         import torch
@@ -142,22 +145,43 @@ class TransformersDiffusionEngine:
         if dtype is None:
             raise RuntimeError(f"Unsupported dtype: {self.config.dtype}")
         started = time.perf_counter()
-        processor = AutoProcessor.from_pretrained(
-            self.config.model_id,
-            revision=self.config.revision,
-            local_files_only=True,
-            trust_remote_code=False,
-        )
-        model = DiffusionGemmaForBlockDiffusion.from_pretrained(
-            self.config.model_id,
-            revision=self.config.revision,
-            local_files_only=True,
-            trust_remote_code=False,
-            dtype=dtype,
-        )
         device = torch.device("cuda:0")
-        model.to(device)
-        model.eval()
+        q4_details: dict[str, Any] = {}
+        if self.config.q4_checkpoint_dir:
+            from pathlib import Path
+
+            from modeldeck.workers.diffusiongemma_q4 import load_diffusiongemma_q4
+
+            if not self.config.cache_root:
+                raise RuntimeError("The Q4 runtime requires --cache-root")
+            loaded = load_diffusiongemma_q4(
+                model_id=self.config.model_id,
+                revision=self.config.revision,
+                cache_root=Path(self.config.cache_root),
+                checkpoint_dir=Path(self.config.q4_checkpoint_dir),
+                device=device,
+                dtype=dtype,
+            )
+            processor = loaded.processor
+            model = loaded.model
+            self.q4_layers = loaded.q4_layers
+            q4_details = loaded.details
+        else:
+            processor = AutoProcessor.from_pretrained(
+                self.config.model_id,
+                revision=self.config.revision,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+            model = DiffusionGemmaForBlockDiffusion.from_pretrained(
+                self.config.model_id,
+                revision=self.config.revision,
+                local_files_only=True,
+                trust_remote_code=False,
+                dtype=dtype,
+            )
+            model.to(device)
+            model.eval()
         self.torch, self.processor, self.model, self.device = torch, processor, model, device
         self.runtime_details = {
             "torch_version": str(torch.__version__),
@@ -167,6 +191,8 @@ class TransformersDiffusionEngine:
             "device_name": torch.cuda.get_device_name(0),
             "load_seconds": round(time.perf_counter() - started, 4),
             "dtype": self.config.dtype,
+            "runtime": "text-diffusion-transformers-rocm",
+            **q4_details,
         }
 
     def warmup(self) -> None:
@@ -178,12 +204,17 @@ class TransformersDiffusionEngine:
     def memory_metrics(self) -> dict[str, int]:
         if self.torch is None or not self.torch.cuda.is_available():
             return {}
-        return {
+        metrics = {
             "memory_allocated_bytes": int(self.torch.cuda.memory_allocated(0)),
             "memory_reserved_bytes": int(self.torch.cuda.memory_reserved(0)),
             "peak_memory_allocated_bytes": int(self.torch.cuda.max_memory_allocated(0)),
             "peak_memory_reserved_bytes": int(self.torch.cuda.max_memory_reserved(0)),
         }
+        if self.q4_layers:
+            from modeldeck.workers.diffusiongemma_q4 import q4_invocation_metrics
+
+            metrics.update(q4_invocation_metrics(self.q4_layers))
+        return metrics
 
     def refine(
         self,
@@ -268,7 +299,7 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         details = runtime.runtime_details
         payload = WorkerHealth(
             worker_id=worker_id,
-            runtime="text-diffusion-transformers-rocm",
+            runtime=details.get("runtime", "text-diffusion-transformers-rocm"),
             generation_family=GenerationFamily.TEXT_DIFFUSION,
             state=request.app.state.worker_state,
             model_id=config.model_id,
@@ -308,6 +339,8 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
             "local_files_only": True,
             "trust_remote_code": False,
             "dtype": config.dtype,
+            "quantization": runtime.runtime_details.get("quantization", "none"),
+            "q4_checkpoint_dir": runtime.runtime_details.get("q4_checkpoint_dir"),
         }
 
     @app.post("/load")
@@ -495,6 +528,8 @@ def main() -> None:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--cache-root")
+    parser.add_argument("--q4-checkpoint-dir")
     parser.add_argument("--maximum-new-tokens", type=int, default=256)
     parser.add_argument("--maximum-denoising-steps", type=int, default=48)
     args = parser.parse_args()
@@ -503,6 +538,8 @@ def main() -> None:
         config=EngineConfig(
             model_id=args.model_id,
             revision=args.revision,
+            cache_root=args.cache_root,
+            q4_checkpoint_dir=args.q4_checkpoint_dir,
             dtype=args.dtype,
             maximum_new_tokens=args.maximum_new_tokens,
             maximum_denoising_steps=args.maximum_denoising_steps,
