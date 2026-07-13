@@ -84,9 +84,18 @@ class WorkerSupervisor:
 
     async def start(self, worker_id: str) -> dict[str, Any]:
         worker = self._require(worker_id)
-        async with self._worker_locks[worker_id], self._load_lock:
+        async with self._load_lock, self._worker_locks[worker_id]:
             if worker.process and worker.process.returncode is None:
                 return worker.snapshot()
+            if worker.profile.lifecycle.value == "exclusive":
+                for other_id, other in self.workers.items():
+                    if (
+                        other_id != worker_id
+                        and other.profile.lifecycle.value == "exclusive"
+                        and other.process
+                        and other.process.returncode is None
+                    ):
+                        await self.stop(other_id)
             await self._transition(worker, WorkerState.VALIDATING, "Validating allowlisted worker manifest")
             if not port_available(worker.profile.port):
                 worker.last_error = f"Port {worker.profile.port} is already in use"
