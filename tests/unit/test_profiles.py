@@ -26,6 +26,11 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert diffusion_live.preferred_runtime == "text-diffusion-transformers-rocm"
     assert diffusion_live.settings["hsa_preload_evidence"] is False
     assert diffusion_live.settings["cache_root"] == "/mnt/work/models/huggingface/hub"
+    diffusion_q4 = profiles["diffusiongemma-q4-rocm"]
+    assert diffusion_q4.alias == "text-diffusion-q4"
+    assert diffusion_q4.port == 8622
+    assert diffusion_q4.preferred_runtime == "text-diffusion-gptq-rocm"
+    assert diffusion_q4.settings["q4_checkpoint_dir"].endswith("gptq-q4-g32")
 
 
 def test_profile_rejects_unallowlisted_runtime() -> None:
