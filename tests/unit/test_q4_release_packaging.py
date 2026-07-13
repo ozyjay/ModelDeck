@@ -31,7 +31,7 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     layers = []
-    for layer in range(2):
+    for layer in range(30):
         path = checkpoint / f"experts-layer-{layer:02d}.safetensors"
         path.write_bytes(f"packed-layer-{layer}".encode())
         layers.append(
@@ -47,7 +47,7 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         "format_version": 1,
         "state": "complete",
         "base_model_id": "google/diffusiongemma-26B-A4B-it",
-        "base_model_revision": "a" * 40,
+        "base_model_revision": "52de6b914ee1749a7d4933202505ddf5b414ec43",
         "quantization": {
             "method": "gptq",
             "bits": 4,
@@ -57,7 +57,15 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
             "qzero_format": 2,
             "runtime": "gptqmodel-triton-v2",
         },
-        "experts": {"layer_count": 2, "layers": layers},
+        "experts": {
+            "layer_count": 30,
+            "experts_per_layer": 128,
+            "encoder_decoder_storage": "shared",
+            "gate_up_shape": [1408, 2816],
+            "down_shape": [2816, 704],
+            "state_tensors": ["qweight", "qzeros", "scales", "g_idx"],
+            "layers": layers,
+        },
     }
     write_json(checkpoint / "q4-manifest.json", manifest)
 
@@ -133,7 +141,7 @@ def test_release_packager_builds_and_verifies_bundle(tmp_path: Path) -> None:
 
     assert manifest["format"] == "modeldeck-diffusiongemma-q4-release"
     assert result["evaluation_passed"] is True
-    assert result["files_verified"] == 7
+    assert result["files_verified"] == 35
     assert result["source_commit"] == "b" * 40
     assert (checkpoint / "README.md").is_file()
     assert (checkpoint / "SHA256SUMS").is_file()
