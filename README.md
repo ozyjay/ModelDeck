@@ -68,3 +68,19 @@ The Qwen smoke is compatibility-tested on the target hardware. The DiffusionGemm
 uses its complete pinned local snapshot at `/mnt/work/models/huggingface/hub` but remains
 unverified on physical hardware until that script succeeds and records evidence. Neither
 smoke downloads model files.
+
+## DiffusionGemma GPTQ Q4 variant
+
+The optional `text-diffusion-q4` provider directly loads the pinned BF16 non-expert
+weights plus the exported expert-only GPTQ Q4 g32 checkpoint. It does not materialise the
+BF16 experts and remains separate from the existing `text-diffusion` provider.
+
+```powershell
+./.venv-rocm72-q4/bin/Activate.ps1
+python -m pip install --no-deps -e .
+./scripts/start_diffusiongemma_q4.ps1 -Smoke
+```
+
+The default checkpoint directory is
+`var/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
+reports quantization and Q4 invocation metrics, and remains local-files-only.
