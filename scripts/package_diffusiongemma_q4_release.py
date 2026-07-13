@@ -28,6 +28,17 @@ EXPECTED_QUANTIZATION = {
     "qzero_format": 2,
     "runtime": "gptqmodel-triton-v2",
 }
+PUBLIC_EVALUATION_REDACTED_KEYS = {
+    "endpoint",
+    "pid",
+    "q4_checkpoint_dir",
+}
+PUBLIC_EVALUATION_REDACTION_CATEGORIES = [
+    "local worker endpoints",
+    "local checkpoint paths",
+    "process identifiers",
+    "request and job identifiers",
+]
 
 
 class ReleaseError(RuntimeError):
@@ -235,6 +246,68 @@ def validate_evaluation(
         raise ReleaseError("Q4 gate/down invocation counts differ")
 
 
+def is_private_evaluation_field(key: str, value: Any) -> bool:
+    normalized = key.lower()
+    if normalized in PUBLIC_EVALUATION_REDACTED_KEYS:
+        return True
+    if normalized == "job_id" or normalized.endswith("_job_id"):
+        return True
+    if isinstance(value, str):
+        if re.match(r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::\d+)?", value):
+            return True
+        if (
+            value.startswith(("/home/", "/mnt/", "/tmp/", "/workspace/"))
+            and any(token in normalized for token in ("path", "dir", "checkpoint"))
+        ):
+            return True
+    return False
+
+
+def public_evaluation_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Return an evidence-preserving report with host-local identifiers removed."""
+
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: sanitize(item)
+                for key, item in value.items()
+                if not is_private_evaluation_field(key, item)
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    sanitized = sanitize(report)
+    if not isinstance(sanitized, dict):
+        raise ReleaseError("Expected the public evaluation report to remain an object")
+    sanitized["publication"] = {
+        "sanitized": True,
+        "removed": PUBLIC_EVALUATION_REDACTION_CATEGORIES,
+    }
+    validate_public_evaluation(sanitized)
+    return sanitized
+
+
+def validate_public_evaluation(report: dict[str, Any]) -> None:
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                item_path = f"{path}.{key}" if path else key
+                if is_private_evaluation_field(key, item):
+                    raise ReleaseError(
+                        f"Public evaluation report contains private field: {item_path}"
+                    )
+                walk(item, item_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+
+    walk(report, "")
+    publication = report.get("publication")
+    if not isinstance(publication, dict) or publication.get("sanitized") is not True:
+        raise ReleaseError("Public evaluation report has no sanitization marker")
+
+
 def current_source_commit() -> str:
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no"],
@@ -315,23 +388,26 @@ def render_model_card(
     return f"""---
 license: apache-2.0
 base_model: {model_id}
+base_model_relation: quantized
 tags:
   - diffusiongemma
   - text-diffusion
   - gptq
+  - modeldeck
   - rocm
   - amd
 ---
 
-# DiffusionGemma 26B A4B IT — expert-only GPTQ Q4 g32
+# DiffusionGemma 26B A4B IT — ModelDeck expert GPTQ Q4 g32
 
 This is a ModelDeck expert-weight delta for `{model_id}`. It quantizes all 30
 Mixture-of-Experts layers to symmetric GPTQ 4-bit weights with group size 32 while
 retaining the non-expert weights from the pinned base model in BF16.
 
-This package is **not standalone**. It requires the base model at revision
-`{revision}` and the ModelDeck direct Q4 loader. The package does not include the base
-model's non-expert weights.
+This package is **not a standard standalone GPTQ model** and is not directly loadable
+with `transformers.AutoModel`. It requires the base model at revision `{revision}` and
+the custom ModelDeck direct Q4 loader. The package does not include the base model's
+non-expert weights.
 
 ## Quantization
 
@@ -400,6 +476,8 @@ Verify every packaged file before use:
   hardware.
 - The package has not been validated for multimodal generation, other GPUs, other base
   revisions, or other GPTQ runtimes.
+- Compatibility is tied to the ModelDeck source commit above; treat a different loader
+  revision as unvalidated until the release gate passes again.
 - Generated output can be inaccurate, biased, or unsafe. Apply task-appropriate safety
   and factuality checks.
 
@@ -426,6 +504,10 @@ def render_notices(checkpoint_manifest: dict[str, Any]) -> str:
 The expert weights in this release were modified by GPTQ quantization. The base model's
 non-expert weights are not included and must be obtained separately from the upstream
 model repository.
+
+The pinned upstream snapshot does not contain a separate `NOTICE` file. If a future
+base revision adds one, it must be included in any derivative release built from that
+revision.
 
 GPTQModel, PyTorch, Transformers, Triton, Accelerate, and Safetensors are runtime tools
 and dependencies; their source or binary distributions are not included in this model
@@ -460,8 +542,7 @@ def build_release(
         raise ReleaseError(f"Apache 2.0 licence file was not found: {license_file}")
 
     packaged_report = checkpoint_dir / "q4-quality-evaluation.json"
-    if evaluation_report.resolve() != packaged_report.resolve():
-        shutil.copy2(evaluation_report, packaged_report)
+    write_json(packaged_report, public_evaluation_report(report))
     shutil.copy2(license_file, checkpoint_dir / "LICENSE")
     write_text(
         checkpoint_dir / "README.md",
@@ -611,6 +692,7 @@ def verify_release(checkpoint_dir: Path) -> dict[str, Any]:
         )
     validate_checkpoint(checkpoint_dir)
     packaged_report = read_json(checkpoint_dir / "q4-quality-evaluation.json")
+    validate_public_evaluation(packaged_report)
     checkpoint_manifest = read_json(checkpoint_dir / "q4-manifest.json")
     validate_evaluation(packaged_report, checkpoint_manifest)
     return {
