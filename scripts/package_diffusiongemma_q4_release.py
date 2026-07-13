@@ -17,6 +17,8 @@ GIB = 1024**3
 DEFAULT_CHECKPOINT_DIR = Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32")
 DEFAULT_EVALUATION_REPORT = Path("var/q4-quality-evaluation.json")
 DEFAULT_LICENSE = Path("docs/licenses/APACHE-2.0.txt")
+EXPECTED_MODEL_ID = "google/diffusiongemma-26B-A4B-it"
+EXPECTED_REVISION = "52de6b914ee1749a7d4933202505ddf5b414ec43"
 EXPECTED_QUANTIZATION = {
     "method": "gptq",
     "bits": 4,
@@ -105,6 +107,10 @@ def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path
         raise ReleaseError("Unsupported Q4 checkpoint format version")
     if manifest.get("state") != "complete":
         raise ReleaseError("Q4 checkpoint conversion is not complete")
+    if manifest.get("base_model_id") != EXPECTED_MODEL_ID:
+        raise ReleaseError("Q4 checkpoint does not reference the pinned base model")
+    if manifest.get("base_model_revision") != EXPECTED_REVISION:
+        raise ReleaseError("Q4 checkpoint does not reference the pinned base revision")
     quantization = manifest.get("quantization")
     if not isinstance(quantization, dict) or any(
         quantization.get(key) != value
@@ -117,10 +123,22 @@ def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path
         raise ReleaseError("Q4 manifest has no expert metadata")
     layer_count = experts.get("layer_count")
     layers = experts.get("layers")
-    if not isinstance(layer_count, int) or layer_count < 1:
-        raise ReleaseError("Q4 manifest layer count is invalid")
+    if layer_count != 30:
+        raise ReleaseError("Q4 manifest must contain exactly 30 layers")
     if not isinstance(layers, list) or len(layers) != layer_count:
         raise ReleaseError("Q4 manifest does not contain every expert layer")
+    expected_expert_metadata = {
+        "experts_per_layer": 128,
+        "encoder_decoder_storage": "shared",
+        "gate_up_shape": [1408, 2816],
+        "down_shape": [2816, 704],
+        "state_tensors": ["qweight", "qzeros", "scales", "g_idx"],
+    }
+    if any(
+        experts.get(key) != value
+        for key, value in expected_expert_metadata.items()
+    ):
+        raise ReleaseError("Q4 manifest expert topology is incompatible")
 
     shard_paths: list[Path] = []
     seen_files: set[str] = set()
