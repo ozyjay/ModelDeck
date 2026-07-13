@@ -7,7 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from modeldeck.protocol import CapabilitySet, GenerationFamily, LifecycleClass
 
 SAFE_ALIAS = re.compile(r"^[a-z][a-z0-9-]{1,62}$")
-ALLOWED_RUNTIMES = {"mock", "transformers-rocm", "text-diffusion-transformers-rocm"}
+ALLOWED_RUNTIMES = {
+    "mock",
+    "transformers-rocm",
+    "text-diffusion-transformers-rocm",
+    "text-diffusion-gptq-rocm",
+}
 
 
 class ModelProfile(BaseModel):
@@ -81,6 +86,32 @@ def default_model_profiles() -> list[ModelProfile]:
                 "warmup_timeout_seconds": 300,
                 "hsa_preload_evidence": False,
                 "cache_root": "/mnt/work/models/huggingface/hub",
+            },
+        ),
+        ModelProfile(
+            id="diffusiongemma-q4-rocm",
+            model_id="google/diffusiongemma-26B-A4B-it",
+            revision="52de6b914ee1749a7d4933202505ddf5b414ec43",
+            alias="text-diffusion-q4",
+            generation_family="text-diffusion",
+            preferred_runtime="text-diffusion-gptq-rocm",
+            lifecycle="exclusive",
+            port=8622,
+            dtype="bfloat16",
+            capabilities=CapabilitySet(
+                iterative_refinement=True,
+                intermediate_frames=True,
+                seeded_generation=True,
+                logits="model-specific",
+            ),
+            settings={
+                "maximum_new_tokens": 256,
+                "maximum_denoising_steps": 48,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 300,
+                "hsa_preload_evidence": False,
+                "cache_root": "/mnt/work/models/huggingface/hub",
+                "q4_checkpoint_dir": "var/diffusiongemma-26b-a4b-it-gptq-q4-g32",
             },
         ),
         ModelProfile(
