@@ -64,10 +64,10 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen smoke is compatibility-tested on the target hardware. The DiffusionGemma smoke
-uses its complete pinned local snapshot at `/mnt/work/models/huggingface/hub` but remains
-unverified on physical hardware until that script succeeds and records evidence. Neither
-smoke downloads model files.
+The Qwen, BF16 DiffusionGemma, and expert-only Q4 DiffusionGemma paths are
+compatibility-tested on the target Framework Desktop. They use the complete pinned local
+snapshot at `/mnt/work/models/huggingface/hub`; none of the smoke tests download model
+files.
 
 ## DiffusionGemma GPTQ Q4 variant
 
@@ -84,3 +84,18 @@ python -m pip install --no-deps -e .
 The default checkpoint directory is
 `var/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
 reports quantization and Q4 invocation metrics, and remains local-files-only.
+
+Run the comparative release gate after changing the checkpoint, loader, ROCm stack, or
+Transformers version. It executes the diverse prompt suite through Q4 and BF16
+sequentially, verifies deterministic replay and repeated Q4 requests, then leaves Q4
+ready:
+
+```powershell
+./scripts/evaluate_diffusiongemma_q4.ps1
+```
+
+The JSON report is written to `var/q4-quality-evaluation.json`. The default gates require
+all worker contracts and stability requests to pass, exact same-seed Q4 replay, active Q4
+kernels, peak Q4 allocation below 24 GiB, allocation range below 1 GiB, median Q4 latency
+below three times BF16, mean token edit similarity of at least 0.35, and no material
+instruction-constraint regression relative to BF16.
