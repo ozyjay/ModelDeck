@@ -72,7 +72,7 @@ DEFAULT_PROMPTS = (
         prompt="Write a brief imaginative scene about a robot discovering rain for the first time.",
         required_groups=(
             ("robot",),
-            ("rain", "raindrop", "downpour", "deluge"),
+            ("rain", "raindrop", "downpour", "deluge", "petrichor", "precipitation"),
         ),
         minimum_words=35,
     ),
