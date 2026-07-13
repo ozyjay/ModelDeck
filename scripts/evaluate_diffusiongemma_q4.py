@@ -41,6 +41,13 @@ DEFAULT_PROMPTS = (
         minimum_sentences=3,
     ),
     PromptSpec(
+        id="factual-pi",
+        prompt="Define pi accurately in no more than four concise sentences.",
+        required_groups=(("3.14159",), ("circumference",), ("diameter",)),
+        minimum_words=20,
+        minimum_sentences=2,
+    ),
+    PromptSpec(
         id="python-primes",
         prompt="Write a short Python function that returns the prime numbers below n.",
         required_groups=(("def ",), ("return",)),
@@ -154,12 +161,7 @@ def load_prompts(path: Path | None) -> list[PromptSpec]:
 
 
 def find_snapshot(cache_root: Path, model_id: str, revision: str) -> Path:
-    snapshot = (
-        cache_root
-        / f"models--{model_id.replace('/', '--')}"
-        / "snapshots"
-        / revision
-    )
+    snapshot = cache_root / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
     if not snapshot.is_dir():
         raise SystemExit(f"Pinned model snapshot not found: {snapshot}")
     return snapshot
@@ -195,9 +197,7 @@ def start_worker(client: httpx.Client, management_url: str, worker_id: str) -> d
 def stop_worker(client: httpx.Client, management_url: str, worker_id: str) -> None:
     response = client.post(f"{management_url}/api/workers/{worker_id}/stop")
     if response.status_code not in {200, 404}:
-        raise RuntimeError(
-            f"Could not stop {worker_id} ({response.status_code}): {response.text}"
-        )
+        raise RuntimeError(f"Could not stop {worker_id} ({response.status_code}): {response.text}")
 
 
 def metrics(client: httpx.Client, endpoint: str) -> dict[str, Any]:
@@ -257,7 +257,17 @@ def run_diffusion(
         "not_cancelled": terminal.get("cancelled") is False,
         "nonempty_text": len(text.strip()) >= 20,
         "no_replacement_characters": "�" not in text,
+        "frame_steps_within_total": all(
+            int(frame.get("step", 0)) <= int(frame.get("total_steps", 0)) for frame in frames
+        ),
+        "finish_reason_reported": terminal.get("finish_reason")
+        in {
+            "stop",
+            "length",
+            "cancelled",
+        },
     }
+    quality = evaluate_output_quality(text, terminal)
     return {
         "prompt_id": spec.id,
         "seed": seed,
@@ -270,6 +280,7 @@ def run_diffusion(
         "contract_checks": contract_checks,
         "contract_passed": all(contract_checks.values()),
         "constraint": evaluate_constraints(spec, text),
+        "quality": quality,
     }
 
 
@@ -283,8 +294,7 @@ def evaluate_constraints(spec: PromptSpec, text: str) -> dict[str, Any]:
     words = re.findall(r"\b[\w'-]+\b", normalised)
     sentences = [item for item in re.split(r"[.!?]+", text) if item.strip()]
     group_results = [
-        any(normalise_text(candidate) in normalised for candidate in group)
-        for group in spec.required_groups
+        any(normalise_text(candidate) in normalised for candidate in group) for group in spec.required_groups
     ]
     checks = {
         "minimum_words": len(words) >= spec.minimum_words,
@@ -297,6 +307,29 @@ def evaluate_constraints(spec: PromptSpec, text: str) -> dict[str, Any]:
         "word_count": len(words),
         "sentence_count": len(sentences),
         "required_group_results": group_results,
+    }
+
+
+def evaluate_output_quality(text: str, terminal: dict[str, Any]) -> dict[str, Any]:
+    words = re.findall(r"\b[\w'-]+\b", normalise_text(text))
+    longest_run = 0
+    current_run = 0
+    previous = None
+    for word in words:
+        current_run = current_run + 1 if word == previous else 1
+        longest_run = max(longest_run, current_run)
+        previous = word
+    checks = {
+        "no_reasoning_channel_leak": not bool(
+            re.match(r"^\s*(?:thought\b|<\|channel>thought\b)", text, flags=re.IGNORECASE)
+        ),
+        "not_length_limited": terminal.get("finish_reason") != "length",
+        "no_excessive_consecutive_repetition": longest_run <= 2,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "longest_consecutive_word_run": longest_run,
     }
 
 
@@ -391,10 +424,12 @@ def phase_summary(results: list[dict[str, Any]], memory_samples: list[int]) -> d
         "runs": len(results),
         "contract_passes": sum(result["contract_passed"] for result in results),
         "constraint_passes": sum(result["constraint"]["passed"] for result in results),
+        "quality_passes": sum(result["quality"]["passed"] for result in results),
+        "quality_pass_rate": (
+            sum(result["quality"]["passed"] for result in results) / len(results) if results else 0.0
+        ),
         "constraint_pass_rate": (
-            sum(result["constraint"]["passed"] for result in results) / len(results)
-            if results
-            else 0.0
+            sum(result["constraint"]["passed"] for result in results) / len(results) if results else 0.0
         ),
         "median_wall_seconds": median(latencies) if latencies else 0.0,
         "p95_wall_seconds": percentile_95(latencies),
@@ -460,8 +495,7 @@ def main() -> None:
         missing_profiles = {Q4_WORKER, BF16_WORKER} - profile_ids
         if missing_profiles:
             raise RuntimeError(
-                "The running management service is missing profiles: "
-                + ", ".join(sorted(missing_profiles))
+                "The running management service is missing profiles: " + ", ".join(sorted(missing_profiles))
             )
 
         print("Phase 1/3: Q4 quality, determinism, and stability")
@@ -556,8 +590,7 @@ def main() -> None:
 
         print("Phase 3/3: comparison and release gates")
         comparisons = [
-            compare_outputs(tokenizer, q4, bf16)
-            for q4, bf16 in zip(q4_results, bf16_results, strict=True)
+            compare_outputs(tokenizer, q4, bf16) for q4, bf16 in zip(q4_results, bf16_results, strict=True)
         ]
         q4_summary = phase_summary(q4_results, q4_memory)
         bf16_summary = phase_summary(bf16_results, bf16_memory)
@@ -588,24 +621,19 @@ def main() -> None:
         checks = {
             "q4_contracts": q4_summary["contract_passes"] == q4_summary["runs"],
             "bf16_contracts": bf16_summary["contract_passes"] == bf16_summary["runs"],
-            "q4_stability_contracts": (
-                stability_summary["contract_passes"] == stability_summary["runs"]
-            ),
+            "q4_output_quality": q4_summary["quality_passes"] == q4_summary["runs"],
+            "bf16_output_quality": bf16_summary["quality_passes"] == bf16_summary["runs"],
+            "q4_stability_contracts": (stability_summary["contract_passes"] == stability_summary["runs"]),
             "deterministic_replay": deterministic["exact_text"],
             "q4_kernel_invoked": q4_gate_delta > 0 and q4_gate_delta == q4_down_delta,
-            "q4_peak_memory_under_24_gib": (
-                int(q4_metrics_after["peak_memory_allocated_bytes"]) <= 24 * GIB
-            ),
-            "q4_memory_range_under_1_gib": (
-                q4_summary["memory_allocated_range_bytes"] <= GIB
-            ),
+            "q4_peak_memory_under_24_gib": (int(q4_metrics_after["peak_memory_allocated_bytes"]) <= 24 * GIB),
+            "q4_memory_range_under_1_gib": (q4_summary["memory_allocated_range_bytes"] <= GIB),
             "q4_latency_under_3x_bf16": latency_ratio <= 3.0,
             "mean_token_edit_similarity_at_least_0_35": (
                 comparison_summary["mean_token_edit_similarity"] >= 0.35
             ),
             "q4_constraints_not_materially_worse": (
-                q4_summary["constraint_pass_rate"]
-                >= max(0.5, bf16_summary["constraint_pass_rate"] - 0.25)
+                q4_summary["constraint_pass_rate"] >= max(0.5, bf16_summary["constraint_pass_rate"] - 0.25)
             ),
         }
         passed = all(checks.values())

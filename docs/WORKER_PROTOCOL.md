@@ -21,7 +21,10 @@ It advertises health while loading and becomes ready only after explicit warmup.
 
 Canonical routes are `POST /v1/refine`, `/v1/diffuse`, `GET /v1/jobs/{job_id}`, `POST
 /v1/jobs/{job_id}/cancel`, and `GET /v1/jobs/{job_id}/events`. Frame events contain step,
-total steps, text, masked/stable token counts where available, completion, and seed.
+total steps, text, masked/stable token counts where available, completion, and seed. A
+terminal frame never exceeds its declared total steps and reports `finish_reason` as
+`stop`, `length`, or `cancelled`. Model-specific structured response parsing removes
+private reasoning channels from public frame and result text.
 Native iterative refinement is canonical; it is not implemented by calling an AR token
 loop. Job event streams publish refinement frames as the engine produces them rather than
 waiting to replay the completed frame collection.

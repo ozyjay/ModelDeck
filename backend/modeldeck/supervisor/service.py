@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ class ManagedWorker:
     process: asyncio.subprocess.Process | None = None
     started_at: datetime | None = None
     last_error: str | None = None
+    log_session_id: str | None = None
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     def snapshot(self) -> dict[str, Any]:
@@ -40,6 +42,7 @@ class ManagedWorker:
             "pid": self.process.pid if self.process and self.process.returncode is None else None,
             "started_at": self.started_at,
             "last_error": self.last_error,
+            "log_session_id": self.log_session_id,
             "capabilities": self.profile.capabilities.model_dump(),
         }
 
@@ -79,8 +82,11 @@ class WorkerSupervisor:
         return self._require(worker_id).snapshot()
 
     def logs(self, worker_id: str) -> list[dict[str, Any]]:
-        self._require(worker_id)
-        return list(self._logs[worker_id])
+        worker = self._require(worker_id)
+        records = list(self._logs[worker_id])
+        if worker.log_session_id is None:
+            return records
+        return [record for record in records if record.get("session_id") == worker.log_session_id]
 
     async def start(self, worker_id: str) -> dict[str, Any]:
         worker = self._require(worker_id)
@@ -109,6 +115,7 @@ class WorkerSupervisor:
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 raise RuntimeError(worker.last_error) from error
             await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
+            worker.log_session_id = uuid.uuid4().hex
             try:
                 worker.process = await asyncio.create_subprocess_exec(
                     *launch.command,
@@ -220,8 +227,12 @@ class WorkerSupervisor:
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
             "source": source,
+            "level": classify_log_level(message),
             "message": redact_log(message),
         }
+        session_id = self._require(worker_id).log_session_id
+        if session_id is not None:
+            record["session_id"] = session_id
         logs = self._logs[worker_id]
         was_full = len(logs) == self._MAX_LOG_RECORDS
         logs.append(record)
@@ -419,6 +430,18 @@ def build_mock_worker_command(profile: ModelProfile) -> list[str]:
     if profile.preferred_runtime != "mock":
         raise ValueError("Profile is not a mock runtime")
     return build_worker_launch(profile).command
+
+
+def classify_log_level(message: str) -> str:
+    lowered = message.casefold()
+    if any(
+        marker in lowered
+        for marker in ("error", "exception", "traceback", "critical", "out of memory", "oom")
+    ):
+        return "error"
+    if "warning" in lowered or lowered.lstrip().startswith("warn") or "skipping import" in lowered:
+        return "warning"
+    return "info"
 
 
 def port_available(port: int, host: str = "127.0.0.1") -> bool:

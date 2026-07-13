@@ -34,6 +34,10 @@ profile. The supervisor serialises loads, checks fixed ports, captures stdout/st
 polls health, runs warmup, detects exit, requests graceful shutdown, and terminates only
 after a timeout. Terminating the worker is the memory-recovery boundary.
 
+Worker log records are bounded on disk, severity-classified, and tagged by launch
+session. The management log API shows the current launch by default so resolved failures
+from an earlier runtime do not appear to describe the active worker.
+
 States are `discovered`, `stopped`, `validating`, `starting`, `loading`, `warming`,
 `ready`, `busy`, `degraded`, `stopping`, `failed`, `orphaned`, and `incompatible`.
 Process existence alone never means ready.

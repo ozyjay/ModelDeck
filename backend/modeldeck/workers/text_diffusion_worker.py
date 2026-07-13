@@ -5,6 +5,7 @@ import asyncio
 import importlib.metadata
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -21,6 +22,10 @@ from pydantic import BaseModel, Field
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
 
 LOGGER = logging.getLogger("uvicorn.error")
+SYSTEM_INSTRUCTION = (
+    "Give a concise, accurate final answer. Do not expose private reasoning or thinking. "
+    "Finish the answer within the available response length."
+)
 
 
 @dataclass(frozen=True)
@@ -91,13 +96,13 @@ class FrameStreamer:
         frame = {
             "step": len(self.frames) + 1,
             "total_steps": self.total_steps,
-            "text": self.tokenizer.decode(token_ids, skip_special_tokens=True),
+            "text": _decode_response(self.tokenizer, token_ids),
             "masked_tokens": None,
             "stable_tokens": stable,
             "complete": False,
         }
         self.frames.append(frame)
-        if self.frame_callback:
+        if self.frame_callback and frame["step"] < self.total_steps:
             self.frame_callback(frame)
 
     def put(self, value: Any) -> None:
@@ -227,7 +232,10 @@ class TransformersDiffusionEngine:
         torch = self.torch
         torch.manual_seed(body.seed)
         inputs = self.processor.apply_chat_template(
-            [{"role": "user", "content": body.prompt}],
+            [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": body.prompt},
+            ],
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
@@ -251,23 +259,95 @@ class TransformersDiffusionEngine:
             stopping_criteria=StoppingCriteriaList([CancellationCriteria(cancellation)]),
         )
         if cancellation.is_set():
-            return [*streamer.frames, _terminal_frame(streamer.frames, body.denoising_steps, True)]
+            return _finalise_frames(
+                streamer.frames,
+                body.denoising_steps,
+                cancelled=True,
+                finish_reason="cancelled",
+            )
         sequences = output.sequences if hasattr(output, "sequences") else output
-        text = self.processor.decode(sequences[0, prompt_length:], skip_special_tokens=True)
-        return [*streamer.frames, _terminal_frame(streamer.frames, body.denoising_steps, False, text)]
+        generated_tokens = sequences[0, prompt_length:]
+        text = _decode_response(self.processor.tokenizer, generated_tokens)
+        finish_reason = _finish_reason(
+            generated_tokens,
+            self.model.generation_config.eos_token_id,
+        )
+        return _finalise_frames(
+            streamer.frames,
+            body.denoising_steps,
+            cancelled=False,
+            text=text,
+            finish_reason=finish_reason,
+        )
+
+
+def _decode_response(tokenizer: Any, token_ids: Any) -> str:
+    raw_text = tokenizer.decode(token_ids, skip_special_tokens=False)
+    parser = getattr(tokenizer, "parse_response", None)
+    if callable(parser):
+        try:
+            parsed = parser(raw_text)
+            if isinstance(parsed, dict) and "content" in parsed:
+                content = str(parsed.get("content") or "")
+                content_ids = tokenizer.encode(content, add_special_tokens=False)
+                return tokenizer.decode(content_ids, skip_special_tokens=True).strip()
+        except (TypeError, ValueError):
+            pass
+
+    if re.match(r"^\s*<\|channel>thought(?:\n|$)", raw_text):
+        if "<channel|>" not in raw_text:
+            return ""
+        raw_text = raw_text.split("<channel|>", 1)[1]
+        token_ids = tokenizer.encode(raw_text, add_special_tokens=False)
+    text = tokenizer.decode(token_ids, skip_special_tokens=True)
+    return re.sub(r"^\s*thought\s*(?:\n|$)", "", text, count=1).strip()
+
+
+def _finish_reason(token_ids: Any, eos_token_ids: int | list[int] | tuple[int, ...] | None) -> str:
+    values = token_ids.tolist() if hasattr(token_ids, "tolist") else list(token_ids)
+    if not values:
+        return "stop"
+    eos = {eos_token_ids} if isinstance(eos_token_ids, int) else set(eos_token_ids or ())
+    return "stop" if any(int(value) in eos for value in values) else "length"
+
+
+def _finalise_frames(
+    frames: list[dict[str, Any]],
+    total_steps: int,
+    *,
+    cancelled: bool,
+    finish_reason: str,
+    text: str | None = None,
+) -> list[dict[str, Any]]:
+    terminal = _terminal_frame(
+        frames,
+        total_steps,
+        cancelled,
+        finish_reason=finish_reason,
+        text=text,
+    )
+    if frames and len(frames) >= total_steps:
+        return [*frames[: total_steps - 1], terminal]
+    return [*frames, terminal]
 
 
 def _terminal_frame(
-    frames: list[dict[str, Any]], total_steps: int, cancelled: bool, text: str | None = None
+    frames: list[dict[str, Any]],
+    total_steps: int,
+    cancelled: bool,
+    *,
+    finish_reason: str,
+    text: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "step": len(frames) + 1,
+        "step": min(len(frames) + 1, total_steps),
         "total_steps": total_steps,
         "text": text if text is not None else (frames[-1]["text"] if frames else ""),
         "masked_tokens": 0 if not cancelled else None,
         "stable_tokens": frames[-1]["stable_tokens"] if frames else 0,
         "complete": True,
         "cancelled": cancelled,
+        "finish_reason": finish_reason,
     }
 
 

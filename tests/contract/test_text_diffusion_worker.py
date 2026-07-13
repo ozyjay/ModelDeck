@@ -6,7 +6,15 @@ from typing import Any
 
 import httpx
 import pytest
-from modeldeck.workers.text_diffusion_worker import DiffusionRequest, EngineConfig, create_app
+from modeldeck.workers.text_diffusion_worker import (
+    DiffusionRequest,
+    EngineConfig,
+    FrameStreamer,
+    _decode_response,
+    _finalise_frames,
+    _finish_reason,
+    create_app,
+)
 
 
 class FakeDiffusionEngine:
@@ -97,6 +105,87 @@ class ProgressiveDiffusionEngine(FakeDiffusionEngine):
 class FailingDiffusionEngine(FakeDiffusionEngine):
     def load(self) -> None:
         raise RuntimeError("ROCm device unavailable")
+
+
+class StructuredResponseTokenizer:
+    def decode(self, token_ids, *, skip_special_tokens: bool) -> str:
+        if token_ids == [4, 5]:
+            return "Public answer."
+        if skip_special_tokens:
+            return "thought\nPrivate reasoning. Public answer."
+        return "<|channel>thought\nPrivate reasoning.<channel|>Public answer.<turn|>"
+
+    def parse_response(self, _text: str) -> dict[str, str]:
+        return {
+            "role": "assistant",
+            "thinking": "Private reasoning.",
+            "content": "Public answer.",
+        }
+
+    def encode(self, _text: str, *, add_special_tokens: bool) -> list[int]:
+        assert add_special_tokens is False
+        return [4, 5]
+
+
+class FakeTokenTensor:
+    shape = (1, 2)
+
+    def __getitem__(self, _index):
+        return self
+
+    def tolist(self) -> list[int]:
+        return [1, 2]
+
+
+def test_structured_response_parser_hides_private_reasoning() -> None:
+    assert _decode_response(StructuredResponseTokenizer(), [1, 2, 3]) == "Public answer."
+
+
+def test_terminal_frame_replaces_last_draft_without_exceeding_total_steps() -> None:
+    drafts = [
+        {
+            "step": step,
+            "total_steps": 8,
+            "text": f"draft {step}",
+            "masked_tokens": None,
+            "stable_tokens": step,
+            "complete": False,
+        }
+        for step in range(1, 9)
+    ]
+
+    frames = _finalise_frames(
+        drafts,
+        8,
+        cancelled=False,
+        finish_reason="stop",
+        text="Final answer.",
+    )
+
+    assert len(frames) == 8
+    assert frames[-1]["step"] == frames[-1]["total_steps"] == 8
+    assert frames[-1]["text"] == "Final answer."
+    assert frames[-1]["finish_reason"] == "stop"
+    assert frames[-1]["complete"] is True
+    assert _finish_reason([4, 50], [1, 50, 106]) == "stop"
+    assert _finish_reason([4, 50, 0, 0], [1, 50, 106]) == "stop"
+    assert _finish_reason([4, 5], [1, 50, 106]) == "length"
+
+
+def test_frame_streamer_withholds_final_draft_for_terminal_event() -> None:
+    published = []
+    streamer = FrameStreamer(
+        StructuredResponseTokenizer(),
+        total_steps=2,
+        cancellation=threading.Event(),
+        frame_callback=published.append,
+    )
+
+    streamer.put_draft(FakeTokenTensor())
+    streamer.put_draft(FakeTokenTensor())
+
+    assert len(streamer.frames) == 2
+    assert [frame["step"] for frame in published] == [1]
 
 
 @pytest.mark.asyncio

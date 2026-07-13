@@ -278,6 +278,7 @@ def _diffusion_frames(body: DiffusionRequest, job_id: str):
             "masked_tokens": masked,
             "stable_tokens": visible,
             "complete": step == total,
+            "finish_reason": "stop" if step == total else None,
             "seed": body.seed,
         }
 

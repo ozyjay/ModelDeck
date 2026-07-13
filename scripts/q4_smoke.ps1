@@ -36,7 +36,7 @@ if (-not $jobId) {
 Write-Host "Job: $jobId"
 
 do {
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 1000
 
     $job = Invoke-RestMethod `
         -Uri "$baseUri/v1/jobs/$jobId" `
@@ -60,4 +60,15 @@ $job | ConvertTo-Json -Depth 20
 
 if ($job.state -ne "complete") {
     throw "Generation ended with state: $($job.state)"
+}
+
+$terminal = $job.frames[-1]
+if ($terminal.step -gt $terminal.total_steps) {
+    throw "Terminal frame step exceeds total steps."
+}
+if ($terminal.finish_reason -eq "length") {
+    throw "Generation exhausted its response length before producing a complete answer."
+}
+if ($job.text -match '^\s*(thought\b|<\|channel>thought\b)') {
+    throw "Generation leaked a private reasoning channel."
 }

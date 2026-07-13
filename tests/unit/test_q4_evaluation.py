@@ -94,11 +94,13 @@ def test_q4_evaluation_phase_summary_tracks_contracts_and_memory_range() -> None
             "wall_seconds": 7.0,
             "contract_passed": True,
             "constraint": {"passed": True},
+            "quality": {"passed": True},
         },
         {
             "wall_seconds": 9.0,
             "contract_passed": False,
             "constraint": {"passed": True},
+            "quality": {"passed": False},
         },
     ]
 
@@ -107,5 +109,28 @@ def test_q4_evaluation_phase_summary_tracks_contracts_and_memory_range() -> None
     assert summary["runs"] == 2
     assert summary["contract_passes"] == 1
     assert summary["constraint_pass_rate"] == 1.0
+    assert summary["quality_pass_rate"] == 0.5
     assert summary["median_wall_seconds"] == 8.0
     assert summary["memory_allocated_range_bytes"] == 1_500
+
+
+def test_q4_evaluation_rejects_reasoning_leaks_repetition_and_truncation() -> None:
+    evaluator = load_evaluator()
+
+    clean = evaluator.evaluate_output_quality(
+        "Pi is the ratio of circumference to diameter.",
+        {"finish_reason": "stop"},
+    )
+    leaked = evaluator.evaluate_output_quality(
+        "thought\nPi is approximately 3.14159.",
+        {"finish_reason": "stop"},
+    )
+    repeated = evaluator.evaluate_output_quality(
+        "Pi is is is a ratio.",
+        {"finish_reason": "length"},
+    )
+
+    assert clean["passed"] is True
+    assert leaked["checks"]["no_reasoning_channel_leak"] is False
+    assert repeated["checks"]["not_length_limited"] is False
+    assert repeated["checks"]["no_excessive_consecutive_repetition"] is False

@@ -63,6 +63,7 @@ async def test_text_diffusion_contract_is_seeded_and_has_frames() -> None:
     assert first == second
     assert first["frames"][0]["complete"] is False
     assert first["frames"][-1]["complete"] is True
+    assert first["frames"][-1]["finish_reason"] == "stop"
     assert first["frames"][-1]["seed"] == 11
     assert wrong_route.status_code == 404
     assert cancelled.json()["state"] == "cancelled"

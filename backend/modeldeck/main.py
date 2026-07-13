@@ -239,8 +239,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def stream() -> AsyncIterator[str]:
             sent = 0
+            session_id = None
             while True:
                 logs = request.app.state.supervisor.logs(worker_id)
+                current_session_id = logs[0].get("session_id") if logs else None
+                if current_session_id != session_id or sent > len(logs):
+                    sent = 0
+                    session_id = current_session_id
                 for item in logs[sent:]:
                     yield f"event: log\ndata: {json.dumps(item)}\n\n"
                 sent = len(logs)
