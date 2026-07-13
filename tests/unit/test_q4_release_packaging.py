@@ -105,13 +105,24 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
             "temperature": 0.8,
         },
         "q4": {
+            "worker": {"endpoint": "http://127.0.0.1:8622", "pid": 12001},
             "summary": summary,
             "stability_summary": {"runs": 4, "contract_passes": 4},
-            "deterministic_replay": {"exact_text": True},
-            "metrics_after": metrics,
+            "deterministic_replay": {
+                "exact_text": True,
+                "reference_job_id": "q4-reference",
+                "replay_job_id": "q4-replay",
+            },
+            "results": [{"job_id": "q4-job", "text": "fixture output"}],
+            "metrics_after": {
+                **metrics,
+                "q4_checkpoint_dir": "/mnt/work/private/q4-checkpoint",
+            },
         },
         "bf16": {
+            "worker": {"endpoint": "http://127.0.0.1:8621", "pid": 12002},
             "summary": {**summary, "median_wall_seconds": 5.0},
+            "results": [{"job_id": "bf16-job", "text": "fixture output"}],
             "metrics_after": {"memory_allocated_bytes": 48 * 1024**3},
         },
         "comparison": {
@@ -146,6 +157,26 @@ def test_release_packager_builds_and_verifies_bundle(tmp_path: Path) -> None:
     assert (checkpoint / "README.md").is_file()
     assert (checkpoint / "SHA256SUMS").is_file()
 
+    model_card = (checkpoint / "README.md").read_text(encoding="utf-8")
+    assert "base_model_relation: quantized" in model_card
+    assert "  - modeldeck" in model_card
+    assert "not a standard standalone GPTQ model" in model_card
+
+    public_report = json.loads(
+        (checkpoint / "q4-quality-evaluation.json").read_text(encoding="utf-8")
+    )
+    assert public_report["publication"]["sanitized"] is True
+    assert "endpoint" not in public_report["q4"]["worker"]
+    assert "pid" not in public_report["q4"]["worker"]
+    assert "q4_checkpoint_dir" not in public_report["q4"]["metrics_after"]
+    assert "job_id" not in public_report["q4"]["results"][0]
+    assert "reference_job_id" not in public_report["q4"]["deterministic_replay"]
+    assert "replay_job_id" not in public_report["q4"]["deterministic_replay"]
+
+    source_report = json.loads(evaluation.read_text(encoding="utf-8"))
+    assert source_report["q4"]["worker"]["pid"] == 12001
+    assert source_report["q4"]["results"][0]["job_id"] == "q4-job"
+
 
 def test_release_verifier_rejects_tampered_shard(tmp_path: Path) -> None:
     packager = load_packager()
@@ -176,4 +207,16 @@ def test_release_packager_rejects_failed_constraints(tmp_path: Path) -> None:
             evaluation_report=evaluation,
             license_file=license_path,
             source_commit="d" * 40,
+        )
+
+
+def test_public_evaluation_validator_rejects_local_identifiers() -> None:
+    packager = load_packager()
+
+    with pytest.raises(packager.ReleaseError, match="private field"):
+        packager.validate_public_evaluation(
+            {
+                "publication": {"sanitized": True},
+                "q4": {"worker": {"endpoint": "http://127.0.0.1:8622"}},
+            }
         )
