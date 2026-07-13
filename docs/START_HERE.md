@@ -11,10 +11,12 @@ It never downloads models; core ROCm workers load pinned local weights only when
 4. Start with `pwsh -NoProfile -File scripts/run.ps1`, then start the selected ROCm
    worker and confirm it is the gateway's effective provider.
 
-The core Transformers integration is deliberately isolated in a project Python 3.12 ROCm
-environment and gated by compatibility evidence. The ROCm 7.2.1 Qwen worker has passed
-its hardware smoke; DiffusionGemma awaits its physical acceptance run. Fedora's system
-ROCm packages remain unchanged at 7.1.x. Run
+The core Transformers integrations are deliberately isolated in project Python 3.12 ROCm
+environments and gated by compatibility evidence. The ROCm 7.2.1 Qwen worker and default
+DiffusionGemma Q4 worker have passed their hardware gates; the original BF16 worker is
+retained as an explicit compatibility and evaluation baseline. Fedora's system ROCm
+packages remain unchanged at 7.1.x. Run
 `pwsh -NoProfile -File scripts/setup.ps1` when preparing the target workers.
-The two environments are complementary: `.venv` owns the control plane and
-`.venv-rocm72` owns primary inference.
+The environments are complementary: `.venv` owns the control plane, `.venv-rocm72` owns
+Qwen and BF16 baseline inference, and `.venv-rocm72-q4` owns default DiffusionGemma Q4
+inference.

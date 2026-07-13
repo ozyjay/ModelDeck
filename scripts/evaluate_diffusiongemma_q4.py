@@ -21,7 +21,7 @@ DEFAULT_CACHE_ROOT = "/mnt/work/models/huggingface/hub"
 Q4_WORKER = "diffusiongemma-q4-rocm"
 BF16_WORKER = "diffusiongemma-rocm"
 Q4_ALIAS = "text-diffusion-q4"
-BF16_ALIAS = "text-diffusion"
+BF16_ALIAS = "text-diffusion-bf16"
 
 
 @dataclass(frozen=True)

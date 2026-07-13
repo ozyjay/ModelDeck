@@ -10,11 +10,7 @@ import pytest
 
 
 def load_packager() -> ModuleType:
-    path = (
-        Path(__file__).parents[2]
-        / "scripts"
-        / "package_diffusiongemma_q4_release.py"
-    )
+    path = Path(__file__).parents[2] / "scripts" / "package_diffusiongemma_q4_release.py"
     spec = importlib.util.spec_from_file_location("modeldeck_q4_packager", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -162,9 +158,7 @@ def test_release_packager_builds_and_verifies_bundle(tmp_path: Path) -> None:
     assert "  - modeldeck" in model_card
     assert "not a standard standalone GPTQ model" in model_card
 
-    public_report = json.loads(
-        (checkpoint / "q4-quality-evaluation.json").read_text(encoding="utf-8")
-    )
+    public_report = json.loads((checkpoint / "q4-quality-evaluation.json").read_text(encoding="utf-8"))
     assert public_report["publication"]["sanitized"] is True
     assert "endpoint" not in public_report["q4"]["worker"]
     assert "pid" not in public_report["q4"]["worker"]

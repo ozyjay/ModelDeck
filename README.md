@@ -17,14 +17,16 @@ pwsh -NoProfile -File scripts/setup.ps1
 pwsh -NoProfile -File scripts/run.ps1
 ```
 
-ModelDeck deliberately uses two environments with different responsibilities:
+ModelDeck deliberately uses three environments with different responsibilities:
 
 - `.venv` is the control plane: management service, supervisor, gateway, catalogue,
   mock/replay fallbacks, and development tests.
 - `.venv-rocm72` is the primary inference runtime: the pinned ROCm, PyTorch, and
-  Transformers stack for Qwen and DiffusionGemma.
+  Transformers stack for Qwen and the DiffusionGemma BF16 baseline.
+- `.venv-rocm72-q4` is the isolated inference runtime for the default Q4 DiffusionGemma
+  provider and its GPTQ dependencies.
 
-Both are part of the target installation. Keeping model libraries outside the control
+All three are part of the target installation. Keeping model libraries outside the control
 plane preserves dependency isolation and makes worker process exit the memory-recovery
 boundary.
 
@@ -64,20 +66,20 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen, BF16 DiffusionGemma, and expert-only Q4 DiffusionGemma paths are
+The Qwen, BF16 DiffusionGemma baseline, and expert-only Q4 DiffusionGemma paths are
 compatibility-tested on the target Framework Desktop. They use the complete pinned local
 snapshot at `/mnt/work/models/huggingface/hub`; none of the smoke tests download model
 files.
 
 ## DiffusionGemma GPTQ Q4 variant
 
-The optional `text-diffusion-q4` provider directly loads the pinned BF16 non-expert
-weights plus the exported expert-only GPTQ Q4 g32 checkpoint. It does not materialise the
-BF16 experts and remains separate from the existing `text-diffusion` provider.
+The default `text-diffusion` provider directly loads the pinned BF16 non-expert weights
+plus the exported expert-only GPTQ Q4 g32 checkpoint. It does not materialise the BF16
+experts. The original model remains available explicitly as `text-diffusion-bf16` for
+compatibility and release evaluation; `text-diffusion-q4` remains as a compatibility
+alias for clients that adopted the Q4 preview name.
 
 ```powershell
-./.venv-rocm72-q4/bin/Activate.ps1
-python -m pip install --no-deps -e .
 ./scripts/start_diffusiongemma_q4.ps1 -Smoke
 ```
 

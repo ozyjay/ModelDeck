@@ -12,8 +12,11 @@ Initial real profiles are:
 - `Qwen/Qwen2.5-0.5B-Instruct` revision
   `7ae557604adf67be50417f59c2c2f167def9a775` as the tested small AR profile,
   `token-explainer`, resident, FP16 and local only;
-- `google/diffusiongemma-26B-A4B-it` as text diffusion, `text-diffusion`, exclusive,
-  local only and still awaiting its ModelDeck hardware phase.
+- the ModelDeck expert-only GPTQ Q4 g32 variant of
+  `google/diffusiongemma-26B-A4B-it` as the default `text-diffusion` provider, exclusive
+  and local only;
+- the original BF16 DiffusionGemma profile as the explicit `text-diffusion-bf16`
+  compatibility and evaluation baseline.
 
 The Qwen profile has load, warmup, smoke, cancellation, 30-minute stability, shutdown and
 process-exit evidence. DiffusionGemma must pin its resolved snapshot and must not be marked

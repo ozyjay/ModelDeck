@@ -373,22 +373,16 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             elif default_q4_python.is_file():
                 python = default_q4_python
             else:
-                python = Path(
-                    os.environ.get("MODELDECK_ROCM72_PYTHON", default_q4_python)
-                ).expanduser()
+                python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", default_q4_python)).expanduser()
         else:
-            python = Path(
-                os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")
-            ).expanduser()
+            python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
         if not python.is_file():
             if is_q4:
                 raise ValueError(
                     "Q4 ROCm runtime is missing; create .venv-rocm72-q4 and install "
                     "requirements-rocm72-q4-gptqmodel.txt"
                 )
-            raise ValueError(
-                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1"
-            )
+            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
         environment.pop("LD_PRELOAD", None)
         environment["HF_HUB_CACHE"] = str(profile.settings["cache_root"])
         if profile.settings.get("hsa_preload_evidence"):

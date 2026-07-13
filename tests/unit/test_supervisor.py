@@ -66,9 +66,7 @@ def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path)
 
 
 def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, tmp_path) -> None:
-    profile = next(
-        profile for profile in default_model_profiles() if profile.id == "diffusiongemma-q4-rocm"
-    )
+    profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-q4-rocm")
     runtime_python = tmp_path / "q4/bin/python"
     runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(sys.executable)
@@ -77,9 +75,7 @@ def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, t
     launch = build_worker_launch(profile)
 
     assert launch.command[0] == str(runtime_python.absolute())
-    assert launch.command[launch.command.index("--cache-root") + 1] == (
-        "/mnt/work/models/huggingface/hub"
-    )
+    assert launch.command[launch.command.index("--cache-root") + 1] == ("/mnt/work/models/huggingface/hub")
     assert launch.command[launch.command.index("--q4-checkpoint-dir") + 1].endswith(
         "diffusiongemma-26b-a4b-it-gptq-q4-g32"
     )
@@ -89,9 +85,7 @@ def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, t
 
 @pytest.mark.asyncio
 async def test_starting_exclusive_worker_stops_existing_exclusive_worker() -> None:
-    base = next(
-        profile for profile in default_model_profiles() if profile.id == "mock-diffusion"
-    )
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-diffusion")
     first_port = free_port()
     second_port = free_port()
     while second_port == first_port:

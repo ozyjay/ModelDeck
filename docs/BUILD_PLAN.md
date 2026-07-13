@@ -34,7 +34,8 @@ queries. Migrations will be versioned before user-editable persistence begins.
 | Mock/first AR worker | 8610 | Start of managed worker range |
 | Mock/first diffusion worker | 8611 | Separate process and generation family |
 | Core Qwen ROCm worker | 8620 | Isolated autoregressive runtime |
-| Core DiffusionGemma ROCm worker | 8621 | Isolated, exclusive text-diffusion runtime |
+| DiffusionGemma BF16 baseline worker | 8621 | Isolated, exclusive compatibility and evaluation runtime |
+| Core DiffusionGemma Q4 ROCm worker | 8622 | Default isolated, exclusive text-diffusion runtime |
 | External vLLM | 8000 | Existing SceneChat/TextDiffusion convention; unmanaged initially |
 
 No random fallback port is used outside tests.

@@ -34,6 +34,13 @@ def test_q4_evaluation_constraint_checks_are_accent_insensitive() -> None:
     assert result["required_group_results"] == [True, True]
 
 
+def test_q4_evaluation_uses_explicit_provider_aliases() -> None:
+    evaluator = load_evaluator()
+
+    assert evaluator.Q4_ALIAS == "text-diffusion-q4"
+    assert evaluator.BF16_ALIAS == "text-diffusion-bf16"
+
+
 def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
     evaluator = load_evaluator()
     spec = next(item for item in evaluator.DEFAULT_PROMPTS if item.id == "creative-scene")
@@ -66,9 +73,7 @@ def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
 
 def test_q4_evaluation_arithmetic_prompt_requests_answer_first() -> None:
     evaluator = load_evaluator()
-    spec = next(
-        item for item in evaluator.DEFAULT_PROMPTS if item.id == "arithmetic-reasoning"
-    )
+    spec = next(item for item in evaluator.DEFAULT_PROMPTS if item.id == "arithmetic-reasoning")
 
     assert "numerical average speed first" in spec.prompt
     result = evaluator.evaluate_constraints(

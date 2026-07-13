@@ -81,9 +81,7 @@ class FullQ4Experts(nn.Module):
             gate, up = self.gate_up[expert](current_state).chunk(2, dim=-1)
             intermediate = self.act_fn(gate) * up
             current_hidden_states = self.down[expert](intermediate)
-            current_hidden_states = (
-                current_hidden_states * top_k_weights[token_index, top_k_position, None]
-            )
+            current_hidden_states = current_hidden_states * top_k_weights[token_index, top_k_position, None]
             final_hidden_states.index_add_(
                 0,
                 token_index,
@@ -102,8 +100,7 @@ def find_local_snapshot(cache_root: Path, model_id: str, revision: str) -> Path:
     if snapshot.is_dir():
         return snapshot
     raise RuntimeError(
-        f"Pinned local snapshot was not found beneath {repository / 'snapshots'} "
-        f"for revision {revision}"
+        f"Pinned local snapshot was not found beneath {repository / 'snapshots'} for revision {revision}"
     )
 
 
@@ -257,9 +254,7 @@ def _load_q4_layers(
         q4_gate = []
         q4_down = []
         for expert in range(experts_per_layer):
-            gate_tensors = {
-                name: tensors[f"gate_up.{expert}.{name}"] for name in state_names
-            }
+            gate_tensors = {name: tensors[f"gate_up.{expert}.{name}"] for name in state_names}
             down_tensors = {name: tensors[f"down.{expert}.{name}"] for name in state_names}
             q4_gate.append(
                 _restore_runtime(
@@ -286,9 +281,7 @@ def _load_q4_layers(
         encoder_layers[layer].experts = q4_experts
         decoder_layers[layer].experts = q4_experts
         q4_layers.append(q4_experts)
-        loaded_bytes += sum(
-            tensor.numel() * tensor.element_size() for tensor in tensors.values()
-        )
+        loaded_bytes += sum(tensor.numel() * tensor.element_size() for tensor in tensors.values())
         del tensors, gate_tensors, down_tensors, q4_gate, q4_down
         gc.collect()
 
@@ -296,16 +289,8 @@ def _load_q4_layers(
 
 
 def _remaining_meta(model: DiffusionGemmaForBlockDiffusion) -> list[str]:
-    names = [
-        name
-        for name, parameter in model.named_parameters(remove_duplicate=False)
-        if parameter.is_meta
-    ]
-    names.extend(
-        name
-        for name, buffer in model.named_buffers(remove_duplicate=False)
-        if buffer.is_meta
-    )
+    names = [name for name, parameter in model.named_parameters(remove_duplicate=False) if parameter.is_meta]
+    names.extend(name for name, buffer in model.named_buffers(remove_duplicate=False) if buffer.is_meta)
     return sorted(set(names))
 
 

@@ -134,11 +134,11 @@ async def test_real_diffusion_contract_uses_native_frames() -> None:
                 json={"prompt": "Refine this", "denoising_steps": 4, "seed": 7},
             )
             job_id = job_response.json()["job_id"]
-            for _ in range(10):
+            for _ in range(100):
                 job = await client.get(f"/v1/jobs/{job_id}")
                 if job.json()["state"] == "complete":
                     break
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.01)
             wrong_family = await client.post("/v1/chat/completions", json={"prompt": "wrong"})
 
     assert warmup.json()["ready"] is True

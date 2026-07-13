@@ -2,7 +2,7 @@
   "id": "diffusiongemma-q4-rocm",
   "model_id": "google/diffusiongemma-26B-A4B-it",
   "revision": "52de6b914ee1749a7d4933202505ddf5b414ec43",
-  "alias": "text-diffusion-q4",
+  "alias": "text-diffusion",
   "generation_family": "text-diffusion",
   "preferred_runtime": "text-diffusion-gptq-rocm",
   "lifecycle": "exclusive",

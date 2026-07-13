@@ -42,5 +42,19 @@ if ($ControlPlaneOnly) {
 
     & "$Runtime/bin/python" -c "import PIL, torch, torchvision, transformers; from transformers import DiffusionGemmaForBlockDiffusion; from transformers.models.gemma4.processing_gemma4 import Gemma4Processor; print('torch', torch.__version__); print('hip', torch.version.hip); print('torchvision', torchvision.__version__); print('transformers', transformers.__version__); print('pillow', PIL.__version__); print('diffusiongemma_import', 'ok'); print('cuda_available', torch.cuda.is_available()); print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not visible in this session')"
     if ($LASTEXITCODE -ne 0) { throw 'The ROCm runtime import probe failed.' }
-    Write-Host 'ModelDeck control-plane and ROCm environments are ready.'
+
+    $Q4Runtime = '.venv-rocm72-q4'
+    if (-not (Test-Path "$Q4Runtime/bin/python")) {
+        & $Python -m venv $Q4Runtime
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated ROCm 7.2 Q4 environment.' }
+    }
+    & "$Q4Runtime/bin/python" -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw 'Could not update pip in the Q4 ROCm environment.' }
+    & "$Q4Runtime/bin/python" -m pip install -r requirements-rocm72-q4-gptqmodel.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned Q4 ROCm runtime.' }
+    & "$Q4Runtime/bin/python" -m pip install --no-deps -e .
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install the ModelDeck worker into the Q4 ROCm environment.' }
+    & "$Q4Runtime/bin/python" -c "import torch, transformers, triton; from modeldeck.workers.diffusiongemma_q4 import load_diffusiongemma_q4; print('torch', torch.__version__); print('hip', torch.version.hip); print('transformers', transformers.__version__); print('triton', triton.__version__); print('diffusiongemma_q4_import', 'ok'); print('cuda_available', torch.cuda.is_available()); print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not visible in this session')"
+    if ($LASTEXITCODE -ne 0) { throw 'The Q4 ROCm runtime import probe failed.' }
+    Write-Host 'ModelDeck control-plane, primary ROCm, and Q4 ROCm environments are ready.'
 }
