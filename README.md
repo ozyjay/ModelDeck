@@ -109,6 +109,9 @@ release in place:
 ```
 
 Packaging adds a Hugging Face-compatible model card, Apache-2.0 licence, provenance,
-canonical evaluation report, release manifest, and SHA-256 checksums beside the existing
-30 shards without duplicating them or uploading anything. See the
+publication-safe evaluation report, release manifest, and SHA-256 checksums beside the
+existing 30 shards without duplicating them or uploading anything. The quantized
+artifact belongs in a separate Hugging Face model repository: it is associated with
+ModelDeck through a pinned loader commit, but its 12+ GiB payload and artifact tags do
+not belong in the ModelDeck Git repository. See the
 [DiffusionGemma Q4 release process](docs/DIFFUSIONGEMMA_Q4_RELEASE.md).
