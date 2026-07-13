@@ -143,8 +143,13 @@ def main() -> None:
         local_files_only=True,
         trust_remote_code=False,
     )
-    with init_empty_weights(include_buffers=False):
-        direct_model = DiffusionGemmaForBlockDiffusion(config)
+    original_default_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
+    try:
+        with init_empty_weights(include_buffers=False):
+            direct_model = DiffusionGemmaForBlockDiffusion(config)
+    finally:
+        torch.set_default_dtype(original_default_dtype)
     direct_model.eval()
     direct_tensors, direct_bytes = load_base_non_experts(
         model=direct_model,
