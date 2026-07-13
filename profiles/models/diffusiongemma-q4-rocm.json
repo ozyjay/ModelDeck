@@ -1,0 +1,34 @@
+{
+  "id": "diffusiongemma-q4-rocm",
+  "model_id": "google/diffusiongemma-26B-A4B-it",
+  "revision": "52de6b914ee1749a7d4933202505ddf5b414ec43",
+  "alias": "text-diffusion-q4",
+  "generation_family": "text-diffusion",
+  "preferred_runtime": "text-diffusion-gptq-rocm",
+  "lifecycle": "exclusive",
+  "port": 8622,
+  "local_files_only": true,
+  "trust_remote_code": false,
+  "dtype": "bfloat16",
+  "capabilities": {
+    "chat": false,
+    "completions": false,
+    "streaming": true,
+    "cancellation": true,
+    "logits": "model-specific",
+    "top_k_trace": false,
+    "hidden_states": false,
+    "iterative_refinement": true,
+    "intermediate_frames": true,
+    "seeded_generation": true
+  },
+  "settings": {
+    "maximum_new_tokens": 256,
+    "maximum_denoising_steps": 48,
+    "startup_timeout_seconds": 600,
+    "warmup_timeout_seconds": 300,
+    "hsa_preload_evidence": false,
+    "cache_root": "/mnt/work/models/huggingface/hub",
+    "q4_checkpoint_dir": "var/diffusiongemma-26b-a4b-it-gptq-q4-g32"
+  }
+}
