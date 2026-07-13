@@ -34,6 +34,40 @@ def test_q4_evaluation_constraint_checks_are_accent_insensitive() -> None:
     assert result["required_group_results"] == [True, True]
 
 
+def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
+    evaluator = load_evaluator()
+    spec = next(item for item in evaluator.DEFAULT_PROMPTS if item.id == "creative-scene")
+
+    result = evaluator.evaluate_constraints(
+        spec,
+        (
+            "The robot stepped outside as a sudden downpour drummed on its metal shell, "
+            "turning every reflected streetlight into a trembling constellation."
+        ),
+    )
+
+    assert result["passed"] is True
+    assert result["required_group_results"] == [True, True]
+
+
+def test_q4_evaluation_arithmetic_prompt_requests_answer_first() -> None:
+    evaluator = load_evaluator()
+    spec = next(
+        item for item in evaluator.DEFAULT_PROMPTS if item.id == "arithmetic-reasoning"
+    )
+
+    assert "numerical average speed first" in spec.prompt
+    result = evaluator.evaluate_constraints(
+        spec,
+        (
+            "72 kilometres per hour. Divide the 180-kilometre distance by the "
+            "2.5-hour travel time to calculate the train's average speed."
+        ),
+    )
+
+    assert result["passed"] is True
+
+
 def test_q4_evaluation_phase_summary_tracks_contracts_and_memory_range() -> None:
     evaluator = load_evaluator()
     results = [
