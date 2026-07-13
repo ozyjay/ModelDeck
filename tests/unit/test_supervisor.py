@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import sys
 
 import pytest
@@ -10,6 +11,12 @@ from modeldeck.supervisor.service import (
     build_worker_launch,
     redact_log,
 )
+
+
+def free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def test_worker_command_is_an_argument_array_with_allowlisted_values() -> None:
@@ -78,6 +85,30 @@ def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, t
     )
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_starting_exclusive_worker_stops_existing_exclusive_worker() -> None:
+    base = next(
+        profile for profile in default_model_profiles() if profile.id == "mock-diffusion"
+    )
+    first_port = free_port()
+    second_port = free_port()
+    while second_port == first_port:
+        second_port = free_port()
+    first = base.model_copy(update={"id": "mock-diffusion-one", "port": first_port})
+    second = base.model_copy(update={"id": "mock-diffusion-two", "port": second_port})
+    supervisor = WorkerSupervisor([first, second], startup_timeout=8, stop_timeout=2)
+
+    try:
+        await supervisor.start(first.id)
+        await supervisor.start(second.id)
+
+        assert supervisor.get_worker(first.id)["state"] == "stopped"
+        assert supervisor.get_worker(first.id)["pid"] is None
+        assert supervisor.get_worker(second.id)["state"] == "ready"
+    finally:
+        await supervisor.stop_all()
 
 
 def test_log_redaction_removes_prompt_and_credentials() -> None:
