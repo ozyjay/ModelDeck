@@ -10,7 +10,11 @@ import pytest
 
 
 def load_packager() -> ModuleType:
-    path = Path(__file__).with_name("package_diffusiongemma_q4_release.py")
+    path = (
+        Path(__file__).parents[2]
+        / "scripts"
+        / "package_diffusiongemma_q4_release.py"
+    )
     spec = importlib.util.spec_from_file_location("modeldeck_q4_packager", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
