@@ -99,3 +99,16 @@ all worker contracts and stability requests to pass, exact same-seed Q4 replay, 
 kernels, peak Q4 allocation below 24 GiB, allocation range below 1 GiB, median Q4 latency
 below three times BF16, mean token edit similarity of at least 0.35, and no material
 instruction-constraint regression relative to BF16.
+
+After the canonical gate passes, package and cryptographically verify the expert-delta
+release in place:
+
+```powershell
+./scripts/package_diffusiongemma_q4_release.ps1
+./scripts/package_diffusiongemma_q4_release.ps1 -VerifyOnly
+```
+
+Packaging adds a Hugging Face-compatible model card, Apache-2.0 licence, provenance,
+canonical evaluation report, release manifest, and SHA-256 checksums beside the existing
+30 shards without duplicating them or uploading anything. See the
+[DiffusionGemma Q4 release process](docs/DIFFUSIONGEMMA_Q4_RELEASE.md).
