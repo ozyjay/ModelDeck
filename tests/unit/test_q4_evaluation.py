@@ -51,6 +51,18 @@ def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
     assert result["passed"] is True
     assert result["required_group_results"] == [True, True]
 
+    petrichor_result = evaluator.evaluate_constraints(
+        spec,
+        (
+            "The robot watched one drop strike its shoulder, then another bead of water "
+            "gather on its palm. Its sensors identified petrichor as the grey sky opened, "
+            "and it stood outside studying the cool cascade instead of seeking shelter."
+        ),
+    )
+
+    assert petrichor_result["passed"] is True
+    assert petrichor_result["required_group_results"] == [True, True]
+
 
 def test_q4_evaluation_arithmetic_prompt_requests_answer_first() -> None:
     evaluator = load_evaluator()
