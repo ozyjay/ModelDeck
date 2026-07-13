@@ -188,7 +188,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "vllm_version": None,
             "model_id": model_payload.get("model_id", worker["model_id"]),
             "model_revision": model_payload.get("revision"),
-            "quantisation": "none",
+            "quantisation": model_payload.get("quantization", "none"),
             "dtype": model_payload.get("dtype"),
             "runtime": worker["runtime"],
             "environment_overrides": {
