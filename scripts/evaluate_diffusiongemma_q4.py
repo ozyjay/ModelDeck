@@ -62,7 +62,7 @@ DEFAULT_PROMPTS = (
         id="arithmetic-reasoning",
         prompt=(
             "A train travels 180 kilometres in 2.5 hours. "
-            "Explain how to find its average speed."
+            "State the numerical average speed first, then explain the calculation briefly."
         ),
         required_groups=(("72",),),
         minimum_words=20,
@@ -70,7 +70,10 @@ DEFAULT_PROMPTS = (
     PromptSpec(
         id="creative-scene",
         prompt="Write a brief imaginative scene about a robot discovering rain for the first time.",
-        required_groups=(("robot",), ("rain",)),
+        required_groups=(
+            ("robot",),
+            ("rain", "raindrop", "downpour", "deluge"),
+        ),
         minimum_words=35,
     ),
     PromptSpec(
