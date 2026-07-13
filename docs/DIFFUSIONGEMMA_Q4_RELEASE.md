@@ -39,7 +39,9 @@ the existing expert shards:
 - `SHA256SUMS` — independent checksums for every payload plus the release manifest;
 - `README.md` — Hugging Face-compatible model card containing the measured release
   evidence;
-- `q4-quality-evaluation.json` — immutable copy of the canonical evaluation report;
+- `q4-quality-evaluation.json` — publication-safe copy of the canonical evaluation
+  report, retaining prompts, outputs, versions, measurements, and gates while removing
+  local endpoints, paths, process IDs, and request/job IDs;
 - `LICENSE` — Apache License 2.0, matching the upstream DiffusionGemma licence;
 - `THIRD_PARTY_NOTICES.md` — base-model provenance and modification notice.
 
@@ -69,13 +71,54 @@ base model's BF16 non-expert weights. Users must obtain
 
 The upstream model page identifies DiffusionGemma as Apache-2.0. The generated bundle
 includes that licence and a prominent notice that the expert weights were modified by
-GPTQ quantization. Review the generated model card and notices before publication.
+GPTQ quantization. The pinned upstream snapshot has no separate `NOTICE` file. Re-check
+this requirement before packaging any future base revision.
 
-## Release tag
+## Hugging Face publication boundary
 
-Create a repository tag only after `-VerifyOnly` succeeds against the final bundle and
-the generated `modeldeck_source_commit` matches the intended commit. A suitable first
-tag is `diffusiongemma-q4-g32-v1`.
+Publish the model bundle in its own Hugging Face model repository. Do not commit the
+12+ GiB weight payload to ModelDeck and do not create a model-version tag in the
+ModelDeck Git repository. The software, quantized artifact, and upstream base revision
+have independent version identities.
 
-Publishing the large model bundle to Hugging Face or another registry is a separate,
-explicit action; this packaging command performs no network upload.
+The recommended first repository is
+`ozyjay/diffusiongemma-26b-a4b-it-modeldeck-gptq-q4-g32`. Keeping `modeldeck` in the
+name makes the custom-loader dependency explicit. The generated model card intentionally
+does not declare `library_name: transformers`: this expert delta is not directly
+loadable with `transformers.AutoModel` or a generic GPTQ loader.
+
+Create the repository privately, upload only the verified checkpoint directory, and
+verify a clean download before making it public:
+
+```powershell
+hf auth whoami
+$RepoId = 'ozyjay/diffusiongemma-26b-a4b-it-modeldeck-gptq-q4-g32'
+hf repos create $RepoId --type model --private
+
+$Checkpoint = 'var/diffusiongemma-26b-a4b-it-gptq-q4-g32'
+$Env:HF_XET_HIGH_PERFORMANCE = '1'
+hf upload $RepoId $Checkpoint . `
+    --commit-message 'Publish expert-only GPTQ Q4 g32 v1.0.0'
+
+$Verification = 'var/verification/diffusiongemma-q4-v1.0.0'
+hf download $RepoId --revision main --local-dir $Verification
+./scripts/package_diffusiongemma_q4_release.ps1 `
+    -CheckpointDir $Verification `
+    -VerifyOnly
+```
+
+Run the ModelDeck smoke test against the downloaded directory. After it succeeds, create
+the artifact tag on Hugging Face and then make the repository public from its settings:
+
+```powershell
+hf repos tag create $RepoId v1.0.0 --revision main `
+    --message 'Initial verified ModelDeck expert-only GPTQ Q4 g32 release'
+```
+
+The checkpoint directory contains 37 upload files: 30 expert shards, the Q4 manifest,
+five generated release documents/evidence files, and `SHA256SUMS`. The verifier reports
+35 payload files because `release-manifest.json` and `SHA256SUMS` describe and verify the
+payload rather than being counted as payload entries themselves.
+
+Publishing remains a separate, explicit action; the packaging command performs no
+network upload or repository creation.
