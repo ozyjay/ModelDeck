@@ -351,10 +351,35 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_new_tokens", 128)),
         ]
         return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime == "text-diffusion-transformers-rocm":
-        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+    if profile.preferred_runtime in {
+        "text-diffusion-transformers-rocm",
+        "text-diffusion-gptq-rocm",
+    }:
+        is_q4 = profile.preferred_runtime == "text-diffusion-gptq-rocm"
+        if is_q4:
+            configured_python = os.environ.get("MODELDECK_ROCM72_Q4_PYTHON")
+            default_q4_python = Path(".venv-rocm72-q4/bin/python")
+            if configured_python:
+                python = Path(configured_python).expanduser()
+            elif default_q4_python.is_file():
+                python = default_q4_python
+            else:
+                python = Path(
+                    os.environ.get("MODELDECK_ROCM72_PYTHON", default_q4_python)
+                ).expanduser()
+        else:
+            python = Path(
+                os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")
+            ).expanduser()
         if not python.is_file():
-            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
+            if is_q4:
+                raise ValueError(
+                    "Q4 ROCm runtime is missing; create .venv-rocm72-q4 and install "
+                    "requirements-rocm72-q4-gptqmodel.txt"
+                )
+            raise ValueError(
+                "ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1"
+            )
         environment.pop("LD_PRELOAD", None)
         environment["HF_HUB_CACHE"] = str(profile.settings["cache_root"])
         if profile.settings.get("hsa_preload_evidence"):
@@ -374,6 +399,15 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             "--maximum-denoising-steps",
             str(profile.settings.get("maximum_denoising_steps", 48)),
         ]
+        if is_q4:
+            command.extend(
+                [
+                    "--cache-root",
+                    str(profile.settings["cache_root"]),
+                    "--q4-checkpoint-dir",
+                    str(profile.settings["q4_checkpoint_dir"]),
+                ]
+            )
         return WorkerLaunch(command=command, environment=environment)
     raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
 
