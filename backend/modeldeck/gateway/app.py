@@ -23,6 +23,7 @@ def create_gateway_app(
         "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "text-diffusion": [defaults["diffusiongemma-rocm"], defaults["mock-diffusion"]],
+        "text-diffusion-q4": [defaults["diffusiongemma-q4-rocm"]],
     }
     profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
     job_routes: dict[str, ModelProfile] = {}
@@ -223,8 +224,14 @@ async def resolve_job_provider(
 ) -> ModelProfile | None:
     if provider := job_routes.get(job_id):
         return provider
+    candidates = {
+        profile.id: profile
+        for route_candidates in routes.values()
+        for profile in route_candidates
+        if profile.generation_family.value == "text-diffusion"
+    }
     async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as client:
-        for candidate in routes.get("text-diffusion", []):
+        for candidate in candidates.values():
             try:
                 response = await client.get(f"{endpoint(candidate)}/v1/jobs/{job_id}")
             except httpx.HTTPError:
