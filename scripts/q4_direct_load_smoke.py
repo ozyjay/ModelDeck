@@ -224,9 +224,15 @@ def load_base_non_experts(
     device: torch.device,
 ) -> tuple[int, int]:
     weight_map = base_weight_map(snapshot)
+    buffer_names = {
+        name for name, _ in model.named_buffers(remove_duplicate=False)
+    }
     by_shard: dict[str, list[str]] = defaultdict(list)
     for name, shard in weight_map.items():
-        if not is_expert_weight(name) and not is_encoder_mirror(name):
+        skip_tied_encoder_parameter = (
+            is_encoder_mirror(name) and name not in buffer_names
+        )
+        if not is_expert_weight(name) and not skip_tied_encoder_parameter:
             by_shard[shard].append(name)
 
     loaded_tensors = 0
@@ -357,8 +363,13 @@ def main() -> None:
         local_files_only=True,
         trust_remote_code=False,
     )
-    with init_empty_weights(include_buffers=False):
-        model = DiffusionGemmaForBlockDiffusion(config)
+    original_default_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
+    try:
+        with init_empty_weights(include_buffers=False):
+            model = DiffusionGemmaForBlockDiffusion(config)
+    finally:
+        torch.set_default_dtype(original_default_dtype)
     model.eval()
     generation_config_path = snapshot / "generation_config.json"
     if generation_config_path.is_file():
