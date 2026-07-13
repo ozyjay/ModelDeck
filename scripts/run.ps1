@@ -16,4 +16,4 @@ Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
 Write-Host 'Management: http://127.0.0.1:3600'
 Write-Host 'Gateway:    http://127.0.0.1:8600/v1/health'
-Write-Host 'Workers:    mocks 8610/8611, Qwen ROCm 8620, DiffusionGemma ROCm 8621 (stopped until requested)'
+Write-Host 'Workers:    mocks 8610/8611, Qwen ROCm 8620, DiffusionGemma BF16 8621, Q4 8622 (stopped)'
