@@ -3,7 +3,7 @@
 ## Boundaries
 
 ```text
-Dashboard/API :3600 ---- WorkerSupervisor ---- one allowlisted process per model :8610+
+Operator console/API :3600 ---- WorkerSupervisor ---- one allowlisted process per model :8610+
        |                                      |-- autoregressive contract
        |                                      `-- text-diffusion contract
        `---- read-only cache + hardware + SQLite evidence
@@ -14,7 +14,7 @@ Demo clients ---- Stable gateway :8600 ---- capability alias ---- ready local wo
 
 ## Runtime environments
 
-`.venv` is ModelDeck's control-plane runtime: API, dashboard, supervisor, gateway,
+`.venv` is ModelDeck's control-plane runtime: API, operator-console assets, supervisor, gateway,
 catalogue, evidence store, fallbacks, and tests. `.venv-rocm72` is the primary target
 inference runtime used by the core Qwen and DiffusionGemma worker processes. Both belong
 to the target installation, but they remain separate so GPU dependencies and tensors

@@ -1,7 +1,9 @@
 # Test plan
 
-Normal verification is `pwsh -NoProfile -File scripts/verify.ps1`. It requires no GPU, network, model download,
-container runtime, or cached model.
+Normal verification is `pwsh -NoProfile -File scripts/verify.ps1`. It requires no GPU,
+network, model download, container runtime, or cached model. It runs frontend TypeScript
+checking and Vitest tests, proves the committed production bundle matches `frontend/`,
+then runs Ruff and the GPU-free pytest suite.
 
 The end-to-end mock gateway smoke is
 `pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local

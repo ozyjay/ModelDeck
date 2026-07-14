@@ -32,6 +32,10 @@ async def test_start_health_restart_and_stop_without_process_leak() -> None:
         async with httpx.AsyncClient() as client:
             health = (await client.get(f"{started['endpoint']}/health")).json()
             assert health["generation_family"] == "autoregressive"
+        assert any(
+            "Starting allowlisted ModelDeck mock worker" in item["message"]
+            for item in supervisor.logs("integration-ar")
+        )
 
         restarted = await supervisor.restart("integration-ar")
         assert restarted["state"] == WorkerState.READY

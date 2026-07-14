@@ -24,6 +24,12 @@ if (-not (Test-Path '.venv')) {
 if ($LASTEXITCODE -ne 0) { throw 'Could not update pip in the project virtual environment.' }
 & .venv/bin/python -m pip install -e '.[dev]'
 if ($LASTEXITCODE -ne 0) { throw 'Could not install ModelDeck in the project virtual environment.' }
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    throw 'Node.js and npm are required to build the ModelDeck operator console.'
+}
+& npm --prefix frontend ci
+if ($LASTEXITCODE -ne 0) { throw 'Could not install pinned operator console build dependencies.' }
+& (Join-Path $PSScriptRoot 'build_frontend.ps1')
 
 if ($ControlPlaneOnly) {
     Write-Host 'ModelDeck control-plane environment is ready.'

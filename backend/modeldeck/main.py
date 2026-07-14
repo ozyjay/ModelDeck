@@ -4,20 +4,28 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from modeldeck.api.dashboard import DASHBOARD_HTML
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.hardware import probe_environment
 from modeldeck.profiles import default_model_profiles
 from modeldeck.supervisor import WorkerSupervisor
+
+FRONTEND_ROOT = Path(__file__).parent / "api/static"
+FRONTEND_FALLBACK = """<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ModelDeck</title></head>
+<body><main><h1>ModelDeck operator console is not built</h1>
+<p>Run <code>pwsh -NoProfile -File scripts/build_frontend.ps1</code> and restart ModelDeck.</p>
+</main></body></html>"""
 
 
 class LifecycleEvidence(BaseModel):
@@ -54,10 +62,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = configured
     app.state.supervisor = WorkerSupervisor(profiles, log_dir=configured.log_dir)
     app.state.profiles = profiles
+    assets = FRONTEND_ROOT / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
+
+    @app.middleware("http")
+    async def browser_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if not request.url.path.startswith(("/api", "/docs", "/redoc", "/openapi.json")):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "connect-src 'self'; img-src 'self' data:; font-src 'self'; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+            )
+        return response
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def dashboard() -> str:
-        return DASHBOARD_HTML
+    async def dashboard():
+        return _frontend_index()
 
     @app.get("/api/health")
     async def health(request: Request):
@@ -69,6 +93,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "downloads_allowed": settings.allow_downloads,
             "gateway_url": f"http://{settings.host}:{settings.gateway_port}",
         }
+
+    @app.get("/api/gateway/status")
+    async def gateway_status(request: Request):
+        return await _gateway_status(request.app.state.settings)
 
     @app.get("/api/hardware")
     async def hardware():
@@ -278,7 +306,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await request.app.state.supervisor.stop_all()
         return {"ok": True}
 
+    @app.get("/{client_path:path}", include_in_schema=False)
+    async def frontend_route(client_path: str):
+        if client_path == "api" or client_path.startswith("api/"):
+            raise HTTPException(404, "Unknown management API route")
+        return _frontend_index()
+
     return app
+
+
+def _frontend_index() -> FileResponse | HTMLResponse:
+    index = FRONTEND_ROOT / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    return HTMLResponse(FRONTEND_FALLBACK, status_code=503)
+
+
+async def _gateway_status(settings: Settings) -> dict:
+    base_url = f"http://{settings.host}:{settings.gateway_port}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(1.5, connect=0.4)) as client:
+            health_response, models_response, providers_response = await asyncio.gather(
+                client.get(f"{base_url}/v1/health"),
+                client.get(f"{base_url}/v1/models"),
+                client.get(f"{base_url}/v1/providers"),
+            )
+            for response in (health_response, models_response, providers_response):
+                response.raise_for_status()
+        return {
+            "available": True,
+            "health": health_response.json(),
+            "models": models_response.json(),
+            "providers": providers_response.json(),
+            "error": None,
+        }
+    except (httpx.HTTPError, ValueError):
+        return {
+            "available": False,
+            "health": None,
+            "models": None,
+            "providers": None,
+            "error": "The local ModelDeck gateway is unavailable.",
+        }
 
 
 def _worker_call(request: Request, method: str, worker_id: str):

@@ -30,7 +30,7 @@ All three are part of the target installation. Keeping model libraries outside t
 plane preserves dependency isolation and makes worker process exit the memory-recovery
 boundary.
 
-- Management dashboard: <http://127.0.0.1:3600>
+- Operator console: <http://127.0.0.1:3600>
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
@@ -48,6 +48,13 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/qwen-small
 The installed Qwen workers are `qwen-small-rocm` for 0.5B, `qwen-1-5b-rocm` for 1.5B,
 and `qwen-3b-rocm` for 3B. They use fixed ports 8620, 8623, and 8624 respectively and
 remain stopped until explicitly selected.
+
+The operator console is a committed React and TypeScript production bundle served by
+FastAPI. Node.js is required only by setup, verification, and frontend development; the
+running management service serves local static assets and does not start a Node process.
+After changing `frontend/`, rebuild with
+`pwsh -NoProfile -File scripts/build_frontend.ps1`. Verification rejects a stale
+committed bundle.
 
 Mock and replay workers remain explicit fallback/test choices. Stop all ModelDeck workers
 and services with `pwsh -NoProfile -File scripts/stop.ps1`. See

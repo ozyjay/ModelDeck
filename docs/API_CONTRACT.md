@@ -4,8 +4,14 @@
 
 Implemented: health, hardware, telemetry, catalogue, profiles, workers, worker
 start/stop/restart/warmup/smoke/logs, SSE events and log streams, compatibility reads,
-preset listing, and stop-all. Profile mutation and compatibility test execution remain
-later phases so the first slice cannot accept unsafe runtime configuration.
+preset listing, stop-all, and same-origin gateway status. `GET /api/gateway/status`
+returns gateway health, advertised models, and providers, or a structured `available:
+false` response when the separate gateway process cannot be reached. Profile mutation
+remains outside the operator console so it cannot accept unsafe runtime configuration.
+
+FastAPI also serves the committed operator-console assets and returns the SPA entry point
+for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
+through to the frontend.
 
 ## Gateway (`127.0.0.1:8600`)
 

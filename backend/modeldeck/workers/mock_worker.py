@@ -295,6 +295,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    print(
+        f"Starting allowlisted ModelDeck mock worker {args.worker_id} on loopback port {args.port}.",
+        flush=True,
+    )
     app = create_app(
         worker_id=args.worker_id,
         model_id=args.model_id,

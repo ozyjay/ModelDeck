@@ -3,9 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import modeldeck.main as main_module
 import pytest
 from modeldeck.config import Settings
 from modeldeck.main import create_app
+
+
+def test_management_defaults_to_loopback_only(monkeypatch) -> None:
+    monkeypatch.delenv("MODELDECK_HOST", raising=False)
+
+    assert Settings.from_env().host == "127.0.0.1"
 
 
 @pytest.mark.asyncio
@@ -37,3 +44,83 @@ async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) ->
         ) as client:
             response = await client.post("/api/workers/echo-danger/start")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_gateway_status_is_same_origin_and_structured(monkeypatch, tmp_path: Path) -> None:
+    original_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads = {
+            "/v1/health": {"status": "ok", "ready_providers": 1},
+            "/v1/models": {"data": [{"id": "fast-chat", "ready": True}]},
+            "/v1/providers": {"providers": [{"id": "qwen-small-rocm", "ready": True}]},
+        }
+        return httpx.Response(200, json=payloads[request.url.path])
+
+    monkeypatch.setattr(
+        main_module.httpx,
+        "AsyncClient",
+        lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)),
+    )
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with original_client(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/gateway/status")
+
+    assert response.status_code == 200
+    assert response.json()["available"] is True
+    assert response.json()["health"]["ready_providers"] == 1
+    assert response.json()["providers"]["providers"][0]["id"] == "qwen-small-rocm"
+
+
+@pytest.mark.asyncio
+async def test_gateway_status_reports_local_unavailable_without_exception(monkeypatch) -> None:
+    original_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "unavailable"}, request=request)
+
+    monkeypatch.setattr(
+        main_module.httpx,
+        "AsyncClient",
+        lambda **_kwargs: original_client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = await main_module._gateway_status(Settings())
+
+    assert result == {
+        "available": False,
+        "health": None,
+        "models": None,
+        "providers": None,
+        "error": "The local ModelDeck gateway is unavailable.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_operator_console_assets_and_spa_routes_are_served(monkeypatch, tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    assets = static / "assets"
+    assets.mkdir(parents=True)
+    (static / "index.html").write_text("<!doctype html><title>Operator console</title>", encoding="utf-8")
+    (assets / "app.js").write_text("export {};", encoding="utf-8")
+    monkeypatch.setattr(main_module, "FRONTEND_ROOT", static)
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            root = await client.get("/")
+            workers = await client.get("/workers")
+            asset = await client.get("/assets/app.js")
+            missing_api = await client.get("/api/not-real")
+
+    assert root.status_code == 200
+    assert workers.status_code == 200
+    assert "Operator console" in workers.text
+    assert asset.text == "export {};"
+    assert "default-src 'self'" in root.headers["content-security-policy"]
+    assert "default-src 'self'" in workers.headers["content-security-policy"]
+    assert missing_api.status_code == 404

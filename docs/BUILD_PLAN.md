@@ -9,7 +9,7 @@ versus target 7.2.x mismatch, existing competition for port 8600, mature acquisi
 HuggingFacePull, a persistent diffusion NDJSON worker, and TokenTrail's local-only logits
 trace implementation.
 
-The final boundary is management/dashboard, isolated family-specific workers, stable
+The final boundary is management/operator console, isolated family-specific workers, stable
 gateway, read-only catalogue, evidence registry, and later scheduler. Acquisition remains
 external. AR and diffusion contracts are separate in [worker protocol](WORKER_PROTOCOL.md).
 The `.venv` control plane and `.venv-rocm72` primary inference runtime are both target
@@ -44,15 +44,16 @@ No random fallback port is used outside tests.
 
 ## File tree and frontend choice
 
-The repository follows the proposed `backend/modeldeck`, `profiles`, `fixtures`, `scripts`,
-`tests`, and `docs` boundaries. A dependency-free server-rendered dashboard was selected
-for this small slice because the brief explicitly permits it and it avoids a frontend
-build dependency before runtime lifecycle is proved. A React/Vite split remains an
-optional later refinement if dashboard complexity warrants it.
+The repository follows the proposed `backend/modeldeck`, `frontend`, `profiles`,
+`fixtures`, `scripts`, `tests`, and `docs` boundaries. The initial dependency-free
+dashboard proved the lifecycle slice. It has now been replaced by a React, TypeScript,
+and Vite operator console because the multi-view telemetry, lifecycle, SSE, catalogue,
+compatibility, and log workflows warrant client-side state. The committed bundle is
+served by FastAPI; Node.js remains a build-time dependency only.
 
 ## Phases
 
-1. **Implemented foundation:** evidence docs, project skeleton, read-only dashboard,
+1. **Implemented foundation:** evidence docs, project skeleton, operator console,
    environment/cache/process/telemetry probes, SQLite schema, fixed ports, SSE events.
 2. **Implemented lifecycle proof:** allowlisted subprocess supervisor, state machine,
    serial load lock, health/warmup readiness, logs, graceful/forced stop, mock AR and

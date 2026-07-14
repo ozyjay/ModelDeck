@@ -1,8 +1,12 @@
 # Start here
 
-The implemented system combines a read-only dashboard, cache and hardware probes, SQLite
-evidence, isolated ROCm and fallback workers, lifecycle supervision, and a stable gateway.
+The implemented system combines an operator-first local console, read-only cache and
+hardware probes, SQLite evidence, isolated ROCm and fallback workers, lifecycle
+supervision, and a stable gateway.
 It never downloads models; core ROCm workers load pinned local weights only when started.
+
+The console source lives under `frontend/`; FastAPI serves its committed production
+bundle. Node.js is needed for setup and verification, but not while ModelDeck is running.
 
 1. Read [existing repository findings](EXISTING_REPOSITORY_FINDINGS.md).
 2. Read [architecture](ARCHITECTURE.md) and [worker protocol](WORKER_PROTOCOL.md).

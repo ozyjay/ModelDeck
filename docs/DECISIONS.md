@@ -24,6 +24,7 @@ selector, and cleaner. No shared package is extracted before two real consumers 
 
 The first UI is dependency-free HTML served by FastAPI. This reduces moving parts while
 lifecycle behaviour is proved and remains reversible if React/Vite becomes justified.
+This initial decision is superseded by ADR-009.
 
 ## ADR-006 — Fixed ports and allowlisted launches
 
@@ -42,3 +43,11 @@ primary target inference runtime for core ROCm workers. Both are required for th
 installation, but remain separate to preserve dependency isolation, bounded process
 ownership, and process-exit memory recovery. GPU-free operation is a development and
 recovery mode rather than the primary product configuration.
+
+## ADR-009 — Committed React operator console
+
+Lifecycle, telemetry, compatibility, catalogue, and streaming-log requirements now
+justify a stateful React and TypeScript console. Vite is a build-time tool only. FastAPI
+serves the committed production bundle with same-origin API access, SPA fallback, local
+assets, and a restrictive content security policy, so packaged and Open Day operation
+does not require Node.js.
