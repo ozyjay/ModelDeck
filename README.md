@@ -45,6 +45,10 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/qwen-small
     -TimeoutSec 360
 ```
 
+The installed Qwen workers are `qwen-small-rocm` for 0.5B, `qwen-1-5b-rocm` for 1.5B,
+and `qwen-3b-rocm` for 3B. They use fixed ports 8620, 8623, and 8624 respectively and
+remain stopped until explicitly selected.
+
 Mock and replay workers remain explicit fallback/test choices. Stop all ModelDeck workers
 and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
@@ -66,10 +70,11 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen, BF16 DiffusionGemma baseline, and expert-only Q4 DiffusionGemma paths are
-compatibility-tested on the target Framework Desktop. They use the complete pinned local
-snapshot at `/mnt/work/models/huggingface/hub`; none of the smoke tests download model
-files.
+The Qwen 0.5B, BF16 DiffusionGemma baseline, and expert-only Q4 DiffusionGemma paths are
+compatibility-tested on the target Framework Desktop. The Qwen 1.5B and 3B workers are
+registered against complete pinned local snapshots but require their own physical ROCm
+acceptance evidence. All workers use `/mnt/work/models/huggingface/hub`; none of the smoke
+tests download model files.
 
 ## DiffusionGemma GPTQ Q4 variant
 

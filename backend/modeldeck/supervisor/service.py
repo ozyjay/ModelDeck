@@ -358,6 +358,8 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
         python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
         if not python.is_file():
             raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
+        if cache_root := profile.settings.get("cache_root"):
+            environment["HF_HUB_CACHE"] = str(cache_root)
         command = [
             str(python.absolute()),
             "-m",

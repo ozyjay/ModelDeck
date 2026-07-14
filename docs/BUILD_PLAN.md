@@ -36,6 +36,8 @@ queries. Migrations will be versioned before user-editable persistence begins.
 | Core Qwen ROCm worker | 8620 | Isolated autoregressive runtime |
 | DiffusionGemma BF16 baseline worker | 8621 | Isolated, exclusive compatibility and evaluation runtime |
 | Core DiffusionGemma Q4 ROCm worker | 8622 | Default isolated, exclusive text-diffusion runtime |
+| Qwen 2.5 1.5B ROCm worker | 8623 | Isolated autoregressive runtime, pinned local snapshot |
+| Qwen 2.5 3B ROCm worker | 8624 | Isolated autoregressive runtime, pinned local snapshot |
 | External vLLM | 8000 | Existing SceneChat/TextDiffusion convention; unmanaged initially |
 
 No random fallback port is used outside tests.

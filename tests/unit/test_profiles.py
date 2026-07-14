@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from modeldeck.profiles import ModelProfile, default_model_profiles
 from pydantic import ValidationError
@@ -32,6 +34,48 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert diffusion_q4.port == 8622
     assert diffusion_q4.preferred_runtime == "text-diffusion-gptq-rocm"
     assert diffusion_q4.settings["q4_checkpoint_dir"].endswith("gptq-q4-g32")
+
+
+def test_qwen_workers_are_distinct_pinned_local_profiles() -> None:
+    profiles = {profile.id: profile for profile in default_model_profiles()}
+    expected = {
+        "qwen-small-rocm": (
+            "Qwen/Qwen2.5-0.5B-Instruct",
+            "7ae557604adf67be50417f59c2c2f167def9a775",
+            8620,
+        ),
+        "qwen-1-5b-rocm": (
+            "Qwen/Qwen2.5-1.5B-Instruct",
+            "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+            8623,
+        ),
+        "qwen-3b-rocm": (
+            "Qwen/Qwen2.5-3B-Instruct",
+            "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+            8624,
+        ),
+    }
+
+    for profile_id, (model_id, revision, port) in expected.items():
+        profile = profiles[profile_id]
+        assert profile.model_id == model_id
+        assert profile.revision == revision
+        assert profile.port == port
+        assert profile.preferred_runtime == "transformers-rocm"
+        assert profile.local_files_only is True
+        assert profile.trust_remote_code is False
+        assert profile.settings["cache_root"] == "/mnt/work/models/huggingface/hub"
+
+    assert len({profiles[profile_id].port for profile_id in expected}) == len(expected)
+
+
+def test_qwen_json_manifests_match_the_active_allowlist() -> None:
+    profiles = {profile.id: profile for profile in default_model_profiles()}
+    profile_root = Path(__file__).parents[2] / "profiles/models"
+
+    for filename in ("qwen-small-rocm.json", "qwen-1-5b-rocm.json", "qwen-3b-rocm.json"):
+        document = ModelProfile.model_validate_json((profile_root / filename).read_text())
+        assert document == profiles[document.id]
 
 
 def test_profile_rejects_unallowlisted_runtime() -> None:

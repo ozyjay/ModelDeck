@@ -10,7 +10,7 @@ $WorkerModules = @(
     'modeldeck.workers.autoregressive_worker',
     'modeldeck.workers.text_diffusion_worker'
 )
-$WorkerPorts = @(8610, 8611, 8620, 8621, 8622)
+$WorkerPorts = @(8610, 8611, 8620, 8621, 8622, 8623, 8624)
 $Stopped = @()
 
 foreach ($ProcessDirectory in Get-ChildItem /proc -Directory -ErrorAction SilentlyContinue) {

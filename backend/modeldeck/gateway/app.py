@@ -22,6 +22,9 @@ def create_gateway_app(
     routes = alias_routes or {
         "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
+        "qwen-0-5b": [defaults["qwen-small-rocm"]],
+        "qwen-1-5b": [defaults["qwen-1-5b-rocm"]],
+        "qwen-3b": [defaults["qwen-3b-rocm"]],
         "text-diffusion": [
             defaults["diffusiongemma-q4-rocm"],
             defaults["mock-diffusion"],

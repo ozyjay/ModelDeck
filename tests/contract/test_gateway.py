@@ -34,3 +34,20 @@ async def test_default_text_diffusion_alias_prefers_q4(monkeypatch) -> None:
     assert models["text-diffusion"]["effective_provider"] == "diffusiongemma-q4-rocm"
     assert models["text-diffusion-bf16"]["effective_provider"] == "diffusiongemma-rocm"
     assert models["text-diffusion-q4"]["effective_provider"] == "diffusiongemma-q4-rocm"
+
+
+@pytest.mark.asyncio
+async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch) -> None:
+    async def ready_provider(_client, profile):
+        return {"ready": True}, profile.id.startswith("qwen-")
+
+    monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
+    app = create_gateway_app()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/models")
+
+    models = {model["id"]: model for model in response.json()["data"]}
+    assert models["qwen-0-5b"]["effective_provider"] == "qwen-small-rocm"
+    assert models["qwen-1-5b"]["effective_provider"] == "qwen-1-5b-rocm"
+    assert models["qwen-3b"]["effective_provider"] == "qwen-3b-rocm"

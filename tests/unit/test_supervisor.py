@@ -48,6 +48,29 @@ def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_p
     assert launch.command[0] != str(runtime_python.resolve())
 
 
+@pytest.mark.parametrize("profile_id", ["qwen-small-rocm", "qwen-1-5b-rocm", "qwen-3b-rocm"])
+def test_qwen_launches_are_allowlisted_offline_and_cache_pinned(monkeypatch, tmp_path, profile_id) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == profile_id)
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.autoregressive_worker",
+    ]
+    assert launch.command[launch.command.index("--model-id") + 1] == profile.model_id
+    assert launch.command[launch.command.index("--revision") + 1] == profile.revision
+    assert launch.command[launch.command.index("--port") + 1] == str(profile.port)
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["HF_HUB_CACHE"] == "/mnt/work/models/huggingface/hub"
+
+
 def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-rocm")
     runtime_python = tmp_path / "bin/python"
