@@ -70,6 +70,29 @@ def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
     assert petrichor_result["passed"] is True
     assert petrichor_result["required_group_results"] == [True, True]
 
+    droplet_result = evaluator.evaluate_constraints(
+        spec,
+        (
+            "The robot paused when a droplet struck its metal shoulder. Another landed "
+            "on its palm, then a thousand more turned the street into a silver mosaic. "
+            "It tilted its sensors towards the grey sky and discovered wonder."
+        ),
+    )
+
+    assert droplet_result["passed"] is True
+    assert droplet_result["required_group_results"] == [True, True]
+
+
+def test_q4_evaluation_prompts_align_literal_and_length_constraints() -> None:
+    evaluator = load_evaluator()
+    prompts = {item.id: item.prompt for item in evaluator.DEFAULT_PROMPTS}
+
+    assert "3.14159" in prompts["factual-pi"]
+    assert "no more than four concise sentences" in prompts["science-comparison"]
+    assert "Do not use a table" in prompts["science-comparison"]
+    assert "under 150 words" in prompts["travel-plan"]
+    assert "no more than 120 words" in prompts["creative-scene"]
+
 
 def test_q4_evaluation_arithmetic_prompt_requests_answer_first() -> None:
     evaluator = load_evaluator()

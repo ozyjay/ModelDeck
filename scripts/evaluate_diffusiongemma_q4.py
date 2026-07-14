@@ -11,7 +11,10 @@ from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from statistics import mean, median
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
 
 
 GIB = 1024**3
@@ -42,7 +45,10 @@ DEFAULT_PROMPTS = (
     ),
     PromptSpec(
         id="factual-pi",
-        prompt="Define pi accurately in no more than four concise sentences.",
+        prompt=(
+            "Define pi accurately in no more than four concise sentences. "
+            "Include the decimal approximation 3.14159."
+        ),
         required_groups=(("3.14159",), ("circumference",), ("diameter",)),
         minimum_words=20,
         minimum_sentences=2,
@@ -55,13 +61,19 @@ DEFAULT_PROMPTS = (
     ),
     PromptSpec(
         id="science-comparison",
-        prompt="Compare photosynthesis and cellular respiration for a high-school student.",
+        prompt=(
+            "In no more than four concise sentences, compare photosynthesis and "
+            "cellular respiration for a high-school student. Do not use a table."
+        ),
         required_groups=(("photosynthesis",), ("respiration",)),
         minimum_words=35,
     ),
     PromptSpec(
         id="travel-plan",
-        prompt="Plan a three-day visit to Cairns with indoor and outdoor alternatives.",
+        prompt=(
+            "Plan a three-day visit to Cairns. For each day, state one outdoor activity "
+            "and one indoor alternative. Keep the entire answer under 150 words."
+        ),
         required_groups=(("cairns",), ("day",), ("indoor",), ("outdoor",)),
         minimum_words=35,
     ),
@@ -76,10 +88,22 @@ DEFAULT_PROMPTS = (
     ),
     PromptSpec(
         id="creative-scene",
-        prompt="Write a brief imaginative scene about a robot discovering rain for the first time.",
+        prompt=(
+            "Write an imaginative scene of no more than 120 words about a robot "
+            "discovering rain for the first time."
+        ),
         required_groups=(
             ("robot",),
-            ("rain", "raindrop", "downpour", "deluge", "petrichor", "precipitation"),
+            (
+                "rain",
+                "raindrop",
+                "droplet",
+                "drizzle",
+                "downpour",
+                "deluge",
+                "petrichor",
+                "precipitation",
+            ),
         ),
         minimum_words=35,
     ),
