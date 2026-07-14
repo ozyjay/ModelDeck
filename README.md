@@ -81,8 +81,7 @@ tests download model files.
 The default `text-diffusion` provider directly loads the pinned BF16 non-expert weights
 plus the exported expert-only GPTQ Q4 g32 checkpoint. It does not materialise the BF16
 experts. The original model remains available explicitly as `text-diffusion-bf16` for
-compatibility and release evaluation; `text-diffusion-q4` remains as a compatibility
-alias for clients that adopted the Q4 preview name.
+compatibility and release evaluation.
 
 ```powershell
 ./scripts/start_diffusiongemma_q4.ps1 -Smoke

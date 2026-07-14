@@ -29,7 +29,6 @@ def create_gateway_app(
             defaults["diffusiongemma-q4-rocm"],
             defaults["mock-diffusion"],
         ],
-        "text-diffusion-q4": [defaults["diffusiongemma-q4-rocm"]],
         "text-diffusion-bf16": [defaults["diffusiongemma-rocm"]],
     }
     profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}

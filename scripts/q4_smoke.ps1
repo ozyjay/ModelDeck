@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("text-diffusion", "text-diffusion-q4")]
+    [ValidateSet("text-diffusion")]
     [string]$Model = "text-diffusion"
 )
 

@@ -53,5 +53,5 @@ Invoke-RestMethod http://127.0.0.1:8622/metrics |
     ConvertTo-Json -Depth 12
 
 if ($Smoke) {
-    & (Join-Path $PSScriptRoot 'q4_smoke.ps1') -Model text-diffusion-q4
+    & (Join-Path $PSScriptRoot 'q4_smoke.ps1') -Model text-diffusion
 }

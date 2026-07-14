@@ -33,7 +33,7 @@ async def test_default_text_diffusion_alias_prefers_q4(monkeypatch) -> None:
     models = {model["id"]: model for model in response.json()["data"]}
     assert models["text-diffusion"]["effective_provider"] == "diffusiongemma-q4-rocm"
     assert models["text-diffusion-bf16"]["effective_provider"] == "diffusiongemma-rocm"
-    assert models["text-diffusion-q4"]["effective_provider"] == "diffusiongemma-q4-rocm"
+    assert "text-diffusion-q4" not in models
 
 
 @pytest.mark.asyncio

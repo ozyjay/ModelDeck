@@ -34,10 +34,10 @@ def test_q4_evaluation_constraint_checks_are_accent_insensitive() -> None:
     assert result["required_group_results"] == [True, True]
 
 
-def test_q4_evaluation_uses_explicit_provider_aliases() -> None:
+def test_q4_evaluation_uses_default_q4_and_explicit_bf16_aliases() -> None:
     evaluator = load_evaluator()
 
-    assert evaluator.Q4_ALIAS == "text-diffusion-q4"
+    assert evaluator.Q4_ALIAS == "text-diffusion"
     assert evaluator.BF16_ALIAS == "text-diffusion-bf16"
 
 

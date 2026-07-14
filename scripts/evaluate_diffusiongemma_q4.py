@@ -20,7 +20,7 @@ DEFAULT_REVISION = "52de6b914ee1749a7d4933202505ddf5b414ec43"
 DEFAULT_CACHE_ROOT = "/mnt/work/models/huggingface/hub"
 Q4_WORKER = "diffusiongemma-q4-rocm"
 BF16_WORKER = "diffusiongemma-rocm"
-Q4_ALIAS = "text-diffusion-q4"
+Q4_ALIAS = "text-diffusion"
 BF16_ALIAS = "text-diffusion-bf16"
 
 
