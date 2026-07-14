@@ -82,6 +82,18 @@ def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
     assert droplet_result["passed"] is True
     assert droplet_result["required_group_results"] == [True, True]
 
+    damp_earth_result = evaluator.evaluate_constraints(
+        spec,
+        (
+            "The robot raised a mechanical hand as silver beads drummed against its "
+            "chassis. Cool water swirled over its joints while the scent of damp earth "
+            "filled its intake, and for the first time it stopped calculating the weather."
+        ),
+    )
+
+    assert damp_earth_result["passed"] is True
+    assert damp_earth_result["required_group_results"] == [True, True]
+
 
 def test_q4_evaluation_prompts_align_literal_and_length_constraints() -> None:
     evaluator = load_evaluator()
@@ -135,6 +147,65 @@ def test_q4_evaluation_phase_summary_tracks_contracts_and_memory_range() -> None
     assert summary["quality_pass_rate"] == 0.5
     assert summary["median_wall_seconds"] == 8.0
     assert summary["memory_allocated_range_bytes"] == 1_500
+
+
+def test_q4_evaluation_restores_worker_after_stopping_exclusive_workers(monkeypatch) -> None:
+    evaluator = load_evaluator()
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        evaluator,
+        "stop_worker",
+        lambda _client, _url, worker_id: calls.append(("stop", worker_id)),
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "start_worker",
+        lambda _client, _url, worker_id: calls.append(("start", worker_id)),
+    )
+
+    evaluator.restore_worker(
+        object(),
+        management_url="http://management",
+        leave_worker="q4",
+        retry_seconds=0,
+    )
+
+    assert calls == [
+        ("stop", evaluator.Q4_WORKER),
+        ("stop", evaluator.BF16_WORKER),
+        ("start", evaluator.Q4_WORKER),
+    ]
+
+
+def test_q4_evaluation_retries_worker_restoration(monkeypatch) -> None:
+    evaluator = load_evaluator()
+    attempts = 0
+    stop_calls = 0
+
+    def stop_worker(_client, _url, _worker_id) -> None:
+        nonlocal stop_calls
+        stop_calls += 1
+
+    def start_worker(_client, _url, _worker_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("Port is still in use")
+        return {"state": "ready"}
+
+    monkeypatch.setattr(evaluator, "stop_worker", stop_worker)
+    monkeypatch.setattr(evaluator, "start_worker", start_worker)
+
+    evaluator.restore_worker(
+        object(),
+        management_url="http://management",
+        leave_worker="q4",
+        retry_seconds=0,
+    )
+
+    assert attempts == 3
+    assert stop_calls == 6
 
 
 def test_q4_evaluation_rejects_reasoning_leaks_repetition_and_truncation() -> None:

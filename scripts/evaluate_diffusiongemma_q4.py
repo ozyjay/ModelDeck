@@ -102,6 +102,7 @@ DEFAULT_PROMPTS = (
                 "downpour",
                 "deluge",
                 "petrichor",
+                "damp earth",
                 "precipitation",
             ),
         ),
@@ -468,14 +469,50 @@ def restore_worker(
     *,
     management_url: str,
     leave_worker: str,
+    attempts: int = 3,
+    retry_seconds: float = 1.0,
 ) -> None:
-    if leave_worker == "q4":
-        start_worker(client, management_url, Q4_WORKER)
-    elif leave_worker == "bf16":
-        start_worker(client, management_url, BF16_WORKER)
-    else:
-        stop_worker(client, management_url, Q4_WORKER)
-        stop_worker(client, management_url, BF16_WORKER)
+    if attempts < 1:
+        raise ValueError("Worker restoration attempts must be at least 1")
+
+    target = {"q4": Q4_WORKER, "bf16": BF16_WORKER}.get(leave_worker)
+    stop_worker(client, management_url, Q4_WORKER)
+    stop_worker(client, management_url, BF16_WORKER)
+    if target is None:
+        return
+
+    last_error: RuntimeError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            start_worker(client, management_url, target)
+            return
+        except RuntimeError as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            print(f"  Worker restoration attempt {attempt}/{attempts} failed: {error}. Retrying...")
+            stop_worker(client, management_url, Q4_WORKER)
+            stop_worker(client, management_url, BF16_WORKER)
+            time.sleep(retry_seconds)
+
+    if last_error is not None:
+        raise last_error
+
+
+def restore_worker_best_effort(
+    client: httpx.Client,
+    *,
+    management_url: str,
+    leave_worker: str,
+) -> None:
+    try:
+        restore_worker(
+            client,
+            management_url=management_url,
+            leave_worker=leave_worker,
+        )
+    except RuntimeError as error:
+        print(f"WARNING: Evaluation completed, but the requested worker could not be restored: {error}")
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -711,7 +748,7 @@ def main() -> None:
             json.dumps(report, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        restore_worker(
+        restore_worker_best_effort(
             client,
             management_url=args.management_url,
             leave_worker=args.leave_worker,
