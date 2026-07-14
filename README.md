@@ -77,18 +77,20 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen 0.5B, BF16 DiffusionGemma baseline, and expert-only Q4 DiffusionGemma paths are
+The Qwen 0.5B, BF16 DiffusionGemma baseline, and self-contained Q4 DiffusionGemma paths are
 compatibility-tested on the target Framework Desktop. The Qwen 1.5B and 3B workers are
 registered against complete pinned local snapshots but require their own physical ROCm
-acceptance evidence. All workers use `/mnt/work/models/huggingface/hub`; none of the smoke
-tests download model files.
+acceptance evidence. The BF16 and Qwen workers use `/mnt/work/models/huggingface/hub`;
+the self-contained Q4 worker reads only its packaged checkpoint. None of the smoke tests
+download model files.
 
 ## DiffusionGemma GPTQ Q4 variant
 
-The default `text-diffusion` provider directly loads the pinned BF16 non-expert weights
-plus the exported expert-only GPTQ Q4 g32 checkpoint. It does not materialise the BF16
-experts. The original model remains available explicitly as `text-diffusion-bf16` for
-compatibility and release evaluation.
+The default `text-diffusion` provider directly loads a self-contained Q4/BF16 hybrid:
+the expert projections use GPTQ Q4 g32 and the packaged non-expert tensors remain BF16.
+It does not materialise BF16 experts or access the upstream model cache at runtime. The
+original model remains available explicitly as `text-diffusion-bf16` for compatibility
+and release evaluation.
 
 ```powershell
 ./scripts/start_diffusiongemma_q4.ps1 -Smoke
@@ -97,6 +99,17 @@ compatibility and release evaluation.
 The default checkpoint directory is
 `var/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
 reports quantization and Q4 invocation metrics, and remains local-files-only.
+
+Upgrade an existing v1 expert-delta checkpoint to the self-contained v2 format without
+re-quantising its expert weights:
+
+```powershell
+./scripts/materialize_diffusiongemma_q4.ps1
+```
+
+Materialisation reads the pinned base snapshot once and packages only the non-expert
+BF16 tensors plus the local configuration, processor, tokenizer, and generation files.
+Afterwards the Q4 worker no longer requires that base snapshot.
 
 Run the comparative release gate after changing the checkpoint, loader, ROCm stack, or
 Transformers version. It executes the diverse prompt suite through Q4 and BF16
@@ -113,7 +126,7 @@ kernels, peak Q4 allocation below 24 GiB, allocation range below 1 GiB, median Q
 below three times BF16, mean token edit similarity of at least 0.35, and no material
 instruction-constraint regression relative to BF16.
 
-After the canonical gate passes, package and cryptographically verify the expert-delta
+After the canonical gate passes, package and cryptographically verify the self-contained
 release in place:
 
 ```powershell
@@ -123,8 +136,8 @@ release in place:
 
 Packaging adds a Hugging Face-compatible model card, Apache-2.0 licence, provenance,
 publication-safe evaluation report, release manifest, and SHA-256 checksums beside the
-existing 30 shards without duplicating them or uploading anything. The quantized
+existing weight shards without duplicating them or uploading anything. The quantized
 artifact belongs in a separate Hugging Face model repository: it is associated with
-ModelDeck through a pinned loader commit, but its 12+ GiB payload and artifact tags do
+ModelDeck through a pinned loader commit, but its roughly 18 GiB payload and artifact tags do
 not belong in the ModelDeck Git repository. See the
 [DiffusionGemma Q4 release process](docs/DIFFUSIONGEMMA_Q4_RELEASE.md).

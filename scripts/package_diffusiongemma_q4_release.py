@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-
 GIB = 1024**3
 DEFAULT_CHECKPOINT_DIR = Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32")
 DEFAULT_EVALUATION_REPORT = Path("var/q4-quality-evaluation.json")
@@ -48,7 +47,7 @@ class ReleaseError(RuntimeError):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Package and verify the expert-only DiffusionGemma GPTQ Q4 g32 "
+            "Package and verify the ModelDeck DiffusionGemma GPTQ Q4 g32 "
             "checkpoint as a reproducible release bundle."
         )
     )
@@ -109,12 +108,15 @@ def safe_relative_path(value: str) -> Path:
     return Path(*pure.parts)
 
 
-def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path]]:
+def validate_checkpoint(
+    checkpoint_dir: Path,
+) -> tuple[dict[str, Any], list[Path], list[Path], list[Path]]:
     manifest_path = checkpoint_dir / "q4-manifest.json"
     manifest = read_json(manifest_path)
     if manifest.get("format") != "modeldeck-diffusiongemma-expert-gptq":
         raise ReleaseError("Unsupported Q4 checkpoint format")
-    if manifest.get("format_version") != 1:
+    format_version = manifest.get("format_version")
+    if format_version not in {1, 2}:
         raise ReleaseError("Unsupported Q4 checkpoint format version")
     if manifest.get("state") != "complete":
         raise ReleaseError("Q4 checkpoint conversion is not complete")
@@ -124,8 +126,7 @@ def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path
         raise ReleaseError("Q4 checkpoint does not reference the pinned base revision")
     quantization = manifest.get("quantization")
     if not isinstance(quantization, dict) or any(
-        quantization.get(key) != value
-        for key, value in EXPECTED_QUANTIZATION.items()
+        quantization.get(key) != value for key, value in EXPECTED_QUANTIZATION.items()
     ):
         raise ReleaseError("Q4 checkpoint quantization settings do not match the release format")
 
@@ -145,10 +146,7 @@ def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path
         "down_shape": [2816, 704],
         "state_tensors": ["qweight", "qzeros", "scales", "g_idx"],
     }
-    if any(
-        experts.get(key) != value
-        for key, value in expected_expert_metadata.items()
-    ):
+    if any(experts.get(key) != value for key, value in expected_expert_metadata.items()):
         raise ReleaseError("Q4 manifest expert topology is incompatible")
 
     shard_paths: list[Path] = []
@@ -175,7 +173,90 @@ def validate_checkpoint(checkpoint_dir: Path) -> tuple[dict[str, Any], list[Path
                 f"expected {expected_bytes}, found {path.stat().st_size}"
             )
         shard_paths.append(path)
-    return manifest, shard_paths
+    non_expert_paths: list[Path] = []
+    runtime_paths: list[Path] = []
+    if format_version == 2:
+        if manifest.get("artifact_type") != "self-contained":
+            raise ReleaseError("Q4 checkpoint version 2 must be self-contained")
+        non_experts = manifest.get("non_expert_weights")
+        if not isinstance(non_experts, dict) or non_experts.get("source") != "checkpoint":
+            raise ReleaseError("Self-contained checkpoint has no packaged non-expert weights")
+        index_name = non_experts.get("index_file")
+        if not isinstance(index_name, str):
+            raise ReleaseError("Self-contained checkpoint has no non-expert index")
+        index_relative = safe_relative_path(index_name)
+        if len(index_relative.parts) != 1 or index_relative.suffix != ".json":
+            raise ReleaseError("Self-contained checkpoint has an invalid non-expert index")
+        index_path = checkpoint_dir / index_relative
+        index = read_json(index_path)
+        weight_map = index.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ReleaseError("Non-expert Safetensors index has no weight map")
+        if any(_is_expert_weight(str(name)) for name in weight_map):
+            raise ReleaseError("Non-expert Safetensors index contains BF16 expert tensors")
+        if non_experts.get("tensor_count") != len(weight_map):
+            raise ReleaseError("Non-expert tensor count does not match its index")
+
+        shard_entries = non_experts.get("shards")
+        if not isinstance(shard_entries, list) or not shard_entries:
+            raise ReleaseError("Self-contained checkpoint has no non-expert shards")
+        if non_experts.get("shard_count") != len(shard_entries):
+            raise ReleaseError("Non-expert shard count does not match the manifest")
+        indexed_shards = {str(value) for value in weight_map.values()}
+        manifest_shards: set[str] = set()
+        for entry in shard_entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
+                raise ReleaseError("Non-expert shard metadata is invalid")
+            filename = entry["file"]
+            relative = safe_relative_path(filename)
+            if len(relative.parts) != 1 or relative.suffix != ".safetensors":
+                raise ReleaseError(f"Invalid non-expert shard filename: {filename}")
+            if filename in manifest_shards:
+                raise ReleaseError(f"Duplicate non-expert shard: {filename}")
+            manifest_shards.add(filename)
+            path = checkpoint_dir / relative
+            if not path.is_file():
+                raise ReleaseError(f"Non-expert shard is missing: {path}")
+            if path.stat().st_size != entry.get("file_bytes"):
+                raise ReleaseError(f"Non-expert shard size mismatch: {filename}")
+            expected_hash = entry.get("sha256")
+            if not isinstance(expected_hash, str) or sha256_file(path) != expected_hash:
+                raise ReleaseError(f"Non-expert shard checksum mismatch: {filename}")
+            non_expert_paths.append(path)
+        if manifest_shards != indexed_shards:
+            raise ReleaseError("Non-expert index and manifest reference different shards")
+        non_expert_paths.append(index_path)
+
+        runtime_files = manifest.get("runtime_files")
+        if not isinstance(runtime_files, list) or not runtime_files:
+            raise ReleaseError("Self-contained checkpoint has no runtime metadata files")
+        runtime_names: set[str] = set()
+        for entry in runtime_files:
+            if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
+                raise ReleaseError("Runtime file metadata is invalid")
+            filename = entry["file"]
+            relative = safe_relative_path(filename)
+            if len(relative.parts) != 1 or filename in runtime_names:
+                raise ReleaseError(f"Invalid or duplicate runtime file: {filename}")
+            runtime_names.add(filename)
+            path = checkpoint_dir / relative
+            if not path.is_file():
+                raise ReleaseError(f"Runtime file is missing: {path}")
+            if path.stat().st_size != entry.get("file_bytes"):
+                raise ReleaseError(f"Runtime file size mismatch: {filename}")
+            expected_hash = entry.get("sha256")
+            if not isinstance(expected_hash, str) or sha256_file(path) != expected_hash:
+                raise ReleaseError(f"Runtime file checksum mismatch: {filename}")
+            runtime_paths.append(path)
+        required_runtime = {"config.json", "generation_config.json", "tokenizer_config.json"}
+        if not required_runtime.issubset(runtime_names):
+            missing = sorted(required_runtime - runtime_names)
+            raise ReleaseError(f"Self-contained checkpoint is missing runtime files: {missing}")
+    return manifest, shard_paths, non_expert_paths, runtime_paths
+
+
+def _is_expert_weight(name: str) -> bool:
+    return name.endswith((".experts.gate_up_proj", ".experts.down_proj"))
 
 
 def require_complete_phase(report: dict[str, Any], key: str) -> None:
@@ -207,9 +288,7 @@ def validate_evaluation(
     if report.get("passed") is not True:
         raise ReleaseError("The Q4 evaluation release gate did not pass")
     checks = report.get("checks")
-    if not isinstance(checks, dict) or not checks or not all(
-        value is True for value in checks.values()
-    ):
+    if not isinstance(checks, dict) or not checks or not all(value is True for value in checks.values()):
         raise ReleaseError("One or more Q4 evaluation checks did not pass")
 
     configuration = report.get("configuration")
@@ -255,9 +334,8 @@ def is_private_evaluation_field(key: str, value: Any) -> bool:
     if isinstance(value, str):
         if re.match(r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::\d+)?", value):
             return True
-        if (
-            value.startswith(("/home/", "/mnt/", "/tmp/", "/workspace/"))
-            and any(token in normalized for token in ("path", "dir", "checkpoint"))
+        if value.startswith(("/home/", "/mnt/", "/tmp/", "/workspace/")) and any(
+            token in normalized for token in ("path", "dir", "checkpoint")
         ):
             return True
     return False
@@ -294,9 +372,7 @@ def validate_public_evaluation(report: dict[str, Any]) -> None:
             for key, item in value.items():
                 item_path = f"{path}.{key}" if path else key
                 if is_private_evaluation_field(key, item):
-                    raise ReleaseError(
-                        f"Public evaluation report contains private field: {item_path}"
-                    )
+                    raise ReleaseError(f"Public evaluation report contains private field: {item_path}")
                 walk(item, item_path)
         elif isinstance(value, list):
             for index, item in enumerate(value):
@@ -316,9 +392,7 @@ def current_source_commit() -> str:
         text=True,
     )
     if status.returncode != 0 or status.stdout.strip():
-        raise ReleaseError(
-            "Tracked files must be clean before packaging a release bundle"
-        )
+        raise ReleaseError("Tracked files must be clean before packaging a release bundle")
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         check=False,
@@ -327,9 +401,7 @@ def current_source_commit() -> str:
     )
     value = result.stdout.strip()
     if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise ReleaseError(
-            "Could not determine the ModelDeck Git commit; pass --source-commit explicitly"
-        )
+        raise ReleaseError("Could not determine the ModelDeck Git commit; pass --source-commit explicitly")
     return value
 
 
@@ -367,9 +439,7 @@ def render_model_card(
     comparison = report["comparison"]
     comparison_summary = comparison["summary"]
     reduction = 100 * (
-        1
-        - q4_metrics["memory_allocated_bytes"]
-        / report["bf16"]["metrics_after"]["memory_allocated_bytes"]
+        1 - q4_metrics["memory_allocated_bytes"] / report["bf16"]["metrics_after"]["memory_allocated_bytes"]
     )
     q4_contracts = f"{q4_summary['contract_passes']}/{q4_summary['runs']}"
     bf16_contracts = f"{bf16_summary['contract_passes']}/{bf16_summary['runs']}"
@@ -378,13 +448,42 @@ def render_model_card(
     q4_median = q4_summary["median_wall_seconds"]
     bf16_median = bf16_summary["median_wall_seconds"]
     q4_allocated = gibibytes(q4_metrics["memory_allocated_bytes"])
-    bf16_allocated = gibibytes(
-        report["bf16"]["metrics_after"]["memory_allocated_bytes"]
-    )
+    bf16_allocated = gibibytes(report["bf16"]["metrics_after"]["memory_allocated_bytes"])
     stability_summary = report["q4"]["stability_summary"]
-    stability_contracts = (
-        f"{stability_summary['contract_passes']}/{stability_summary['runs']}"
-    )
+    stability_contracts = f"{stability_summary['contract_passes']}/{stability_summary['runs']}"
+    self_contained = checkpoint_manifest.get("format_version") == 2
+    if self_contained:
+        package_description = f"""This is the self-contained ModelDeck Q4/BF16 hybrid for `{model_id}`. It
+quantizes all 30 Mixture-of-Experts layers to symmetric GPTQ 4-bit weights with group
+size 32 and packages the remaining model weights in BF16.
+
+The pinned upstream model and revision remain recorded for provenance, but this release
+does **not** download or load the upstream checkpoint at runtime. All model, processor,
+tokenizer, and generation files needed by the ModelDeck loader are included here."""
+        compatibility_description = (
+            "This package is **not a standard Transformers or GPTQ checkpoint**. Use "
+            "the\ncustom ModelDeck direct Q4 loader; Ollama, llama.cpp, generic "
+            "`from_pretrained()`, and\nvLLM do not directly understand this hybrid "
+            "checkpoint layout."
+        )
+        packaged_non_experts = checkpoint_manifest["non_expert_weights"]
+        non_expert_line = (
+            f"- Packaged non-expert BF16 tensors: {gibibytes(packaged_non_experts['tensor_bytes']):.3f} GiB"
+        )
+    else:
+        package_description = (
+            f"This is a ModelDeck expert-weight delta for `{model_id}`. It quantizes "
+            "all 30\nMixture-of-Experts layers to symmetric GPTQ 4-bit weights with "
+            "group size 32 while\nretaining the non-expert weights from the pinned "
+            "base model in BF16."
+        )
+        compatibility_description = (
+            "This package is **not a standard standalone GPTQ model** and is not "
+            "directly\nloadable with `transformers.AutoModel`. It requires the base "
+            f"model at revision\n`{revision}` and the custom ModelDeck direct Q4 "
+            "loader. The package does not include the\nbase model's non-expert weights."
+        )
+        non_expert_line = "- Non-expert BF16 tensors: loaded from the pinned base model"
     return f"""---
 license: apache-2.0
 base_model: {model_id}
@@ -398,16 +497,13 @@ tags:
   - amd
 ---
 
-# DiffusionGemma 26B A4B IT — ModelDeck expert GPTQ Q4 g32
+# DiffusionGemma 26B A4B IT — ModelDeck self-contained GPTQ Q4 g32
 
-This is a ModelDeck expert-weight delta for `{model_id}`. It quantizes all 30
-Mixture-of-Experts layers to symmetric GPTQ 4-bit weights with group size 32 while
-retaining the non-expert weights from the pinned base model in BF16.
+[ModelDeck source and runtime](https://github.com/ozyjay/ModelDeck)
 
-This package is **not a standard standalone GPTQ model** and is not directly loadable
-with `transformers.AutoModel`. It requires the base model at revision `{revision}` and
-the custom ModelDeck direct Q4 loader. The package does not include the base model's
-non-expert weights.
+{package_description}
+
+{compatibility_description}
 
 ## Quantization
 
@@ -416,20 +512,21 @@ non-expert weights.
 - Activation ordering: disabled
 - Runtime: GPTQModel Triton V2 on ROCm
 - Quantized tensors: expert `gate_up_proj` and `down_proj`
-- Packed expert tensors: {gibibytes(q4_metrics['q4_bytes']):.3f} GiB
+- Packed expert tensors: {gibibytes(q4_metrics["q4_bytes"]):.3f} GiB
+{non_expert_line}
 - ModelDeck source commit: `{source_commit}`
 
 ## Validated configuration
 
 - Base model: `{model_id}`
 - Base revision: `{revision}`
-- Device: {q4_metrics['device_name']}
-- Torch: `{q4_metrics['torch_version']}`
-- HIP: `{q4_metrics['hip_version']}`
-- Transformers: `{q4_metrics['transformers_version']}`
-- Maximum output length: {report['configuration']['max_length']} tokens
-- Maximum denoising steps: {report['configuration']['denoising_steps']}
-- Temperature: {report['configuration']['temperature']}
+- Device: {q4_metrics["device_name"]}
+- Torch: `{q4_metrics["torch_version"]}`
+- HIP: `{q4_metrics["hip_version"]}`
+- Transformers: `{q4_metrics["transformers_version"]}`
+- Maximum output length: {report["configuration"]["max_length"]} tokens
+- Maximum denoising steps: {report["configuration"]["denoising_steps"]}
+- Temperature: {report["configuration"]["temperature"]}
 
 ## Release evaluation
 
@@ -440,10 +537,10 @@ non-expert weights.
 | Median wall time | {q4_median:.3f} s | {bf16_median:.3f} s |
 | Steady allocated memory | {q4_allocated:.3f} GiB | {bf16_allocated:.3f} GiB |
 
-- Q4/BF16 median latency ratio: {comparison['latency_ratio_q4_to_bf16']:.4f}×
-- Peak Q4 allocated memory: {gibibytes(q4_metrics['peak_memory_allocated_bytes']):.3f} GiB
+- Q4/BF16 median latency ratio: {comparison["latency_ratio_q4_to_bf16"]:.4f}×
+- Peak Q4 allocated memory: {gibibytes(q4_metrics["peak_memory_allocated_bytes"]):.3f} GiB
 - Steady allocation reduction versus BF16: {reduction:.2f}%
-- Mean token edit similarity versus BF16: {comparison_summary['mean_token_edit_similarity']:.4f}
+- Mean token edit similarity versus BF16: {comparison_summary["mean_token_edit_similarity"]:.4f}
 - Exact same-seed deterministic replay: passed
 - Additional Q4 stability contracts: {stability_contracts}
 
@@ -452,9 +549,13 @@ The complete prompt-level results and release gates are included in
 
 ## ModelDeck usage
 
-Place this directory at:
+Download the immutable release into ModelDeck's expected checkpoint directory:
 
-`var/diffusiongemma-26b-a4b-it-gptq-q4-g32`
+```powershell
+hf download ozyjay/diffusiongemma-26b-a4b-it-modeldeck-gptq-q4-g32 `
+    --revision v1.1.0 `
+    --local-dir var/diffusiongemma-26b-a4b-it-gptq-q4-g32
+```
 
 Then start the isolated worker from the ModelDeck repository:
 
@@ -490,20 +591,28 @@ See `LICENSE` and `THIRD_PARTY_NOTICES.md` for redistribution information.
 
 
 def render_notices(checkpoint_manifest: dict[str, Any]) -> str:
+    self_contained = checkpoint_manifest.get("format_version") == 2
+    weight_notice = (
+        "The expert weights in this release were modified by GPTQ quantization. The "
+        "remaining model weights are included in BF16, making the ModelDeck artifact "
+        "self-contained at runtime."
+        if self_contained
+        else "The expert weights in this release were modified by GPTQ quantization. "
+        "The base model's non-expert weights are not included and must be obtained "
+        "separately from the upstream model repository."
+    )
     return f"""# Third-party notices
 
 ## DiffusionGemma
 
-- Upstream model: `{checkpoint_manifest['base_model_id']}`
-- Pinned revision: `{checkpoint_manifest['base_model_revision']}`
+- Upstream model: `{checkpoint_manifest["base_model_id"]}`
+- Pinned revision: `{checkpoint_manifest["base_model_revision"]}`
 - Author: Google DeepMind
-- Model page: https://huggingface.co/{checkpoint_manifest['base_model_id']}
+- Model page: https://huggingface.co/{checkpoint_manifest["base_model_id"]}
 - Licence: Apache License 2.0
 - Licence page: https://ai.google.dev/gemma/apache_2
 
-The expert weights in this release were modified by GPTQ quantization. The base model's
-non-expert weights are not included and must be obtained separately from the upstream
-model repository.
+{weight_notice}
 
 The pinned upstream snapshot does not contain a separate `NOTICE` file. If a future
 base revision adds one, it must be included in any derivative release built from that
@@ -511,7 +620,7 @@ revision.
 
 GPTQModel, PyTorch, Transformers, Triton, Accelerate, and Safetensors are runtime tools
 and dependencies; their source or binary distributions are not included in this model
-delta package.
+package.
 """
 
 
@@ -535,7 +644,7 @@ def build_release(
     if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
         raise ReleaseError("--source-commit must be a full 40-character Git SHA")
     checkpoint_dir = checkpoint_dir.resolve()
-    checkpoint_manifest, shard_paths = validate_checkpoint(checkpoint_dir)
+    checkpoint_manifest, shard_paths, non_expert_paths, runtime_paths = validate_checkpoint(checkpoint_dir)
     report = read_json(evaluation_report)
     validate_evaluation(report, checkpoint_manifest)
     if not license_file.is_file():
@@ -562,6 +671,15 @@ def build_release(
     ]
     entries.extend(file_entry(checkpoint_dir, path, "expert-shard") for path in shard_paths)
     entries.extend(
+        file_entry(
+            checkpoint_dir,
+            path,
+            "non-expert-index" if path.suffix == ".json" else "non-expert-shard",
+        )
+        for path in non_expert_paths
+    )
+    entries.extend(file_entry(checkpoint_dir, path, "runtime-metadata") for path in runtime_paths)
+    entries.extend(
         file_entry(checkpoint_dir, checkpoint_dir / name, role)
         for name, role in (
             ("q4-quality-evaluation.json", "evaluation-report"),
@@ -573,10 +691,14 @@ def build_release(
     q4_metrics = report["q4"]["metrics_after"]
     release_manifest = {
         "format": "modeldeck-diffusiongemma-q4-release",
-        "format_version": 1,
+        "format_version": 2 if checkpoint_manifest.get("format_version") == 2 else 1,
         "created_at": created_at or datetime.now(UTC).isoformat(),
         "release_name": "diffusiongemma-26b-a4b-it-gptq-q4-g32",
-        "artifact_type": "expert-only-quantized-weight-delta",
+        "artifact_type": (
+            "self-contained-q4-bf16-hybrid"
+            if checkpoint_manifest.get("format_version") == 2
+            else "expert-only-quantized-weight-delta"
+        ),
         "modeldeck_source_commit": source_commit,
         "base_model": {
             "id": checkpoint_manifest["base_model_id"],
@@ -607,26 +729,18 @@ def build_release(
             "q4_median_seconds": report["q4"]["summary"]["median_wall_seconds"],
             "bf16_median_seconds": report["bf16"]["summary"]["median_wall_seconds"],
             "latency_ratio_q4_to_bf16": report["comparison"]["latency_ratio_q4_to_bf16"],
-            "mean_token_edit_similarity": report["comparison"]["summary"][
-                "mean_token_edit_similarity"
-            ],
+            "mean_token_edit_similarity": report["comparison"]["summary"]["mean_token_edit_similarity"],
         },
         "files": sorted(entries, key=lambda item: item["path"]),
     }
     release_manifest_path = checkpoint_dir / "release-manifest.json"
     write_json(release_manifest_path, release_manifest)
 
-    checksums = {
-        entry["path"]: entry["sha256"]
-        for entry in release_manifest["files"]
-    }
+    checksums = {entry["path"]: entry["sha256"] for entry in release_manifest["files"]}
     checksums[release_manifest_path.name] = sha256_file(release_manifest_path)
     write_text(
         checkpoint_dir / "SHA256SUMS",
-        "".join(
-            f"{digest}  {name}\n"
-            for name, digest in sorted(checksums.items())
-        ),
+        "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())),
     )
     return release_manifest
 
@@ -655,7 +769,7 @@ def verify_release(checkpoint_dir: Path) -> dict[str, Any]:
     manifest = read_json(release_manifest_path)
     if manifest.get("format") != "modeldeck-diffusiongemma-q4-release":
         raise ReleaseError("Unsupported release manifest format")
-    if manifest.get("format_version") != 1:
+    if manifest.get("format_version") not in {1, 2}:
         raise ReleaseError("Unsupported release manifest version")
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
@@ -687,13 +801,11 @@ def verify_release(checkpoint_dir: Path) -> dict[str, Any]:
         missing = sorted(set(expected_checksums) - set(checksum_file))
         extra = sorted(set(checksum_file) - set(expected_checksums))
         raise ReleaseError(
-            "SHA256SUMS does not match the release manifest "
-            f"(missing={missing}, extra={extra})"
+            f"SHA256SUMS does not match the release manifest (missing={missing}, extra={extra})"
         )
-    validate_checkpoint(checkpoint_dir)
+    checkpoint_manifest, _, _, _ = validate_checkpoint(checkpoint_dir)
     packaged_report = read_json(checkpoint_dir / "q4-quality-evaluation.json")
     validate_public_evaluation(packaged_report)
-    checkpoint_manifest = read_json(checkpoint_dir / "q4-manifest.json")
     validate_evaluation(packaged_report, checkpoint_manifest)
     return {
         "release_name": manifest.get("release_name"),
@@ -702,6 +814,8 @@ def verify_release(checkpoint_dir: Path) -> dict[str, Any]:
         "payload_gib": round(gibibytes(total_bytes), 3),
         "source_commit": manifest.get("modeldeck_source_commit"),
         "base_model": manifest.get("base_model"),
+        "artifact_type": manifest.get("artifact_type"),
+        "self_contained": manifest.get("artifact_type") == "self-contained-q4-bf16-hybrid",
         "evaluation_passed": packaged_report.get("passed") is True,
     }
 

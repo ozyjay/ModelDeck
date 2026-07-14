@@ -157,12 +157,10 @@ class TransformersDiffusionEngine:
 
             from modeldeck.workers.diffusiongemma_q4 import load_diffusiongemma_q4
 
-            if not self.config.cache_root:
-                raise RuntimeError("The Q4 runtime requires --cache-root")
             loaded = load_diffusiongemma_q4(
                 model_id=self.config.model_id,
                 revision=self.config.revision,
-                cache_root=Path(self.config.cache_root),
+                cache_root=(Path(self.config.cache_root) if self.config.cache_root else None),
                 checkpoint_dir=Path(self.config.q4_checkpoint_dir),
                 device=device,
                 dtype=dtype,

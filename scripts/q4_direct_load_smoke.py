@@ -10,16 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from accelerate import init_empty_weights
 from accelerate.utils import set_module_tensor_to_device
-from safetensors import safe_open
-from safetensors.torch import load_file
-from transformers import (
-    AutoConfig,
-    AutoProcessor,
-    DiffusionGemmaForBlockDiffusion,
-)
-
 from q4_expert_probe import synchronise
 from q4_full_layer_smoke import FullQ4Experts
 from q4_hybrid_smoke import decode_generated, generate, make_inputs
@@ -30,6 +21,9 @@ from q4_inventory import (
     find_local_snapshot,
 )
 from q4_runtime_roundtrip import restore_runtime
+from safetensors import safe_open
+from safetensors.torch import load_file
+from transformers import DiffusionGemmaForBlockDiffusion
 
 GIB = 1024**3
 EXPERT_SUFFIXES = (
@@ -41,9 +35,8 @@ EXPERT_SUFFIXES = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Load a ModelDeck DiffusionGemma Q4 expert delta directly onto "
-            "ROCm from a meta model plus the pinned base model's non-expert "
-            "weights, without materialising BF16 expert weights."
+            "Load a ModelDeck DiffusionGemma Q4 checkpoint directly onto ROCm. "
+            "Self-contained v2 checkpoints require no pinned base-model cache."
         )
     )
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
@@ -81,7 +74,7 @@ def load_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("format") != "modeldeck-diffusiongemma-expert-gptq":
         raise SystemExit("Unsupported Q4 manifest format")
-    if manifest.get("format_version") != 1:
+    if manifest.get("format_version") not in {1, 2}:
         raise SystemExit("Unsupported Q4 manifest version")
     if manifest.get("state") != "complete":
         raise SystemExit("Q4 manifest is not complete")
@@ -101,6 +94,12 @@ def load_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     }
     if any(quantization.get(key) != value for key, value in expected.items()):
         raise SystemExit("Manifest quantization settings are unsupported")
+    if manifest.get("format_version") == 2:
+        if manifest.get("artifact_type") != "self-contained":
+            raise SystemExit("Q4 manifest version 2 is not self-contained")
+        non_experts = manifest.get("non_expert_weights")
+        if not isinstance(non_experts, dict) or non_experts.get("source") != "checkpoint":
+            raise SystemExit("Self-contained manifest has no packaged non-expert weights")
     return manifest
 
 
@@ -157,14 +156,8 @@ def load_q4_layers(
         q4_gate = []
         q4_down = []
         for expert in range(experts_per_layer):
-            gate_tensors = {
-                name: tensors[f"gate_up.{expert}.{name}"]
-                for name in state_names
-            }
-            down_tensors = {
-                name: tensors[f"down.{expert}.{name}"]
-                for name in state_names
-            }
+            gate_tensors = {name: tensors[f"gate_up.{expert}.{name}"] for name in state_names}
+            down_tensors = {name: tensors[f"down.{expert}.{name}"] for name in state_names}
             q4_gate.append(
                 restore_runtime(
                     gate_tensors,
@@ -191,10 +184,7 @@ def load_q4_layers(
         encoder_layers[layer].experts = q4_experts
         decoder_layers[layer].experts = q4_experts
         q4_layers.append(q4_experts)
-        loaded_bytes += sum(
-            tensor.numel() * tensor.element_size()
-            for tensor in tensors.values()
-        )
+        loaded_bytes += sum(tensor.numel() * tensor.element_size() for tensor in tensors.values())
         del tensors, gate_tensors, down_tensors, q4_gate, q4_down
         gc.collect()
         print(
@@ -224,14 +214,10 @@ def load_base_non_experts(
     device: torch.device,
 ) -> tuple[int, int]:
     weight_map = base_weight_map(snapshot)
-    buffer_names = {
-        name for name, _ in model.named_buffers(remove_duplicate=False)
-    }
+    buffer_names = {name for name, _ in model.named_buffers(remove_duplicate=False)}
     by_shard: dict[str, list[str]] = defaultdict(list)
     for name, shard in weight_map.items():
-        skip_tied_encoder_parameter = (
-            is_encoder_mirror(name) and name not in buffer_names
-        )
+        skip_tied_encoder_parameter = is_encoder_mirror(name) and name not in buffer_names
         if not is_expert_weight(name) and not skip_tied_encoder_parameter:
             by_shard[shard].append(name)
 
@@ -295,8 +281,7 @@ def tie_output_heads(model: DiffusionGemmaForBlockDiffusion) -> int:
             (
                 loaded_embeddings[value]
                 for value in preferred_names
-                if value in loaded_embeddings
-                and loaded_embeddings[value].shape == parameter.shape
+                if value in loaded_embeddings and loaded_embeddings[value].shape == parameter.shape
             ),
             None,
         )
@@ -314,16 +299,8 @@ def tie_output_heads(model: DiffusionGemmaForBlockDiffusion) -> int:
 
 
 def remaining_meta(model: DiffusionGemmaForBlockDiffusion) -> list[str]:
-    names = [
-        name
-        for name, parameter in model.named_parameters(remove_duplicate=False)
-        if parameter.is_meta
-    ]
-    names.extend(
-        name
-        for name, buffer in model.named_buffers(remove_duplicate=False)
-        if buffer.is_meta
-    )
+    names = [name for name, parameter in model.named_parameters(remove_duplicate=False) if parameter.is_meta]
+    names.extend(name for name, buffer in model.named_buffers(remove_duplicate=False) if buffer.is_meta)
     return sorted(set(names))
 
 
@@ -342,9 +319,14 @@ def main() -> None:
     if device.type != "cuda" or not torch.cuda.is_available():
         raise SystemExit("This smoke test requires ROCm through torch.cuda")
 
-    snapshot = find_local_snapshot(args.cache_root, args.model_id, args.revision)
     manifest = load_manifest(args.checkpoint_dir / "q4-manifest.json", args)
-    print(f"Base snapshot: {snapshot}")
+    self_contained = manifest["format_version"] == 2
+    snapshot = (
+        args.checkpoint_dir.resolve()
+        if self_contained
+        else find_local_snapshot(args.cache_root, args.model_id, args.revision)
+    )
+    print(f"Model files: {snapshot}")
     print(f"Q4 checkpoint: {args.checkpoint_dir}")
     print(f"Device: {torch.cuda.get_device_name(device)}")
     print(f"Torch: {torch.__version__}")
@@ -353,24 +335,20 @@ def main() -> None:
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
-    config = AutoConfig.from_pretrained(
-        snapshot,
-        local_files_only=True,
-        trust_remote_code=False,
+    from modeldeck.workers.diffusiongemma_q4 import load_diffusiongemma_q4
+
+    loaded = load_diffusiongemma_q4(
+        model_id=args.model_id,
+        revision=args.revision,
+        cache_root=None if self_contained else args.cache_root,
+        checkpoint_dir=args.checkpoint_dir,
+        device=device,
+        dtype=torch.bfloat16,
     )
-    processor = AutoProcessor.from_pretrained(
-        snapshot,
-        local_files_only=True,
-        trust_remote_code=False,
-    )
-    original_default_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(torch.bfloat16)
-    try:
-        with init_empty_weights(include_buffers=False):
-            model = DiffusionGemmaForBlockDiffusion(config)
-    finally:
-        torch.set_default_dtype(original_default_dtype)
-    model.eval()
+    processor = loaded.processor
+    model = loaded.model
+    q4_layers = loaded.q4_layers
+    load_details = loaded.details
     generation_config_path = snapshot / "generation_config.json"
     if generation_config_path.is_file():
         model.generation_config = model.generation_config_class.from_pretrained(
@@ -383,47 +361,26 @@ def main() -> None:
     print("Created meta model skeleton")
     print(f"Generation config: {generation_config_source}")
 
-    non_expert_tensors, non_expert_bytes = load_base_non_experts(
-        model=model,
-        snapshot=snapshot,
-        device=device,
-    )
-    meta_before_tie = set(remaining_meta(model))
-    model.model.tie_weights()
-    model.tie_weights()
-    meta_after_tie = set(remaining_meta(model))
-    native_tied_tensors = len(meta_before_tie - meta_after_tie)
-    print(f"Native tie_weights resolved: {native_tied_tensors} tensors")
-
-    q4_layers, q4_bytes = load_q4_layers(
-        model=model,
-        checkpoint_dir=args.checkpoint_dir,
-        manifest=manifest,
-        device=device,
-    )
+    non_expert_tensors = int(load_details["non_expert_tensors"])
+    non_expert_bytes = int(load_details["non_expert_bytes"])
+    native_tied_tensors = int(load_details["native_tied_tensors"])
+    q4_bytes = int(load_details["q4_bytes"])
     print(f"Loaded packed Q4 experts: {q4_bytes / GIB:.3f} GiB")
     meta_names = remaining_meta(model)
     if meta_names:
         preview = "\n  ".join(meta_names[:40])
-        raise RuntimeError(
-            f"Direct loader left {len(meta_names)} meta tensors:\n  {preview}"
-        )
+        raise RuntimeError(f"Direct loader left {len(meta_names)} meta tensors:\n  {preview}")
 
     dtype_summary = parameter_dtype_summary(model)
     unexpected_parameters = [
         name
         for name, parameter in model.named_parameters(remove_duplicate=False)
-        if parameter.is_floating_point()
-        and parameter.dtype != torch.bfloat16
+        if parameter.is_floating_point() and parameter.dtype != torch.bfloat16
     ]
     if unexpected_parameters:
         preview = "\n  ".join(unexpected_parameters[:40])
-        raise RuntimeError(
-            "Direct loader produced non-BF16 model parameters:\n  " + preview
-        )
+        raise RuntimeError("Direct loader produced non-BF16 model parameters:\n  " + preview)
 
-    model.to(device)
-    model.eval()
     synchronise(device)
     load_seconds = time.perf_counter() - started
     loaded_memory = int(torch.cuda.memory_allocated(device))
@@ -434,9 +391,7 @@ def main() -> None:
     print(f"Direct load: {load_seconds:.3f} s")
     print(f"Allocated after direct load: {loaded_memory / GIB:.3f} GiB")
     if loaded_memory > int(20.5 * GIB):
-        raise RuntimeError(
-            "Direct-load allocation exceeded 20.5 GiB; refusing generation"
-        )
+        raise RuntimeError("Direct-load allocation exceeded 20.5 GiB; refusing generation")
 
     inputs = make_inputs(processor, args.prompt, device)
     output, generation_seconds = generate(
@@ -454,16 +409,15 @@ def main() -> None:
     routed_tokens = sum(layer.q4_tokens for layer in q4_layers)
     print(f"Generation: {generation_seconds:.3f} s")
     print(f"Generated text: {text!r}")
-    print(
-        "Q4 invocation: "
-        f"gate_calls={gate_calls}, down_calls={down_calls}, "
-        f"tokens={routed_tokens}"
-    )
+    print(f"Q4 invocation: gate_calls={gate_calls}, down_calls={down_calls}, tokens={routed_tokens}")
 
     payload = {
         "model_id": args.model_id,
         "revision": args.revision,
         "checkpoint_dir": str(args.checkpoint_dir),
+        "artifact_type": load_details["artifact_type"],
+        "weight_source": load_details["weight_source"],
+        "base_model_runtime_dependency": load_details["base_model_runtime_dependency"],
         "torch_version": str(torch.__version__),
         "hip_version": torch.version.hip,
         "device_name": torch.cuda.get_device_name(device),

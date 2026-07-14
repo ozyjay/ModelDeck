@@ -33,6 +33,7 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert diffusion_q4.alias == "text-diffusion"
     assert diffusion_q4.port == 8622
     assert diffusion_q4.preferred_runtime == "text-diffusion-gptq-rocm"
+    assert "cache_root" not in diffusion_q4.settings
     assert diffusion_q4.settings["q4_checkpoint_dir"].endswith("gptq-q4-g32")
 
 

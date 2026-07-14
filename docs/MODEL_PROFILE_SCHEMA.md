@@ -24,7 +24,7 @@ larger cached workers does not claim that they have passed the target GPU accept
 
 Real text-diffusion profiles are:
 
-- the ModelDeck expert-only GPTQ Q4 g32 variant of
+- the self-contained ModelDeck GPTQ Q4 g32/BF16 hybrid variant of
   `google/diffusiongemma-26B-A4B-it` as the default `text-diffusion` provider, exclusive
   and local only;
 - the original BF16 DiffusionGemma profile as the explicit `text-diffusion-bf16`

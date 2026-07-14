@@ -9,8 +9,18 @@ if (-not $Runtime) {
     throw 'Q4 runtime missing. Create .venv-rocm72-q4 and install requirements-rocm72-q4-gptqmodel.txt.'
 }
 $Checkpoint = 'var/diffusiongemma-26b-a4b-it-gptq-q4-g32'
-if (-not (Test-Path (Join-Path $Checkpoint 'q4-manifest.json'))) {
-    throw "Q4 checkpoint manifest missing: $Checkpoint/q4-manifest.json"
+$ManifestPath = Join-Path $Checkpoint 'q4-manifest.json'
+if (-not (Test-Path $ManifestPath)) {
+    throw "Q4 checkpoint manifest missing: $ManifestPath"
+}
+$Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+if ($Manifest.format_version -ne 2 -or $Manifest.artifact_type -ne 'self-contained') {
+    throw @"
+The Q4 checkpoint is still an expert-only v1 delta. Materialise the self-contained v2
+artifact before starting this profile:
+
+    ./scripts/materialize_diffusiongemma_q4.ps1
+"@
 }
 $Env:MODELDECK_ROCM72_Q4_PYTHON = $Runtime
 $ManagementUrl = 'http://127.0.0.1:3600'
@@ -37,7 +47,7 @@ catch {
     Write-Verbose 'The BF16 worker was already stopped or unavailable.'
 }
 
-Write-Host 'Starting DiffusionGemma GPTQ Q4 (expert-only, group size 32)...'
+Write-Host 'Starting self-contained DiffusionGemma GPTQ Q4/BF16 hybrid (group size 32)...'
 $Worker = Invoke-RestMethod -Method Post `
     -Uri "$ManagementUrl/api/workers/diffusiongemma-q4-rocm/start" `
     -TimeoutSec 900

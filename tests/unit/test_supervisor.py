@@ -95,16 +95,18 @@ def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, t
     runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(sys.executable)
     monkeypatch.setenv("MODELDECK_ROCM72_Q4_PYTHON", str(runtime_python))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
 
     launch = build_worker_launch(profile)
 
     assert launch.command[0] == str(runtime_python.absolute())
-    assert launch.command[launch.command.index("--cache-root") + 1] == ("/mnt/work/models/huggingface/hub")
+    assert "--cache-root" not in launch.command
     assert launch.command[launch.command.index("--q4-checkpoint-dir") + 1].endswith(
         "diffusiongemma-26b-a4b-it-gptq-q4-g32"
     )
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert "HF_HUB_CACHE" not in launch.environment
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -23,7 +24,15 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def release_fixture(
+    tmp_path: Path,
+    *,
+    self_contained: bool = True,
+) -> tuple[Path, Path, Path]:
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     layers = []
@@ -40,7 +49,7 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         )
     manifest = {
         "format": "modeldeck-diffusiongemma-expert-gptq",
-        "format_version": 1,
+        "format_version": 2 if self_contained else 1,
         "state": "complete",
         "base_model_id": "google/diffusiongemma-26B-A4B-it",
         "base_model_revision": "52de6b914ee1749a7d4933202505ddf5b414ec43",
@@ -63,6 +72,52 @@ def release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
             "layers": layers,
         },
     }
+    if self_contained:
+        non_expert = checkpoint / "non-expert-model-00001-of-00001.safetensors"
+        non_expert.write_bytes(b"non-expert-bf16-fixture")
+        index = {
+            "metadata": {"total_size": non_expert.stat().st_size, "tensor_count": 1},
+            "weight_map": {"model.decoder.embed_tokens.weight": non_expert.name},
+        }
+        write_json(checkpoint / "non-expert-model.safetensors.index.json", index)
+        runtime_files = []
+        for name in ("config.json", "generation_config.json", "tokenizer_config.json"):
+            path = checkpoint / name
+            write_json(path, {"fixture": name})
+            runtime_files.append(
+                {
+                    "file": name,
+                    "file_bytes": path.stat().st_size,
+                    "sha256": file_sha256(path),
+                }
+            )
+        manifest.update(
+            {
+                "artifact_type": "self-contained",
+                "non_expert_weights": {
+                    "source": "checkpoint",
+                    "format": "safetensors",
+                    "index_file": "non-expert-model.safetensors.index.json",
+                    "tensor_count": 1,
+                    "tensor_bytes": non_expert.stat().st_size,
+                    "shard_count": 1,
+                    "shards": [
+                        {
+                            "file": non_expert.name,
+                            "tensor_count": 1,
+                            "tensor_bytes": non_expert.stat().st_size,
+                            "file_bytes": non_expert.stat().st_size,
+                            "sha256": file_sha256(non_expert),
+                        }
+                    ],
+                    "excluded_suffixes": [
+                        ".experts.gate_up_proj",
+                        ".experts.down_proj",
+                    ],
+                },
+                "runtime_files": runtime_files,
+            }
+        )
     write_json(checkpoint / "q4-manifest.json", manifest)
 
     summary = {
@@ -148,7 +203,8 @@ def test_release_packager_builds_and_verifies_bundle(tmp_path: Path) -> None:
 
     assert manifest["format"] == "modeldeck-diffusiongemma-q4-release"
     assert result["evaluation_passed"] is True
-    assert result["files_verified"] == 35
+    assert result["files_verified"] == 40
+    assert result["self_contained"] is True
     assert result["source_commit"] == "b" * 40
     assert (checkpoint / "README.md").is_file()
     assert (checkpoint / "SHA256SUMS").is_file()
@@ -156,7 +212,9 @@ def test_release_packager_builds_and_verifies_bundle(tmp_path: Path) -> None:
     model_card = (checkpoint / "README.md").read_text(encoding="utf-8")
     assert "base_model_relation: quantized" in model_card
     assert "  - modeldeck" in model_card
-    assert "not a standard standalone GPTQ model" in model_card
+    assert "self-contained ModelDeck Q4/BF16 hybrid" in model_card
+    assert "does **not** download or load the upstream checkpoint" in model_card
+    assert "https://github.com/ozyjay/ModelDeck" in model_card
 
     public_report = json.loads((checkpoint / "q4-quality-evaluation.json").read_text(encoding="utf-8"))
     assert public_report["publication"]["sanitized"] is True
@@ -214,3 +272,39 @@ def test_public_evaluation_validator_rejects_local_identifiers() -> None:
                 "q4": {"worker": {"endpoint": "http://127.0.0.1:8622"}},
             }
         )
+
+
+def test_release_packager_keeps_v1_delta_compatibility(tmp_path: Path) -> None:
+    packager = load_packager()
+    checkpoint, evaluation, license_path = release_fixture(
+        tmp_path,
+        self_contained=False,
+    )
+
+    packager.build_release(
+        checkpoint_dir=checkpoint,
+        evaluation_report=evaluation,
+        license_file=license_path,
+        source_commit="e" * 40,
+    )
+    result = packager.verify_release(checkpoint)
+
+    assert result["files_verified"] == 35
+    assert result["self_contained"] is False
+    assert result["artifact_type"] == "expert-only-quantized-weight-delta"
+
+
+def test_release_packager_rejects_bf16_expert_in_non_expert_index(
+    tmp_path: Path,
+) -> None:
+    packager = load_packager()
+    checkpoint, _, _ = release_fixture(tmp_path)
+    index_path = checkpoint / "non-expert-model.safetensors.index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["weight_map"] = {
+        "model.decoder.layers.0.experts.gate_up_proj": ("non-expert-model-00001-of-00001.safetensors")
+    }
+    write_json(index_path, index)
+
+    with pytest.raises(packager.ReleaseError, match="contains BF16 expert tensors"):
+        packager.validate_checkpoint(checkpoint)

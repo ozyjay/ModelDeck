@@ -397,7 +397,10 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
                 )
             raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
         environment.pop("LD_PRELOAD", None)
-        environment["HF_HUB_CACHE"] = str(profile.settings["cache_root"])
+        if cache_root := profile.settings.get("cache_root"):
+            environment["HF_HUB_CACHE"] = str(cache_root)
+        elif is_q4:
+            environment.pop("HF_HUB_CACHE", None)
         if profile.settings.get("hsa_preload_evidence"):
             hsa_runtime = Path("/usr/lib64/libhsa-runtime64.so.1")
             if not hsa_runtime.is_file():
@@ -416,14 +419,9 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_denoising_steps", 48)),
         ]
         if is_q4:
-            command.extend(
-                [
-                    "--cache-root",
-                    str(profile.settings["cache_root"]),
-                    "--q4-checkpoint-dir",
-                    str(profile.settings["q4_checkpoint_dir"]),
-                ]
-            )
+            if cache_root := profile.settings.get("cache_root"):
+                command.extend(["--cache-root", str(cache_root)])
+            command.extend(["--q4-checkpoint-dir", str(profile.settings["q4_checkpoint_dir"])])
         return WorkerLaunch(command=command, environment=environment)
     raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
 

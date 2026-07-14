@@ -110,7 +110,6 @@ def default_model_profiles() -> list[ModelProfile]:
                 "startup_timeout_seconds": 600,
                 "warmup_timeout_seconds": 300,
                 "hsa_preload_evidence": False,
-                "cache_root": "/mnt/work/models/huggingface/hub",
                 "q4_checkpoint_dir": "var/diffusiongemma-26b-a4b-it-gptq-q4-g32",
             },
         ),

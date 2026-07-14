@@ -4,7 +4,7 @@ import gc
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import torch
@@ -115,7 +115,8 @@ def load_manifest(
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("format") != "modeldeck-diffusiongemma-expert-gptq":
         raise RuntimeError("Unsupported Q4 manifest format")
-    if manifest.get("format_version") != 1:
+    format_version = manifest.get("format_version")
+    if format_version not in {1, 2}:
         raise RuntimeError("Unsupported Q4 manifest version")
     if manifest.get("state") != "complete":
         raise RuntimeError("Q4 manifest is not complete")
@@ -126,7 +127,23 @@ def load_manifest(
     quantization = manifest.get("quantization", {})
     if any(quantization.get(key) != value for key, value in EXPECTED_QUANTIZATION.items()):
         raise RuntimeError("Manifest quantization settings are unsupported")
+    if format_version == 2:
+        if manifest.get("artifact_type") != "self-contained":
+            raise RuntimeError("Q4 manifest version 2 must describe a self-contained artifact")
+        non_experts = manifest.get("non_expert_weights")
+        if not isinstance(non_experts, dict) or non_experts.get("source") != "checkpoint":
+            raise RuntimeError("Self-contained Q4 manifest has no packaged non-expert weights")
+        _safe_flat_path(non_experts.get("index_file"), label="non-expert index")
     return manifest
+
+
+def _safe_flat_path(value: Any, *, label: str) -> Path:
+    if not isinstance(value, str):
+        raise RuntimeError(f"Manifest {label} path is missing")
+    path = PurePosixPath(value)
+    if path.is_absolute() or len(path.parts) != 1 or path.name in {"", ".", ".."}:
+        raise RuntimeError(f"Manifest {label} path is unsafe: {value!r}")
+    return Path(path.name)
 
 
 def _runtime_constructor(*, in_features: int, out_features: int) -> TritonV2Linear:
@@ -173,12 +190,20 @@ def _is_encoder_mirror(name: str) -> bool:
     return name.startswith("model.encoder.language_model.")
 
 
-def _base_weight_map(snapshot: Path) -> dict[str, str]:
-    index_path = snapshot / "model.safetensors.index.json"
+def _base_weight_map(snapshot: Path, *, index_file: str = "model.safetensors.index.json") -> dict[str, str]:
+    index_path = snapshot / _safe_flat_path(index_file, label="weight index")
     if index_path.is_file():
         payload = json.loads(index_path.read_text(encoding="utf-8"))
-        return {str(key): str(value) for key, value in payload["weight_map"].items()}
-    single = snapshot / "model.safetensors"
+        weight_map = payload.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise RuntimeError(f"Safetensors index has no weight map: {index_path}")
+        result: dict[str, str] = {}
+        for key, value in weight_map.items():
+            relative = _safe_flat_path(value, label="weight shard")
+            result[str(key)] = relative.as_posix()
+        return result
+    single_name = "model.safetensors" if index_file == "model.safetensors.index.json" else ""
+    single = snapshot / single_name
     if single.is_file():
         with safe_open(single, framework="pt", device="cpu") as handle:
             return {name: single.name for name in handle.keys()}
@@ -190,8 +215,9 @@ def _load_base_non_experts(
     model: DiffusionGemmaForBlockDiffusion,
     snapshot: Path,
     device: torch.device,
+    index_file: str = "model.safetensors.index.json",
 ) -> tuple[int, int]:
-    weight_map = _base_weight_map(snapshot)
+    weight_map = _base_weight_map(snapshot, index_file=index_file)
     buffer_names = {name for name, _ in model.named_buffers(remove_duplicate=False)}
     by_shard: dict[str, list[str]] = defaultdict(list)
     for name, shard in weight_map.items():
@@ -202,7 +228,9 @@ def _load_base_non_experts(
     loaded_tensors = 0
     loaded_bytes = 0
     for shard, names in sorted(by_shard.items()):
-        path = snapshot / shard
+        path = snapshot / _safe_flat_path(shard, label="weight shard")
+        if not path.is_file():
+            raise RuntimeError(f"Non-expert weight shard is missing: {path}")
         with safe_open(path, framework="pt", device="cpu") as handle:
             for name in sorted(names):
                 tensor = handle.get_tensor(name)
@@ -247,7 +275,7 @@ def _load_q4_layers(
         layer = int(entry["layer"])
         if layer != expected_layer:
             raise RuntimeError("Manifest layer order is not contiguous")
-        path = checkpoint_dir / entry["file"]
+        path = checkpoint_dir / _safe_flat_path(entry.get("file"), label="expert shard")
         if not path.is_file():
             raise RuntimeError(f"Missing Q4 layer shard: {path}")
         tensors = load_file(str(path), device="cpu")
@@ -305,20 +333,30 @@ def load_diffusiongemma_q4(
     *,
     model_id: str,
     revision: str,
-    cache_root: Path,
+    cache_root: Path | None,
     checkpoint_dir: Path,
     device: torch.device,
     dtype: torch.dtype,
 ) -> Q4LoadResult:
     if dtype != torch.bfloat16:
         raise RuntimeError("The DiffusionGemma Q4 runtime requires bfloat16 non-expert weights")
-    snapshot = find_local_snapshot(cache_root, model_id, revision)
     checkpoint_dir = checkpoint_dir.expanduser().resolve()
     manifest = load_manifest(
         checkpoint_dir / "q4-manifest.json",
         model_id=model_id,
         revision=revision,
     )
+    self_contained = manifest["format_version"] == 2
+    if self_contained:
+        snapshot = checkpoint_dir
+        non_expert_index = manifest["non_expert_weights"]["index_file"]
+        weight_source = "checkpoint"
+    else:
+        if cache_root is None:
+            raise RuntimeError("The expert-delta Q4 checkpoint requires the pinned base cache")
+        snapshot = find_local_snapshot(cache_root, model_id, revision)
+        non_expert_index = "model.safetensors.index.json"
+        weight_source = "pinned-base-cache"
     config = AutoConfig.from_pretrained(
         snapshot,
         local_files_only=True,
@@ -349,6 +387,7 @@ def load_diffusiongemma_q4(
         model=model,
         snapshot=snapshot,
         device=device,
+        index_file=non_expert_index,
     )
     meta_before_tie = set(_remaining_meta(model))
     model.model.tie_weights()
@@ -383,6 +422,11 @@ def load_diffusiongemma_q4(
         details={
             "runtime": "text-diffusion-gptq-rocm",
             "quantization": "gptq-q4-g32-expert-only",
+            "artifact_type": (
+                "self-contained-q4-bf16-hybrid" if self_contained else "expert-only-quantized-weight-delta"
+            ),
+            "weight_source": weight_source,
+            "base_model_runtime_dependency": not self_contained,
             "q4_checkpoint_dir": str(checkpoint_dir),
             "q4_bytes": q4_bytes,
             "non_expert_tensors": non_expert_tensors,
