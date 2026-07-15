@@ -8,7 +8,7 @@ $Runtime = (Resolve-Path '.venv-rocm72-q4/bin/python' -ErrorAction SilentlyConti
 if (-not $Runtime) {
     throw 'Q4 runtime missing. Create .venv-rocm72-q4 and install requirements-rocm72-q4-gptqmodel.txt.'
 }
-$Checkpoint = 'var/diffusiongemma-26b-a4b-it-gptq-q4-g32'
+$Checkpoint = '/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32'
 $ManifestPath = Join-Path $Checkpoint 'q4-manifest.json'
 if (-not (Test-Path $ManifestPath)) {
     throw "Q4 checkpoint manifest missing: $ManifestPath"

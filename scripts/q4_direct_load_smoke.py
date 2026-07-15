@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-dir",
         type=Path,
-        default=Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32"),
+        default=Path("/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32"),
     )
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--denoising-steps", type=int, default=48)

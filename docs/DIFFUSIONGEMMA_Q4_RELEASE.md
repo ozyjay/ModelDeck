@@ -7,7 +7,8 @@ runtime versions, model card, licence, and notices using SHA-256.
 ## Release prerequisites
 
 - The 30-layer checkpoint exists at
-  `var/diffusiongemma-26b-a4b-it-gptq-q4-g32` and its `q4-manifest.json` state is
+  `/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32` and its
+  `q4-manifest.json` state is
   `complete`.
 - For first-time materialisation only, the pinned base snapshot is available locally at
   revision `52de6b914ee1749a7d4933202505ddf5b414ec43`.
@@ -113,7 +114,7 @@ verify a clean download before creating the immutable release tag:
 hf auth whoami
 $RepoId = 'ozyjay/diffusiongemma-26b-a4b-it-modeldeck-gptq-q4-g32'
 
-$Checkpoint = 'var/diffusiongemma-26b-a4b-it-gptq-q4-g32'
+$Checkpoint = '/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32'
 $Env:HF_XET_HIGH_PERFORMANCE = '1'
 hf upload $RepoId $Checkpoint . `
     --commit-message 'Publish self-contained GPTQ Q4 g32 v1.1.0'

@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 GIB = 1024**3
-DEFAULT_CHECKPOINT_DIR = Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32")
+DEFAULT_CHECKPOINT_DIR = Path("/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32")
 DEFAULT_EVALUATION_REPORT = Path("var/q4-quality-evaluation.json")
 DEFAULT_LICENSE = Path("docs/licenses/APACHE-2.0.txt")
 EXPECTED_MODEL_ID = "google/diffusiongemma-26B-A4B-it"
@@ -554,7 +554,7 @@ Download the immutable release into ModelDeck's expected checkpoint directory:
 ```powershell
 hf download ozyjay/diffusiongemma-26b-a4b-it-modeldeck-gptq-q4-g32 `
     --revision v1.1.0 `
-    --local-dir var/diffusiongemma-26b-a4b-it-gptq-q4-g32
+    --local-dir /mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32
 ```
 
 Then start the isolated worker from the ModelDeck repository:

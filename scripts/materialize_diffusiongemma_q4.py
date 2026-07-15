@@ -28,7 +28,7 @@ from transformers import (
     GenerationConfig,
 )
 
-DEFAULT_CHECKPOINT_DIR = Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32")
+DEFAULT_CHECKPOINT_DIR = Path("/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32")
 EXPERT_SUFFIXES = (
     ".experts.gate_up_proj",
     ".experts.down_proj",

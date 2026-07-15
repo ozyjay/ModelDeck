@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$CheckpointDir = 'var/diffusiongemma-26b-a4b-it-gptq-q4-g32',
+    [string]$CheckpointDir = '/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32',
 
     [string]$OutputDir,
 

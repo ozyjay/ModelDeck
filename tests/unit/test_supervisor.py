@@ -102,7 +102,7 @@ def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, t
     assert launch.command[0] == str(runtime_python.absolute())
     assert "--cache-root" not in launch.command
     assert launch.command[launch.command.index("--q4-checkpoint-dir") + 1].endswith(
-        "diffusiongemma-26b-a4b-it-gptq-q4-g32"
+        "/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32"
     )
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"

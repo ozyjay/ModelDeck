@@ -97,7 +97,7 @@ and release evaluation.
 ```
 
 The default checkpoint directory is
-`var/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
+`/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
 reports quantization and Q4 invocation metrics, and remains local-files-only.
 
 Upgrade an existing v1 expert-delta checkpoint to the self-contained v2 format without

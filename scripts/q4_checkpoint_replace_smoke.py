@@ -7,8 +7,6 @@ import time
 from pathlib import Path
 
 import torch
-from transformers import AutoProcessor, DiffusionGemmaForBlockDiffusion
-
 from q4_direct_load_smoke import load_manifest, load_q4_layers
 from q4_expert_probe import synchronise
 from q4_hybrid_smoke import decode_generated, generate, make_inputs
@@ -18,6 +16,7 @@ from q4_inventory import (
     DEFAULT_REVISION,
     find_local_snapshot,
 )
+from transformers import AutoProcessor, DiffusionGemmaForBlockDiffusion
 
 GIB = 1024**3
 
@@ -41,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-dir",
         type=Path,
-        default=Path("var/diffusiongemma-26b-a4b-it-gptq-q4-g32"),
+        default=Path("/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32"),
     )
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--denoising-steps", type=int, default=48)
@@ -127,11 +126,7 @@ def main() -> None:
     routed_tokens = sum(layer.q4_tokens for layer in q4_layers)
     print(f"Generation: {generation_seconds:.3f} s")
     print(f"Generated text: {text!r}")
-    print(
-        "Q4 invocation: "
-        f"gate_calls={gate_calls}, down_calls={down_calls}, "
-        f"tokens={routed_tokens}"
-    )
+    print(f"Q4 invocation: gate_calls={gate_calls}, down_calls={down_calls}, tokens={routed_tokens}")
 
     payload = {
         "model_id": args.model_id,
