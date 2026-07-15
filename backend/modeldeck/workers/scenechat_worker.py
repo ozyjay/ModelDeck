@@ -16,7 +16,6 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -42,6 +41,20 @@ MAX_IMAGE_DIMENSION = 4096
 MAX_IMAGE_PIXELS = 16_000_000
 SUPPORTED_MIME_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG"}
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
+APPROVED_FP32_BUFFER_SUFFIXES = (
+    "input_min",
+    "input_max",
+    "output_min",
+    "output_max",
+    "inv_timescales",
+    "softcap",
+    "inv_freq",
+    "original_inv_freq",
+    "layer_scalar",
+    "embed_scale",
+    "std_bias",
+    "std_scale",
+)
 
 
 @dataclass(frozen=True)
@@ -160,7 +173,7 @@ class TransformersSceneChatEngine:
             raise RuntimeError(f"Expected Gemma4ForConditionalGeneration, received {type(model).__name__}")
         model.to(device)
         model.eval()
-        self._validate_placement(model, device, dtype)
+        placement_details = self._validate_placement(model, device, dtype)
         self.torch = torch
         self.processor = processor
         self.model = model
@@ -176,6 +189,7 @@ class TransformersSceneChatEngine:
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
+            **placement_details,
             "load_seconds": round(time.perf_counter() - started, 4),
             "snapshot_path": str(snapshot),
         }
@@ -209,22 +223,44 @@ class TransformersSceneChatEngine:
         return snapshot.resolve(strict=True)
 
     @staticmethod
-    def _validate_placement(model: Any, device: Any, dtype: Any) -> None:
-        unexpected_devices: set[str] = set()
-        unexpected_dtypes: set[str] = set()
-        for tensor in chain(model.parameters(), model.buffers()):
-            if tensor.device != device:
-                unexpected_devices.add(str(tensor.device))
-            if tensor.is_floating_point() and tensor.dtype != dtype:
-                unexpected_dtypes.add(str(tensor.dtype))
+    def _validate_placement(model: Any, device: Any, dtype: Any) -> dict[str, Any]:
+        unexpected_devices: list[str] = []
+        unexpected_dtypes: list[str] = []
+        parameter_dtypes: set[str] = set()
+        buffer_dtypes: set[str] = set()
+        approved_fp32_buffers: list[str] = []
+        for name, parameter in model.named_parameters():
+            if parameter.device != device:
+                unexpected_devices.append(f"parameter {name}={parameter.device}")
+            if parameter.is_floating_point():
+                parameter_dtypes.add(str(parameter.dtype))
+                if parameter.dtype != dtype:
+                    unexpected_dtypes.append(f"parameter {name}={parameter.dtype}")
+        for name, buffer in model.named_buffers():
+            if buffer.device != device:
+                unexpected_devices.append(f"buffer {name}={buffer.device}")
+            if not buffer.is_floating_point():
+                continue
+            buffer_dtypes.add(str(buffer.dtype))
+            if buffer.dtype == dtype:
+                continue
+            if str(buffer.dtype) == "torch.float32" and name.endswith(APPROVED_FP32_BUFFER_SUFFIXES):
+                approved_fp32_buffers.append(name)
+                continue
+            unexpected_dtypes.append(f"buffer {name}={buffer.dtype}")
         if unexpected_devices:
             raise RuntimeError(
-                f"Model contains parameters outside cuda:0: {', '.join(sorted(unexpected_devices))}"
+                "Model contains tensors outside cuda:0: " + ", ".join(sorted(unexpected_devices)[:10])
             )
         if unexpected_dtypes:
             raise RuntimeError(
-                f"Model contains unexpected floating dtypes: {', '.join(sorted(unexpected_dtypes))}"
+                "Model contains unexpected floating dtypes: " + ", ".join(sorted(unexpected_dtypes)[:10])
             )
+        return {
+            "parameter_dtypes": sorted(parameter_dtypes),
+            "buffer_dtypes": sorted(buffer_dtypes),
+            "approved_fp32_buffer_count": len(approved_fp32_buffers),
+        }
 
     def warmup(self) -> None:
         image = Image.new("RGB", (64, 64), color=(80, 100, 120))

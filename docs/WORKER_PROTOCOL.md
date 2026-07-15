@@ -91,6 +91,12 @@ template, and image processing; neither the gateway nor SceneChat loads a tokeni
 processor. Readiness remains false until local processor/model loading and a one-token
 synthetic-image warm-up have succeeded.
 
+All trainable floating-point parameters must be BF16 on `cuda:0`. Gemma 4's named rotary,
+scaling, range, soft-cap, and standardisation buffers may remain FP32 where Transformers
+5.13.0 deliberately uses FP32 for numerical stability; any FP32 parameter, unknown mixed
+buffer, CPU tensor, or disk offload still fails readiness. Metrics report the detected
+parameter/buffer dtypes and the count of approved FP32 numerical buffers.
+
 The OpenAI-compatible request contains one user message with exactly one JPEG or PNG data
 URL followed by one text part. The text must exactly match one of the versioned SceneChat
 contract prompts. The worker extracts only the curated question, places the canonical

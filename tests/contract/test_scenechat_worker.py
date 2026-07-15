@@ -588,6 +588,71 @@ def test_snapshot_resolution_requires_exact_revision_and_complete_files(tmp_path
     assert engine._validate_snapshot() == snapshot.resolve()
 
 
+class FakePlacementTensor:
+    def __init__(self, *, device: str = "cuda:0", dtype: str = "torch.bfloat16") -> None:
+        self.device = device
+        self.dtype = dtype
+
+    def is_floating_point(self) -> bool:
+        return True
+
+
+class FakePlacementModel:
+    def __init__(
+        self,
+        *,
+        parameter_dtype: str = "torch.bfloat16",
+        buffers: list[tuple[str, FakePlacementTensor]] | None = None,
+    ) -> None:
+        self.parameter_dtype = parameter_dtype
+        self._buffers = buffers or []
+
+    def named_parameters(self):
+        return [("language_model.weight", FakePlacementTensor(dtype=self.parameter_dtype))]
+
+    def named_buffers(self):
+        return self._buffers
+
+
+def test_placement_accepts_only_gemma4_numerical_fp32_buffers() -> None:
+    model = FakePlacementModel(
+        buffers=[
+            ("language_model.rotary_emb.inv_freq", FakePlacementTensor(dtype="torch.float32")),
+            ("vision_tower.embed_scale", FakePlacementTensor(dtype="torch.float32")),
+        ]
+    )
+
+    details = TransformersSceneChatEngine._validate_placement(
+        model,
+        "cuda:0",
+        "torch.bfloat16",
+    )
+
+    assert details["parameter_dtypes"] == ["torch.bfloat16"]
+    assert details["buffer_dtypes"] == ["torch.float32"]
+    assert details["approved_fp32_buffer_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        FakePlacementModel(parameter_dtype="torch.float32"),
+        FakePlacementModel(
+            buffers=[("unexpected_running_value", FakePlacementTensor(dtype="torch.float32"))]
+        ),
+    ],
+)
+def test_placement_still_rejects_fp32_parameters_and_unknown_buffers(
+    model: FakePlacementModel,
+) -> None:
+    with pytest.raises(RuntimeError, match="unexpected floating dtypes"):
+        TransformersSceneChatEngine._validate_placement(
+            model,
+            "cuda:0",
+            "torch.bfloat16",
+        )
+
+
 async def _ready(app: Any) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
