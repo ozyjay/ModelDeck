@@ -29,3 +29,18 @@ jobs from local diffusion providers after a gateway restart. Diffusion request t
 default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECONDS`.
 `fast-chat` and `token-explainer` prefer the live Qwen worker when ready and fall back
 explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.
+
+### Native autoregressive trace token metadata
+
+`POST /native/autoregressive/trace` preserves the existing trace events, probabilities,
+alternatives, readiness, errors, metrics, and `prompt_token_ids`. Its non-streaming response
+adds `prompt_tokens`, `user_prompt_token_ids`, and `user_prompt_tokens` as documented in the
+[worker protocol](WORKER_PROTOCOL.md#autoregressive-worker).
+
+`prompt_token_ids` and `prompt_tokens` describe the complete inference context and align
+one-to-one. `user_prompt_tokens` is the safe public-display view of only the latest
+user-entered prompt; it does not contain hidden system instructions or chat-template control
+tokens and aligns with `user_prompt_token_ids`. These values come from the selected worker's
+tokenizer. The gateway only validates and propagates them. Invalid or misaligned successful
+worker metadata is returned as HTTP 502 with `invalid_worker_trace_metadata`, rather than as
+a misleading trace.

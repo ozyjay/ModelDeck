@@ -9,6 +9,51 @@ runtime, explicit generation family, model revision, device, state, and readines
 Canonical routes are `POST /v1/chat/completions`, `/v1/completions`, and
 `/native/autoregressive/trace`. A trace records prompt token IDs, selected generated token
 ID/string, normalised probability, top-k alternatives, accumulated text, and timestamp.
+The trace response also includes worker-tokenizer-owned readable prompt metadata:
+
+- `prompt_token_ids` is the complete tokenised inference context, including system
+  instructions, chat-template control tokens, and the assistant-generation marker.
+- `prompt_tokens` is that same complete context decoded one token at a time by the worker's
+  exact tokenizer. It includes special tokens and aligns one-to-one with
+  `prompt_token_ids`.
+- `user_prompt_token_ids` and `user_prompt_tokens` contain only the latest user message.
+  They exclude system instructions, earlier messages, role wrappers, generation markers,
+  and other chat-template controls. `user_prompt_tokens` is the safe field for a public
+  prompt-token display.
+
+For a plain `prompt` request, the complete context may include tokenizer-added special
+tokens while the user fields represent the prompt text without automatically inserted
+special tokens. For a `messages` request, the complete fields describe the rendered chat
+template used for inference, while the user fields are tokenised directly from the latest
+user message content by the same worker tokenizer. Per-token decoding disables special-token
+skipping and tokenisation-space clean-up so whitespace and token boundaries are preserved as
+accurately as the tokenizer permits. The gateway validates these alignments and never loads
+or substitutes a tokenizer.
+
+Example non-streaming response (generation fields abbreviated):
+
+```json
+{
+  "request_id": "8d638d96-23ca-4ce5-bfa1-f12cf131947e",
+  "model": "token-explainer",
+  "prompt_token_ids": [151644, 8948, 198, 9707, 151645, 198, 151644, 872, 198, 9707, 151645, 198, 151644, 77091, 198],
+  "prompt_tokens": ["<|im_start|>", "system", "\n", "Be concise.", "<|im_end|>", "\n", "<|im_start|>", "user", "\n", "Hello", "<|im_end|>", "\n", "<|im_start|>", "assistant", "\n"],
+  "user_prompt_token_ids": [9707],
+  "user_prompt_tokens": ["Hello"],
+  "events": [
+    {
+      "step": 0,
+      "selected": {"token_id": 9707, "token": "Hello", "probability": 0.81},
+      "alternatives": [],
+      "text_so_far": "Hello",
+      "complete": false
+    }
+  ],
+  "metrics": {"generated_tokens": 1}
+}
+```
+
+Token strings depend on the selected model tokenizer; the values above are illustrative.
 These are observable model outputs and must not be described as private reasoning.
 
 The implemented ROCm worker supports local-only pinned load, disabled trusted remote

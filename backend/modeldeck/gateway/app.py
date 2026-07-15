@@ -204,8 +204,13 @@ async def proxy_request(
         )
     try:
         payload = await response.aread()
+        response_payload = json_loads(payload)
+        if path == "/native/autoregressive/trace" and response.is_success:
+            metadata_error = trace_token_metadata_error(response_payload)
+            if metadata_error:
+                return invalid_trace_metadata(selected.id, metadata_error)
         return JSONResponse(
-            json_loads(payload),
+            response_payload,
             status_code=response.status_code,
             headers={"x-modeldeck-provider": selected.id},
         )
@@ -318,6 +323,46 @@ def unavailable(alias: str, family: str) -> JSONResponse:
             }
         },
         status_code=503,
+    )
+
+
+def trace_token_metadata_error(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return "trace response must be a JSON object"
+    prompt_ids = payload.get("prompt_token_ids")
+    prompt_tokens = payload.get("prompt_tokens")
+    user_ids = payload.get("user_prompt_token_ids")
+    user_tokens = payload.get("user_prompt_tokens")
+    if not isinstance(prompt_ids, list) or not all(
+        isinstance(token_id, int) and not isinstance(token_id, bool) for token_id in prompt_ids
+    ):
+        return "prompt_token_ids must be an array of integers"
+    if not isinstance(prompt_tokens, list) or not all(isinstance(token, str) for token in prompt_tokens):
+        return "prompt_tokens must be an array of strings"
+    if len(prompt_tokens) != len(prompt_ids):
+        return "prompt_tokens must align one-to-one with prompt_token_ids"
+    if not isinstance(user_ids, list) or not all(
+        isinstance(token_id, int) and not isinstance(token_id, bool) for token_id in user_ids
+    ):
+        return "user_prompt_token_ids must be an array of integers"
+    if not isinstance(user_tokens, list) or not all(isinstance(token, str) for token in user_tokens):
+        return "user_prompt_tokens must be an array of strings"
+    if len(user_tokens) != len(user_ids):
+        return "user_prompt_tokens must align one-to-one with user_prompt_token_ids"
+    return None
+
+
+def invalid_trace_metadata(provider_id: str, reason: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": {
+                "code": "invalid_worker_trace_metadata",
+                "message": f"Local provider '{provider_id}' returned invalid trace token metadata: {reason}.",
+                "provider": provider_id,
+            }
+        },
+        status_code=502,
+        headers={"x-modeldeck-provider": provider_id},
     )
 
 

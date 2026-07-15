@@ -6,7 +6,13 @@ from typing import Any
 
 import httpx
 import pytest
-from modeldeck.workers.autoregressive_worker import EngineConfig, GenerationRequest, create_app
+from fastapi import HTTPException
+from modeldeck.workers.autoregressive_worker import (
+    EngineConfig,
+    GenerationRequest,
+    _trace_token_metadata,
+    create_app,
+)
 
 
 class FakeEngine:
@@ -52,6 +58,9 @@ class FakeEngine:
                 "selected": {"token_id": step + 10, "token": token, "probability": 0.8},
                 "alternatives": [{"token_id": step + 20, "token": " other", "probability": 0.2}],
                 "prompt_token_ids": [1, 2] if step == 0 else None,
+                "prompt_tokens": ["<bos>", "Hi"] if step == 0 else None,
+                "user_prompt_token_ids": [2] if step == 0 else None,
+                "user_prompt_tokens": ["Hi"] if step == 0 else None,
                 "generated_token_ids": list(range(10, 11 + step)),
                 "text_so_far": text,
                 "timestamp": 1.0 + step,
@@ -93,6 +102,9 @@ async def test_worker_load_warmup_trace_and_stream_contracts() -> None:
     assert warmup.json()["ready"] is True
     assert engine.loaded and engine.warmed
     assert trace["prompt_token_ids"] == [1, 2]
+    assert trace["prompt_tokens"] == ["<bos>", "Hi"]
+    assert trace["user_prompt_token_ids"] == [2]
+    assert trace["user_prompt_tokens"] == ["Hi"]
     assert trace["events"][-1]["text_so_far"] == "Hello world"
     assert trace["metrics"]["generated_tokens"] == 2
     assert "event: token" in stream.text
@@ -120,3 +132,17 @@ async def test_worker_cancellation_route_sets_only_known_request() -> None:
     assert known.json()["ok"] is True
     assert unknown.json()["ok"] is False
     assert cancellation.is_set()
+
+
+def test_worker_rejects_misaligned_trace_token_metadata() -> None:
+    events = [
+        {
+            "prompt_token_ids": [1, 2],
+            "prompt_tokens": ["<bos>"],
+            "user_prompt_token_ids": [2],
+            "user_prompt_tokens": ["Hi"],
+        }
+    ]
+
+    with pytest.raises(HTTPException, match="one entry for every prompt_token_ids entry"):
+        _trace_token_metadata(events)

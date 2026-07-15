@@ -53,10 +53,30 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
                     "stream": True,
                 },
             )
+            trace = await client.post(
+                "/native/autoregressive/trace",
+                json={
+                    "model": "token-explainer",
+                    "messages": [
+                        {"role": "system", "content": "hidden policy"},
+                        {"role": "user", "content": "first question"},
+                        {"role": "assistant", "content": "first answer"},
+                        {"role": "user", "content": "latest  question"},
+                    ],
+                    "max_tokens": 2,
+                },
+            )
             cancellation = await client.post("/v1/requests/gateway-stream/cancel")
         assert stream.status_code == 200
         assert stream.headers["x-modeldeck-provider"] == "mock-ar"
         assert "event: token" in stream.text
+        assert trace.status_code == 200
+        assert trace.headers["x-modeldeck-provider"] == "mock-ar"
+        assert trace.json()["prompt_tokens"][:3] == ["hidden", " ", "policy"]
+        assert trace.json()["user_prompt_tokens"] == ["latest", "  ", "question"]
+        assert "hidden" not in trace.json()["user_prompt_tokens"]
+        assert len(trace.json()["prompt_token_ids"]) == len(trace.json()["prompt_tokens"])
+        assert len(trace.json()["user_prompt_token_ids"]) == len(trace.json()["user_prompt_tokens"])
         assert cancellation.json()["ok"] is True
         assert cancellation.json()["providers"] == ["mock-ar"]
     finally:

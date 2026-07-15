@@ -166,6 +166,10 @@ class TransformersAutoregressiveEngine:
         torch = self.torch
         encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
         prompt_ids = encoded["input_ids"][0].tolist()
+        prompt_tokens = _decode_tokens(self.tokenizer, prompt_ids)
+        user_prompt = _latest_user_prompt(body)
+        user_prompt_ids = _tokenise_without_special_tokens(self.tokenizer, user_prompt)
+        user_prompt_tokens = _decode_tokens(self.tokenizer, user_prompt_ids)
         if len(prompt_ids) + body.max_tokens > self.config.context_length:
             raise ValueError(
                 f"Prompt plus output exceeds configured context length {self.config.context_length}"
@@ -241,6 +245,9 @@ class TransformersAutoregressiveEngine:
                     )
                 ],
                 "prompt_token_ids": prompt_ids if step == 0 else None,
+                "prompt_tokens": prompt_tokens if step == 0 else None,
+                "user_prompt_token_ids": user_prompt_ids if step == 0 else None,
+                "user_prompt_tokens": user_prompt_tokens if step == 0 else None,
                 "generated_token_ids": list(generated),
                 "text_so_far": text_so_far,
                 "timestamp": time.time(),
@@ -429,11 +436,12 @@ async def _trace_response(request: Request, body: GenerationRequest, engine: Aut
                 list,
                 engine.trace(prompt=prompt, body=body, cancellation=cancellation),
             )
+            token_metadata = _trace_token_metadata(events)
             request.app.state.requests += 1
             return {
                 "request_id": request_id,
                 "model": body.model,
-                "prompt_token_ids": events[0].get("prompt_token_ids") if events else [],
+                **token_metadata,
                 "events": events,
                 "metrics": _request_metrics(events, started),
             }
@@ -501,6 +509,76 @@ def _next_event(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
         return next(iterator)
     except StopIteration:
         return None
+
+
+def _latest_user_prompt(body: GenerationRequest) -> str:
+    if not body.messages:
+        return body.prompt or ""
+    return next(
+        (message.content for message in reversed(body.messages) if message.role == "user"),
+        "",
+    )
+
+
+def _tokenise_without_special_tokens(tokenizer: Any, text: str) -> list[int]:
+    encoded = tokenizer(text, add_special_tokens=False)
+    token_ids = encoded["input_ids"]
+    if hasattr(token_ids, "tolist"):
+        token_ids = token_ids.tolist()
+    if token_ids and isinstance(token_ids[0], list):
+        token_ids = token_ids[0]
+    return [int(token_id) for token_id in token_ids]
+
+
+def _decode_tokens(tokenizer: Any, token_ids: list[int]) -> list[str]:
+    return [
+        str(
+            tokenizer.decode(
+                [token_id],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+        )
+        for token_id in token_ids
+    ]
+
+
+def _trace_token_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:
+    first = events[0] if events else {}
+    metadata = {
+        "prompt_token_ids": first.get("prompt_token_ids", []),
+        "prompt_tokens": first.get("prompt_tokens", []),
+        "user_prompt_token_ids": first.get("user_prompt_token_ids", []),
+        "user_prompt_tokens": first.get("user_prompt_tokens", []),
+    }
+    error = _token_metadata_error(metadata)
+    if error:
+        raise HTTPException(500, f"Worker produced invalid trace token metadata: {error}")
+    return metadata
+
+
+def _token_metadata_error(metadata: dict[str, Any]) -> str | None:
+    prompt_ids = metadata.get("prompt_token_ids")
+    prompt_tokens = metadata.get("prompt_tokens")
+    user_ids = metadata.get("user_prompt_token_ids")
+    user_tokens = metadata.get("user_prompt_tokens")
+    if not isinstance(prompt_ids, list) or not all(
+        isinstance(token_id, int) and not isinstance(token_id, bool) for token_id in prompt_ids
+    ):
+        return "prompt_token_ids must be an array of integers"
+    if not isinstance(prompt_tokens, list) or not all(isinstance(token, str) for token in prompt_tokens):
+        return "prompt_tokens must be an array of strings"
+    if len(prompt_tokens) != len(prompt_ids):
+        return "prompt_tokens must contain one entry for every prompt_token_ids entry"
+    if not isinstance(user_ids, list) or not all(
+        isinstance(token_id, int) and not isinstance(token_id, bool) for token_id in user_ids
+    ):
+        return "user_prompt_token_ids must be an array of integers"
+    if not isinstance(user_tokens, list) or not all(isinstance(token, str) for token in user_tokens):
+        return "user_prompt_tokens must be an array of strings"
+    if len(user_tokens) != len(user_ids):
+        return "user_prompt_tokens must contain one entry for every user_prompt_token_ids entry"
+    return None
 
 
 def _request_metrics(events: list[dict[str, Any]], started: float) -> dict[str, Any]:

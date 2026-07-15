@@ -4,6 +4,7 @@ import httpx
 import modeldeck.gateway.app as gateway_module
 import pytest
 from modeldeck.gateway import create_gateway_app
+from modeldeck.gateway.app import invalid_trace_metadata, json_loads, trace_token_metadata_error
 
 
 @pytest.mark.asyncio
@@ -51,3 +52,38 @@ async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch) -> 
     assert models["qwen-0-5b"]["effective_provider"] == "qwen-small-rocm"
     assert models["qwen-1-5b"]["effective_provider"] == "qwen-1-5b-rocm"
     assert models["qwen-3b"]["effective_provider"] == "qwen-3b-rocm"
+
+
+def test_gateway_trace_metadata_validation_rejects_misaligned_tokens() -> None:
+    payload = {
+        "prompt_token_ids": [1, 2],
+        "prompt_tokens": ["only one"],
+        "user_prompt_token_ids": [2],
+        "user_prompt_tokens": ["question"],
+    }
+
+    assert trace_token_metadata_error(payload) == (
+        "prompt_tokens must align one-to-one with prompt_token_ids"
+    )
+
+
+def test_gateway_trace_metadata_validation_accepts_aligned_tokens() -> None:
+    payload = {
+        "prompt_token_ids": [1, 2, 3],
+        "prompt_tokens": ["<bos>", "hello", " world"],
+        "user_prompt_token_ids": [2, 3],
+        "user_prompt_tokens": ["hello", " world"],
+    }
+
+    assert trace_token_metadata_error(payload) is None
+
+
+def test_gateway_invalid_trace_metadata_error_is_actionable_and_local() -> None:
+    response = invalid_trace_metadata("qwen-small-rocm", "prompt token arrays do not align")
+    payload = json_loads(response.body)
+
+    assert response.status_code == 502
+    assert response.headers["x-modeldeck-provider"] == "qwen-small-rocm"
+    assert payload["error"]["code"] == "invalid_worker_trace_metadata"
+    assert "qwen-small-rocm" in payload["error"]["message"]
+    assert "prompt token arrays do not align" in payload["error"]["message"]

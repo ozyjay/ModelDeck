@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import random
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -145,7 +146,24 @@ def create_app(
     async def trace(body: CompletionRequest):
         _require_family(family, GenerationFamily.AUTOREGRESSIVE)
         prompt = body.prompt or " ".join(message.get("content", "") for message in body.messages or [])
-        return {"request_id": str(uuid.uuid4()), "model": model_id, "events": _trace_events(prompt, body)}
+        prompt_token_ids, prompt_tokens = _mock_tokenise(prompt)
+        user_prompt = _latest_mock_user_prompt(body)
+        user_prompt_token_ids, user_prompt_tokens = _mock_tokenise(user_prompt)
+        return {
+            "request_id": str(uuid.uuid4()),
+            "model": model_id,
+            "prompt_token_ids": prompt_token_ids,
+            "prompt_tokens": prompt_tokens,
+            "user_prompt_token_ids": user_prompt_token_ids,
+            "user_prompt_tokens": user_prompt_tokens,
+            "events": _trace_events(
+                body,
+                prompt_token_ids=prompt_token_ids,
+                prompt_tokens=prompt_tokens,
+                user_prompt_token_ids=user_prompt_token_ids,
+                user_prompt_tokens=user_prompt_tokens,
+            ),
+        }
 
     @app.post("/v1/refine")
     async def refine(body: DiffusionRequest):
@@ -239,7 +257,14 @@ async def _stream_completion(
     yield "event: complete\ndata: [DONE]\n\n"
 
 
-def _trace_events(prompt: str, body: CompletionRequest) -> list[dict[str, Any]]:
+def _trace_events(
+    body: CompletionRequest,
+    *,
+    prompt_token_ids: list[int],
+    prompt_tokens: list[str],
+    user_prompt_token_ids: list[int],
+    user_prompt_tokens: list[str],
+) -> list[dict[str, Any]]:
     rng = random.Random(body.seed)
     tokens = ("A", " local", " model", " response", ".")
     events = []
@@ -257,10 +282,27 @@ def _trace_events(prompt: str, body: CompletionRequest) -> list[dict[str, Any]]:
                 ],
                 "text_so_far": text,
                 "timestamp": time.time(),
-                "prompt_token_ids": list(range(len(prompt.split()))),
+                "prompt_token_ids": prompt_token_ids,
+                "prompt_tokens": prompt_tokens if step == 0 else None,
+                "user_prompt_token_ids": user_prompt_token_ids if step == 0 else None,
+                "user_prompt_tokens": user_prompt_tokens if step == 0 else None,
             }
         )
     return events
+
+
+def _latest_mock_user_prompt(body: CompletionRequest) -> str:
+    if not body.messages:
+        return body.prompt or ""
+    return next(
+        (message.get("content", "") for message in reversed(body.messages) if message.get("role") == "user"),
+        "",
+    )
+
+
+def _mock_tokenise(text: str) -> tuple[list[int], list[str]]:
+    tokens = re.findall(r"\s+|[^\s]+", text)
+    return list(range(len(tokens))), tokens
 
 
 def _diffusion_frames(body: DiffusionRequest, job_id: str):

@@ -36,6 +36,10 @@ async def test_autoregressive_contract_includes_top_k_trace() -> None:
     assert trace["events"][0]["selected"]["token"]
     assert len(trace["events"][0]["alternatives"]) == 2
     assert "text_so_far" in trace["events"][0]
+    assert trace["prompt_tokens"] == ["Welcome"]
+    assert len(trace["prompt_token_ids"]) == len(trace["prompt_tokens"])
+    assert trace["user_prompt_tokens"] == ["Welcome"]
+    assert len(trace["user_prompt_token_ids"]) == len(trace["user_prompt_tokens"])
     assert "event: cancelled" in cancelled_stream.text
     assert "private" not in cancelled_stream.text
 
