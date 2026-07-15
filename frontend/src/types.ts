@@ -24,6 +24,8 @@ export interface Capabilities {
   iterative_refinement: boolean;
   intermediate_frames: boolean;
   seeded_generation: boolean;
+  image_input: boolean;
+  structured_output: boolean;
 }
 
 export interface Worker {

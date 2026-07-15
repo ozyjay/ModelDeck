@@ -15,6 +15,8 @@ const capabilities = {
   iterative_refinement: false,
   intermediate_frames: false,
   seeded_generation: true,
+  image_input: false,
+  structured_output: false,
 };
 
 const worker = {

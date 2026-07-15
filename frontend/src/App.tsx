@@ -405,6 +405,7 @@ function WorkersView({ workers, profiles, models, compatibility, pending, operat
 }) {
   const groups = [
     { title: "Qwen autoregressive", description: "Pinned Transformers workers for chat, completions, and token traces.", workers: workers.filter((worker) => worker.model_id.startsWith("Qwen/")) },
+    { title: "SceneChat vision language", description: "Pinned Gemma 4 compatibility worker for local image-and-text scene analysis on port 8000.", workers: workers.filter((worker) => worker.generation_family === "vision-language") },
     { title: "DiffusionGemma text diffusion", description: "Separate Q4 default and BF16 evaluation runtimes using the native refinement protocol.", workers: workers.filter((worker) => worker.generation_family === "text-diffusion" && worker.runtime !== "mock") },
     { title: "Mock and recovery", description: "Lifecycle fallbacks for development and demonstrated recovery only.", workers: workers.filter((worker) => worker.runtime === "mock") },
   ];
@@ -569,6 +570,8 @@ function capabilityLabels(capabilities: Worker["capabilities"]): string[] {
   if (capabilities.iterative_refinement) labels.push("Iterative refinement");
   if (capabilities.intermediate_frames) labels.push("Intermediate frames");
   if (capabilities.seeded_generation) labels.push("Seeded generation");
+  if (capabilities.image_input) labels.push("Image input");
+  if (capabilities.structured_output) labels.push("Structured output");
   return labels;
 }
 

@@ -76,3 +76,50 @@ waiting to replay the completed frame collection.
 
 The mock is deterministic and contract-shaped. It is not evidence that a real model or
 ROCm stack works.
+
+## SceneChat vision-language compatibility worker
+
+`scenechat-gemma4-e2b-rocm` is a ModelDeck-managed, exclusive worker that binds directly
+to `127.0.0.1:8000`. It is deliberately not routed through the stable port 8600 gateway
+while compatibility is under validation. Its public compatibility routes are authenticated
+`GET /v1/models`, `POST /v1/chat/completions`, and
+`POST /native/vision-language/smoke`.
+
+The worker accepts only `google/gemma-4-E2B-it` revision
+`9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`. It uses its own `Gemma4Processor`, pinned chat
+template, and image processing; neither the gateway nor SceneChat loads a tokenizer or
+processor. Readiness remains false until local processor/model loading and a one-token
+synthetic-image warm-up have succeeded.
+
+The OpenAI-compatible request contains one user message with exactly one JPEG or PNG data
+URL followed by one text part. The text must exactly match one of the versioned SceneChat
+contract prompts. The worker extracts only the curated question, places the canonical
+safety rules and visible-text invariant in the system role, and supplies an in-memory RGB
+image directly to the processor. External URLs, SVG, additional images, arbitrary prompts,
+streaming, and over-limit input are rejected.
+
+Example successful response:
+
+```json
+{
+  "id": "chatcmpl-e4f66ea6f7c748c6a2b28d93f82e932a",
+  "object": "chat.completion",
+  "created": 1784174400,
+  "model": "google/gemma-4-E2B-it",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "{\"summary\":\"A monitor is visible on a desk.\",\"objects\":[],\"relationships\":[],\"uncertainties\":[],\"safety_notes\":[]}"
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {"prompt_tokens": 624, "completion_tokens": 39, "total_tokens": 663}
+}
+```
+
+Output is returned only after strict schema and public-safety validation. A single JSON
+fence may be accepted internally, but successful content is reserialised as bare compact
+JSON. Invalid output returns `502 invalid_model_output`; it is never repaired, retried,
+fabricated, or replaced. One request may run at a time and a second is rejected immediately
+with 429. The worker is implemented, but is not Open Day ready until the physical gates pass.

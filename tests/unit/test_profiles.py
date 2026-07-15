@@ -35,6 +35,19 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert diffusion_q4.preferred_runtime == "text-diffusion-gptq-rocm"
     assert "cache_root" not in diffusion_q4.settings
     assert diffusion_q4.settings["q4_checkpoint_dir"].endswith("gptq-q4-g32")
+    scenechat = profiles["scenechat-gemma4-e2b-rocm"]
+    assert scenechat.model_id == "google/gemma-4-E2B-it"
+    assert scenechat.revision == "9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf"
+    assert scenechat.alias == "scenechat-vision"
+    assert scenechat.generation_family == "vision-language"
+    assert scenechat.preferred_runtime == "vision-language-transformers-rocm"
+    assert scenechat.lifecycle == "exclusive"
+    assert scenechat.port == 8000
+    assert scenechat.capabilities.chat == "compatibility-only"
+    assert scenechat.capabilities.streaming is False
+    assert scenechat.capabilities.image_input is True
+    assert scenechat.capabilities.structured_output is True
+    assert scenechat.settings["generation_timeout_seconds"] == 18
 
 
 def test_qwen_workers_are_distinct_pinned_local_profiles() -> None:
@@ -77,6 +90,14 @@ def test_qwen_json_manifests_match_the_active_allowlist() -> None:
     for filename in ("qwen-small-rocm.json", "qwen-1-5b-rocm.json", "qwen-3b-rocm.json"):
         document = ModelProfile.model_validate_json((profile_root / filename).read_text())
         assert document == profiles[document.id]
+
+
+def test_scenechat_json_manifest_matches_the_active_allowlist() -> None:
+    profiles = {profile.id: profile for profile in default_model_profiles()}
+    profile_root = Path(__file__).parents[2] / "profiles/models"
+    document = ModelProfile.model_validate_json((profile_root / "scenechat-gemma4-e2b-rocm.json").read_text())
+
+    assert document == profiles[document.id]
 
 
 def test_profile_rejects_unallowlisted_runtime() -> None:

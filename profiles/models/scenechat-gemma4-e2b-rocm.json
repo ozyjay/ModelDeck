@@ -1,0 +1,36 @@
+{
+  "id": "scenechat-gemma4-e2b-rocm",
+  "model_id": "google/gemma-4-E2B-it",
+  "revision": "9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf",
+  "alias": "scenechat-vision",
+  "generation_family": "vision-language",
+  "preferred_runtime": "vision-language-transformers-rocm",
+  "lifecycle": "exclusive",
+  "port": 8000,
+  "local_files_only": true,
+  "trust_remote_code": false,
+  "dtype": "bfloat16",
+  "capabilities": {
+    "chat": "compatibility-only",
+    "completions": false,
+    "streaming": false,
+    "cancellation": true,
+    "logits": false,
+    "top_k_trace": false,
+    "hidden_states": false,
+    "iterative_refinement": false,
+    "intermediate_frames": false,
+    "seeded_generation": false,
+    "image_input": true,
+    "structured_output": true
+  },
+  "settings": {
+    "context_length": 8192,
+    "maximum_new_tokens": 700,
+    "temperature": 0.1,
+    "startup_timeout_seconds": 600,
+    "warmup_timeout_seconds": 180,
+    "generation_timeout_seconds": 18,
+    "cache_root": "/mnt/work/models/huggingface/hub"
+  }
+}

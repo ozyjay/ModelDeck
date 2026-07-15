@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "modeldeck://scenechat/1/scene-analysis",
+  "title": "SceneChat scene analysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "objects", "relationships", "uncertainties", "safety_notes"],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1, "maxLength": 800},
+    "objects": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "description", "approximate_location"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1, "maxLength": 80},
+          "description": {"type": "string", "minLength": 1, "maxLength": 300},
+          "approximate_location": {"type": "string", "minLength": 1, "maxLength": 80}
+        }
+      }
+    },
+    "relationships": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+    "uncertainties": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 300}},
+    "safety_notes": {"type": "array", "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 300}}
+  }
+}

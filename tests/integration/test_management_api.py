@@ -31,6 +31,7 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
     assert {profile["generation_family"] for profile in profiles.json()} == {
         "autoregressive",
         "text-diffusion",
+        "vision-language",
     }
     assert (tmp_path / "modeldeck.sqlite3").exists()
 

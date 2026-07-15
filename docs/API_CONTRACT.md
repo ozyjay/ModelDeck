@@ -44,3 +44,17 @@ tokens and aligns with `user_prompt_token_ids`. These values come from the selec
 tokenizer. The gateway only validates and propagates them. Invalid or misaligned successful
 worker metadata is returned as HTTP 502 with `invalid_worker_trace_metadata`, rather than as
 a misleading trace.
+
+## Direct SceneChat compatibility API (`127.0.0.1:8000`)
+
+The managed SceneChat worker preserves the existing client contract at `GET /v1/models`
+and `POST /v1/chat/completions`, plus native smoke at
+`POST /native/vision-language/smoke`. These routes require
+`Authorization: Bearer <MODELDECK_SCENECHAT_API_KEY>`; the loopback development default is
+`local`. Lifecycle routes remain loopback-only for the supervisor.
+
+Chat accepts the exact pinned model, one user message, one base64 JPEG/PNG image followed
+by one approved SceneChat prompt, `temperature: 0.1`, `max_tokens` from 1 through 700,
+`response_format: {"type":"json_object"}`, and `stream: false`. Errors use a sanitised
+OpenAI-shaped `error` object with status 401, 413, 422, 429, 502, 503, or 504. This direct
+worker is intentionally absent from port 8600 routing during initial compatibility work.

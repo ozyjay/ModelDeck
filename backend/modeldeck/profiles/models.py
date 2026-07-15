@@ -12,6 +12,7 @@ ALLOWED_RUNTIMES = {
     "transformers-rocm",
     "text-diffusion-transformers-rocm",
     "text-diffusion-gptq-rocm",
+    "vision-language-transformers-rocm",
 }
 
 
@@ -58,11 +59,44 @@ class ModelProfile(BaseModel):
             and not self.capabilities.iterative_refinement
         ):
             raise ValueError("text-diffusion profiles must advertise iterative refinement")
+        if self.generation_family == GenerationFamily.VISION_LANGUAGE and not (
+            self.capabilities.image_input and self.capabilities.structured_output
+        ):
+            raise ValueError(
+                "Scene-compatible vision-language profiles must advertise image input and structured output"
+            )
         return self
 
 
 def default_model_profiles() -> list[ModelProfile]:
     return [
+        ModelProfile(
+            id="scenechat-gemma4-e2b-rocm",
+            model_id="google/gemma-4-E2B-it",
+            revision="9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf",
+            alias="scenechat-vision",
+            generation_family="vision-language",
+            preferred_runtime="vision-language-transformers-rocm",
+            lifecycle="exclusive",
+            port=8000,
+            dtype="bfloat16",
+            capabilities=CapabilitySet(
+                chat="compatibility-only",
+                streaming=False,
+                cancellation=True,
+                image_input=True,
+                structured_output=True,
+            ),
+            settings={
+                "context_length": 8192,
+                "maximum_new_tokens": 700,
+                "temperature": 0.1,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 180,
+                "generation_timeout_seconds": 18,
+                "cache_root": "/mnt/work/models/huggingface/hub",
+            },
+        ),
         ModelProfile(
             id="diffusiongemma-rocm",
             model_id="google/diffusiongemma-26B-A4B-it",

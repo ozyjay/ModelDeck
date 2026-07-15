@@ -373,6 +373,32 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_new_tokens", 128)),
         ]
         return WorkerLaunch(command=command, environment=environment)
+    if profile.preferred_runtime == "vision-language-transformers-rocm":
+        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+        if not python.is_file():
+            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
+        cache_root = profile.settings.get("cache_root")
+        if not cache_root:
+            raise ValueError("SceneChat worker requires an allowlisted Hugging Face cache root")
+        environment["HF_HUB_CACHE"] = str(cache_root)
+        environment["MODELDECK_SCENECHAT_API_KEY"] = os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
+        command = [
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.scenechat_worker",
+            *common,
+            "--cache-root",
+            str(cache_root),
+            "--dtype",
+            profile.dtype,
+            "--context-length",
+            str(profile.settings.get("context_length", 8192)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 700)),
+            "--generation-timeout-seconds",
+            str(profile.settings.get("generation_timeout_seconds", 18)),
+        ]
+        return WorkerLaunch(command=command, environment=environment)
     if profile.preferred_runtime in {
         "text-diffusion-transformers-rocm",
         "text-diffusion-gptq-rocm",
@@ -455,14 +481,31 @@ def port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 def redact_log(message: str) -> str:
     lowered = message.lower()
-    for marker in ("authorization:", "hf_token=", "api_key=", "prompt=", "generated_text="):
+    for marker in (
+        "authorization:",
+        "hf_token=",
+        "api_key=",
+        "prompt=",
+        "generated_text=",
+        "image_url=",
+        ";base64,",
+    ):
         index = lowered.find(marker)
         if index >= 0:
             return f"{message[:index]}{marker}[redacted]"
     if message.startswith("{"):
         try:
             payload = json.loads(message)
-            for key in ("prompt", "messages", "generated_text", "token", "api_key", "authorization"):
+            for key in (
+                "prompt",
+                "messages",
+                "generated_text",
+                "image_url",
+                "content",
+                "token",
+                "api_key",
+                "authorization",
+            ):
                 if key in payload:
                     payload[key] = "[redacted]"
             return json.dumps(payload, separators=(",", ":"))

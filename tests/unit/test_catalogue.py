@@ -35,3 +35,25 @@ def test_marks_incomplete_snapshot_partial(tmp_path: Path) -> None:
     snapshot.mkdir(parents=True)
     (snapshot / "weights.incomplete").write_bytes(b"partial")
     assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"
+
+
+def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--google--gemma-4-E2B-it" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Gemma4ForConditionalGeneration"],
+                "model_type": "gemma4",
+                "text_config": {"model_type": "gemma3_text"},
+                "vision_config": {"model_type": "siglip_vision_model"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "vision-language"
+    assert model["runnable"] is False

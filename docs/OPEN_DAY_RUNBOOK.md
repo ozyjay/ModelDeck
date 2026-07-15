@@ -14,6 +14,30 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
 5. Start the selected ROCm worker and wait for `ready`, not merely a PID. Confirm the
    gateway reports that ROCm profile as the effective provider before opening the demo.
 
+### SceneChat Gemma 4 preflight
+
+SceneChat uses a direct managed worker on port 8000 during compatibility validation, not
+the stable port 8600 gateway. Before the event:
+
+1. Provision `google/gemma-4-E2B-it` revision
+   `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf` with HuggingFacePull and Xet using one worker.
+   ModelDeck remains read-only and must not acquire or substitute model files.
+2. Run `pwsh -NoProfile -File scripts/verify_scenechat_snapshot.ps1`. Retain its immutable
+   file/blob, class, and dependency fingerprint with the compatibility evidence.
+3. Set the same `MODELDECK_SCENECHAT_API_KEY` for ModelDeck and SceneChat. Continue pointing
+   SceneChat's existing `VLLM_*` compatibility variables to
+   `http://127.0.0.1:8000/v1` and keep `VISION_PROVIDER=vllm` for this phase.
+4. Run `pwsh -NoProfile -File scripts/smoke_rocm_scenechat.ps1`. It preflights port 8000 and
+   the snapshot, starts Open Day mode, waits for readiness, exercises native smoke and both
+   `/v1` routes, then stops the worker and confirms process exit.
+
+SVG remains a trusted SceneChat replay format and does not invoke ModelDeck. Do not claim
+the worker is Open Day ready until the ten-request latency/memory run, 60-minute camera run,
+two-hour burn-in, physical safety fixtures, camera reconnect, clean restart, cold reboot,
+and operator handover pass against one complete fingerprint. If a physical gate fails,
+leave the worker stopped or incompatible and use SceneChat mock, replay, or live-camera-only
+mode. Never change precision, attention implementation, model, or provider automatically.
+
 ## Switching and recovery
 
 - Stop a worker from the dashboard before starting a conflicting exclusive model.

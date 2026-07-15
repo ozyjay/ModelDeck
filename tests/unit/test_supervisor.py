@@ -89,6 +89,30 @@ def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path)
     assert "LD_PRELOAD" not in launch.environment
 
 
+def test_scenechat_launch_is_allowlisted_offline_and_api_key_scoped(monkeypatch, tmp_path) -> None:
+    profile = next(
+        profile for profile in default_model_profiles() if profile.id == "scenechat-gemma4-e2b-rocm"
+    )
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+    monkeypatch.setenv("MODELDECK_SCENECHAT_API_KEY", "test-local-key")
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.scenechat_worker",
+    ]
+    assert launch.command[launch.command.index("--port") + 1] == "8000"
+    assert launch.command[launch.command.index("--cache-root") + 1] == ("/mnt/work/models/huggingface/hub")
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["MODELDECK_SCENECHAT_API_KEY"] == "test-local-key"
+
+
 def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-q4-rocm")
     runtime_python = tmp_path / "q4/bin/python"

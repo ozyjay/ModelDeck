@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -172,6 +173,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "seed": 7,
                         },
                     )
+                elif worker["generation_family"] == "vision-language":
+                    trace_response = await client.post(
+                        f"{endpoint}/native/vision-language/smoke",
+                        headers={
+                            "Authorization": (
+                                "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
+                            )
+                        },
+                    )
                 else:
                     trace_response = await client.post(
                         f"{endpoint}/v1/refine",
@@ -188,9 +198,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             model_payload = model_response.json()
             metrics_payload = metrics_response.json()
             trace_payload = trace_response.json()
-            smoke_events = trace_payload.get("events") or trace_payload.get("frames")
-            if not smoke_events:
-                raise RuntimeError("Smoke request returned no generation events")
+            smoke_evidence = (
+                trace_payload.get("events") or trace_payload.get("frames") or trace_payload.get("ok")
+            )
+            if not smoke_evidence:
+                raise RuntimeError("Smoke request returned no generation evidence")
             result = "tested-working"
             failure_class = None
             error_summary = None

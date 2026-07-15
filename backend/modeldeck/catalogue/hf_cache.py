@@ -60,6 +60,12 @@ def _generation_family(snapshot: Path) -> str | None:
     model_type = str(config.get("model_type", "")).lower()
     if "diffusion" in architectures or "diffusion" in model_type:
         return "text-diffusion"
+    if (
+        "multimodal" in architectures
+        or model_type == "gemma4"
+        or (config.get("vision_config") and config.get("text_config"))
+    ):
+        return "vision-language"
     if "causallm" in architectures or config.get("is_decoder"):
         return "autoregressive"
     return None

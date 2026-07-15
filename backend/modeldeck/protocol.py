@@ -51,6 +51,8 @@ class CapabilitySet(BaseModel):
     iterative_refinement: bool = False
     intermediate_frames: bool = False
     seeded_generation: bool = False
+    image_input: bool = False
+    structured_output: bool = False
 
 
 class WorkerHealth(BaseModel):
