@@ -140,5 +140,7 @@ fabricated, or replaced. One request may run at a time and a second is rejected 
 with 429. The worker is implemented, but is not Open Day ready until the physical gates pass.
 
 Validation failures record only the request ID, a safe failure category, completion-token
-count, effective token limit, whether that limit was reached, and elapsed time. Images,
-prompts, raw model output, visitor-facing text, credentials, and headers are never logged.
+count, effective token limit, whether that limit was reached, and elapsed time. Safety
+failures distinguish `prohibited_identity` from `prohibited_sensitive_attribute` without
+recording the matched text. Images, prompts, raw model output, visitor-facing text,
+credentials, and headers are never logged.

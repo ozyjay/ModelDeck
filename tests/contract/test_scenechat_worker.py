@@ -489,7 +489,11 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
         (json.dumps({"summary": "PRIVATE_SCHEMA_CONTENT"}), "schema_violation"),
         (
             json.dumps({**VALID_ANALYSIS, "summary": "PRIVATE_CONTENT: The person is a child."}),
-            "prohibited_content",
+            "prohibited_sensitive_attribute",
+        ),
+        (
+            json.dumps({**VALID_ANALYSIS, "summary": "PRIVATE_CONTENT: Their name is Visitor Name."}),
+            "prohibited_identity",
         ),
         ("```yaml\nPRIVATE_FENCED_CONTENT\n```", "unsupported_fence"),
     ],
@@ -527,6 +531,76 @@ async def test_non_truncation_validation_failures_use_safe_categories(
     assert "effective_token_limit=512" in diagnostic
     assert "token_limit_reached=False" in diagnostic
     assert output not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "The person is seated at a desk beside a monitor.",
+        "The monitor appears black and the wall appears white.",
+        "A person is standing near a black chair.",
+        "No facial recognition was performed.",
+    ],
+)
+async def test_safe_person_activity_and_object_colours_are_not_prohibited(summary: str) -> None:
+    output = json.dumps({**VALID_ANALYSIS, "summary": summary})
+    engine = FakeVisionEngine(output)
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(model_id="google/gemma-4-E2B-it", revision="pinned"),
+        engine=engine,
+    )
+
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json=request_payload(),
+            )
+
+    assert response.status_code == 200
+    assert json.loads(response.json()["choices"][0]["message"]["content"])["summary"] == summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "The person appears happy.",
+        "An adult is seated near the desk.",
+        "A disabled person is near the doorway.",
+        "The person was recognised as a visitor.",
+    ],
+)
+async def test_person_sensitive_attributes_and_identity_claims_remain_prohibited(
+    summary: str,
+) -> None:
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(model_id="google/gemma-4-E2B-it", revision="pinned"),
+        engine=FakeVisionEngine(json.dumps({**VALID_ANALYSIS, "summary": summary})),
+    )
+
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json=request_payload(),
+            )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invalid_model_output"
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,8 @@ IMAGE_CONTENT_INVARIANT = (
 OutputFailureCategory = Literal[
     "invalid_json",
     "schema_violation",
-    "prohibited_content",
+    "prohibited_identity",
+    "prohibited_sensitive_attribute",
     "unsupported_fence",
 ]
 
@@ -87,15 +88,26 @@ def system_messages(question: str) -> list[dict[str, Any]]:
 
 
 _JSON_FENCE = re.compile(r"\A```json\s*(\{.*\})\s*```\Z", re.DOTALL | re.IGNORECASE)
-_PROHIBITED_ASSERTIONS = re.compile(
-    r"\b(?:is|looks|appears|seems|identified as|recognised as)\s+"
-    r"(?:a\s+)?(?:child|teenager|adult|elderly|asian|black|white|aboriginal|"
+_SENSITIVE_ATTRIBUTE = (
+    r"(?:child|teenager|adult|elderly|asian|black|white|aboriginal|"
     r"christian|muslim|jewish|hindu|disabled|autistic|depressed|angry|happy|"
-    r"gay|straight|criminal|liberal|conservative)\b",
+    r"gay|straight|criminal|liberal|conservative)"
+)
+_PERSON_REFERENCE = r"(?:(?:a|an|the|this|that|one)\s+(?:person|individual)|they|he|she)"
+_PROHIBITED_SENSITIVE_ATTRIBUTE = re.compile(
+    rf"(?:\b{_PERSON_REFERENCE}\s+"
+    rf"(?:is|was|looks(?:\s+like)?|appears(?:\s+to\s+be)?|seems(?:\s+to\s+be)?|may\s+be|might\s+be|"
+    rf"identified\s+as|recognised\s+as)\s+(?:(?:a|an)\s+)?{_SENSITIVE_ATTRIBUTE}\b)"
+    rf"|(?:\b(?:a|an|the|this|that)\s+{_SENSITIVE_ATTRIBUTE}\s+(?:person|individual)\b)"
+    r"|(?:\b(?:a|an)\s+(?:child|teenager|adult)\s+(?:is|was|appears|seems)\b)",
     re.IGNORECASE,
 )
-_IDENTITY_ASSERTION = re.compile(
-    r"\b(?:the person is|identified as|recognised as|facial recognition|their name is)\b",
+_PROHIBITED_IDENTITY_ASSERTION = re.compile(
+    r"\b(?:their|his|her|the person's|this person's|that person's)\s+name\s+is\b"
+    r"|\b(?:a|an|the|this|that)\s+(?:person|individual)\s+(?:is|was)\s+"
+    r"(?:identified|recognised)\s+as\b"
+    r"|\b(?:identified|recognised)\s+(?:the|this|that)\s+(?:person|individual)\s+as\b"
+    r"|\bfacial\s+recognition\s+(?:identifies|identified|recognises|recognised|matches|matched)\b",
     re.IGNORECASE,
 )
 
@@ -122,10 +134,15 @@ def canonicalise_model_output(raw: str) -> tuple[str, SceneAnalysis]:
             f"Model output does not satisfy the SceneChat schema: {error}",
         ) from error
     serialised = analysis.model_dump_json(exclude_none=True)
-    if _PROHIBITED_ASSERTIONS.search(serialised) or _IDENTITY_ASSERTION.search(serialised):
+    if _PROHIBITED_SENSITIVE_ATTRIBUTE.search(serialised):
         raise ModelOutputValidationError(
-            "prohibited_content",
-            "Model output contains a prohibited person or sensitive-attribute assertion",
+            "prohibited_sensitive_attribute",
+            "Model output contains a prohibited sensitive-attribute assertion",
+        )
+    if _PROHIBITED_IDENTITY_ASSERTION.search(serialised):
+        raise ModelOutputValidationError(
+            "prohibited_identity",
+            "Model output contains a prohibited identity assertion",
         )
     return serialised, analysis
 
