@@ -16,17 +16,18 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
 
 ### SceneChat Gemma 4 preflight
 
-SceneChat uses a direct managed worker on port 8000 during compatibility validation, not
-the stable port 8600 gateway. Before the event:
+SceneChat uses the stable port 8600 gateway, which routes privately to its managed worker
+on port 8000. Before the event:
 
 1. Provision `google/gemma-4-E2B-it` revision
    `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf` with HuggingFacePull and Xet using one worker.
    ModelDeck remains read-only and must not acquire or substitute model files.
 2. Run `pwsh -NoProfile -File scripts/verify_scenechat_snapshot.ps1`. Retain its immutable
    file/blob, class, and dependency fingerprint with the compatibility evidence.
-3. Set the same `MODELDECK_SCENECHAT_API_KEY` for ModelDeck and SceneChat. Continue pointing
+3. Set `MODELDECK_SCENECHAT_API_KEY` for ModelDeck's private loopback worker hop. Point
    SceneChat's existing `VLLM_*` compatibility variables to
-   `http://127.0.0.1:8000/v1` and keep `VISION_PROVIDER=vllm` for this phase.
+   `http://127.0.0.1:8600/v1`, use model `scenechat-vision`, and keep
+   `VISION_PROVIDER=vllm` for this phase. SceneChat does not need the worker credential.
 4. Run `pwsh -NoProfile -File scripts/smoke_rocm_scenechat.ps1`. It preflights port 8000 and
    the snapshot, starts Open Day mode, waits for readiness, exercises native smoke and both
    `/v1` routes, then stops the worker and confirms process exit.

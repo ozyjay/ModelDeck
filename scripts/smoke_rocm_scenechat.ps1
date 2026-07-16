@@ -4,11 +4,9 @@ Set-Location (Join-Path $PSScriptRoot '..')
 & (Join-Path $PSScriptRoot 'verify_scenechat_snapshot.ps1') | Out-Host
 
 $ManagementUrl = 'http://127.0.0.1:3600'
-$WorkerUrl = 'http://127.0.0.1:8000'
+$WorkerUrl = 'http://127.0.0.1:8600'
 $WorkerId = 'scenechat-gemma4-e2b-rocm'
-$ModelId = 'google/gemma-4-E2B-it'
-$ApiKey = if ($Env:MODELDECK_SCENECHAT_API_KEY) { $Env:MODELDECK_SCENECHAT_API_KEY } else { 'local' }
-$Headers = @{ Authorization = "Bearer $ApiKey" }
+$ModelId = 'scenechat-vision'
 $StartedServices = $false
 $WorkerStopped = $false
 
@@ -25,8 +23,8 @@ try {
         -TimeoutSec 60
     if (-not $Native.ok) { throw 'The native SceneChat synthetic-image smoke failed.' }
 
-    $Models = Invoke-RestMethod -Uri "$WorkerUrl/v1/models" -Headers $Headers -TimeoutSec 5
-    if ($Models.data[0].id -ne $ModelId) { throw 'The OpenAI model listing returned an unexpected model.' }
+    $Models = Invoke-RestMethod -Uri "$WorkerUrl/v1/models" -TimeoutSec 5
+    if ($ModelId -notin @($Models.data.id)) { throw 'The gateway did not advertise SceneChat.' }
 
     $ImageBase64 = & .venv-rocm72/bin/python -c "import base64,io; from PIL import Image; b=io.BytesIO(); Image.new('RGB',(64,64),(70,100,130)).save(b,'PNG'); print(base64.b64encode(b.getvalue()).decode())"
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the approved non-visitor PNG fixture.' }
@@ -47,7 +45,7 @@ try {
         stream = $false
     } | ConvertTo-Json -Depth 12 -Compress
     $Completion = Invoke-RestMethod -Method Post -Uri "$WorkerUrl/v1/chat/completions" `
-        -Headers $Headers -ContentType 'application/json' -Body $Payload -TimeoutSec 75
+        -ContentType 'application/json' -Body $Payload -TimeoutSec 75
     $Analysis = $Completion.choices[0].message.content | ConvertFrom-Json
     if (-not $Analysis.summary) { throw 'The OpenAI-compatible response did not contain a scene summary.' }
 

@@ -405,7 +405,7 @@ function WorkersView({ workers, profiles, models, compatibility, pending, operat
 }) {
   const groups = [
     { title: "Qwen autoregressive", description: "Pinned Transformers workers for chat, completions, and token traces.", workers: workers.filter((worker) => worker.model_id.startsWith("Qwen/")) },
-    { title: "SceneChat vision language", description: "Pinned Gemma 4 compatibility worker for local image-and-text scene analysis on port 8000.", workers: workers.filter((worker) => worker.generation_family === "vision-language") },
+    { title: "SceneChat vision language", description: "Pinned Gemma 4 worker for local image-and-text scene analysis through the stable gateway.", workers: workers.filter((worker) => worker.generation_family === "vision-language") },
     { title: "DiffusionGemma text diffusion", description: "Separate Q4 default and BF16 evaluation runtimes using the native refinement protocol.", workers: workers.filter((worker) => worker.generation_family === "text-diffusion" && worker.runtime !== "mock") },
     { title: "Mock and recovery", description: "Lifecycle fallbacks for development and demonstrated recovery only.", workers: workers.filter((worker) => worker.runtime === "mock") },
   ];

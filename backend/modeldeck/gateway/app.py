@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -25,6 +26,7 @@ def create_gateway_app(
         "qwen-0-5b": [defaults["qwen-small-rocm"]],
         "qwen-1-5b": [defaults["qwen-1-5b-rocm"]],
         "qwen-3b": [defaults["qwen-3b-rocm"]],
+        "scenechat-vision": [defaults["scenechat-gemma4-e2b-rocm"]],
         "text-diffusion": [
             defaults["diffusiongemma-q4-rocm"],
             defaults["mock-diffusion"],
@@ -89,7 +91,13 @@ def create_gateway_app(
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
-        return await proxy_request(request, routes, "/v1/chat/completions", "fast-chat")
+        return await proxy_request(
+            request,
+            routes,
+            "/v1/chat/completions",
+            "fast-chat",
+            timeout_seconds=configured.scenechat_timeout_seconds,
+        )
 
     @app.post("/v1/completions")
     async def completions(request: Request):
@@ -159,8 +167,14 @@ def create_gateway_app(
         return {"ok": bool(cancelled), "request_id": request_id, "providers": cancelled}
 
     @app.post("/v1/vision/analyse")
-    async def vision():
-        raise HTTPException(501, "No vision worker is implemented in this phase")
+    async def vision(request: Request):
+        return await proxy_request(
+            request,
+            routes,
+            "/v1/chat/completions",
+            "scenechat-vision",
+            timeout_seconds=configured.scenechat_timeout_seconds,
+        )
 
     return app
 
@@ -175,7 +189,7 @@ async def proxy_request(
 ):
     body = await request.json()
     alias = str(body.get("model") or default_alias)
-    candidates = routes.get(alias)
+    candidates = route_candidates(routes, alias)
     if not candidates:
         return unavailable(alias, "unknown")
     client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
@@ -189,8 +203,13 @@ async def proxy_request(
         if selected is None:
             await client.aclose()
             return unavailable(alias, candidates[0].generation_family.value)
-        body["model"] = alias
-        upstream = client.build_request("POST", f"{endpoint(selected)}{path}", json=body)
+        body["model"] = upstream_model(selected, alias)
+        upstream = client.build_request(
+            "POST",
+            f"{endpoint(selected)}{path}",
+            json=body,
+            headers=upstream_headers(selected),
+        )
         response = await client.send(upstream, stream=bool(body.get("stream")))
     except (httpx.HTTPError, ValueError):
         await client.aclose()
@@ -303,6 +322,32 @@ async def provider_health(
 
 def endpoint(profile: ModelProfile) -> str:
     return f"http://127.0.0.1:{profile.port}"
+
+
+def route_candidates(
+    routes: dict[str, list[ModelProfile]], alias_or_model_id: str
+) -> list[ModelProfile] | None:
+    if candidates := routes.get(alias_or_model_id):
+        return candidates
+    for candidates in routes.values():
+        if any(
+            profile.model_id == alias_or_model_id and profile.generation_family.value == "vision-language"
+            for profile in candidates
+        ):
+            return candidates
+    return None
+
+
+def upstream_model(profile: ModelProfile, alias: str) -> str:
+    if profile.generation_family.value == "vision-language":
+        return profile.model_id
+    return alias
+
+
+def upstream_headers(profile: ModelProfile) -> dict[str, str]:
+    if profile.generation_family.value != "vision-language":
+        return {}
+    return {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")}
 
 
 def json_loads(payload: bytes) -> Any:

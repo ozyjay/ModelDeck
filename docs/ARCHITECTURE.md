@@ -46,7 +46,9 @@ Process existence alone never means ready.
 
 Aliases route by declared generation family and capability. `fast-chat` prefers the core
 Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
-worker. Each alias retains an explicit mock fallback for GPU-unavailable demonstrations
+worker. `scenechat-vision` routes image-and-text requests to the pinned Gemma 4 worker and
+injects its private loopback credential. Each fallback-capable alias retains an explicit
+mock provider for GPU-unavailable demonstrations
 and contract testing. When no candidate is ready, the gateway returns a structured local
 unavailable response; no cloud request occurs. The gateway and management API are
 separate processes and ports so demo clients have a stable contract while management

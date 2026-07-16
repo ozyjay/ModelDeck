@@ -81,10 +81,15 @@ ROCm stack works.
 
 `scenechat-gemma4-e2b-rocm` is a ModelDeck-managed, on-demand worker that can remain
 loaded alongside one exclusive DiffusionGemma worker and binds directly to
-`127.0.0.1:8000`. It is deliberately not routed through the stable port 8600 gateway
-while compatibility is under validation. Its public compatibility routes are authenticated
+`127.0.0.1:8000`. The stable gateway exposes it as `scenechat-vision` through
+`127.0.0.1:8600/v1/chat/completions` and `127.0.0.1:8600/v1/vision/analyse`. Its direct
+compatibility routes are authenticated
 `GET /v1/models`, `POST /v1/chat/completions`, and
 `POST /native/vision-language/smoke`.
+
+The gateway accepts either the stable `scenechat-vision` alias or the exact pinned model
+identifier, translates it to the exact worker model identifier, and injects the private
+loopback worker credential. It never forwards a caller-supplied credential to the worker.
 
 The worker accepts only `google/gemma-4-E2B-it` revision
 `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`. It uses its own `Gemma4Processor`, pinned chat

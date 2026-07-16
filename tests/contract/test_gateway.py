@@ -3,8 +3,18 @@ from __future__ import annotations
 import httpx
 import modeldeck.gateway.app as gateway_module
 import pytest
+from fastapi.responses import JSONResponse
+from modeldeck.config import Settings
 from modeldeck.gateway import create_gateway_app
-from modeldeck.gateway.app import invalid_trace_metadata, json_loads, trace_token_metadata_error
+from modeldeck.gateway.app import (
+    invalid_trace_metadata,
+    json_loads,
+    route_candidates,
+    trace_token_metadata_error,
+    upstream_headers,
+    upstream_model,
+)
+from modeldeck.profiles import default_model_profiles
 
 
 @pytest.mark.asyncio
@@ -56,6 +66,68 @@ async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch) -> 
     assert models["qwen-0-5b"]["effective_provider"] == "qwen-small-rocm"
     assert models["qwen-1-5b"]["effective_provider"] == "qwen-1-5b-rocm"
     assert models["qwen-3b"]["effective_provider"] == "qwen-3b-rocm"
+
+
+@pytest.mark.asyncio
+async def test_default_scenechat_alias_advertises_multimodal_provider(monkeypatch) -> None:
+    async def ready_provider(_client, profile):
+        return {"ready": True}, profile.id == "scenechat-gemma4-e2b-rocm"
+
+    monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
+    app = create_gateway_app()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        models_response = await client.get("/v1/models")
+        capabilities_response = await client.get("/v1/capabilities")
+
+    models = {model["id"]: model for model in models_response.json()["data"]}
+    capabilities = capabilities_response.json()["scenechat-vision"]
+    assert models["scenechat-vision"]["effective_provider"] == "scenechat-gemma4-e2b-rocm"
+    assert capabilities["image_input"] is True
+    assert capabilities["structured_output"] is True
+
+
+def test_scenechat_gateway_translation_uses_exact_model_and_internal_credential(monkeypatch) -> None:
+    profile = next(
+        profile for profile in default_model_profiles() if profile.id == "scenechat-gemma4-e2b-rocm"
+    )
+    routes = {"scenechat-vision": [profile]}
+    monkeypatch.setenv("MODELDECK_SCENECHAT_API_KEY", "internal-test-key")
+
+    assert route_candidates(routes, "scenechat-vision") == [profile]
+    assert route_candidates(routes, profile.model_id) == [profile]
+    assert upstream_model(profile, "scenechat-vision") == profile.model_id
+    assert upstream_headers(profile) == {"Authorization": "Bearer internal-test-key"}
+
+
+@pytest.mark.asyncio
+async def test_dedicated_vision_route_uses_scenechat_alias_and_timeout(monkeypatch) -> None:
+    captured = {}
+
+    async def capture_proxy(request, routes, path, default_alias, *, timeout_seconds):
+        captured.update(
+            {
+                "path": path,
+                "default_alias": default_alias,
+                "timeout_seconds": timeout_seconds,
+                "has_scenechat_route": "scenechat-vision" in routes,
+            }
+        )
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(gateway_module, "proxy_request", capture_proxy)
+    app = create_gateway_app(settings=Settings(scenechat_timeout_seconds=81))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/v1/vision/analyse", json={})
+
+    assert response.json() == {"ok": True}
+    assert captured == {
+        "path": "/v1/chat/completions",
+        "default_alias": "scenechat-vision",
+        "timeout_seconds": 81,
+        "has_scenechat_route": True,
+    }
 
 
 def test_gateway_trace_metadata_validation_rejects_misaligned_tokens() -> None:

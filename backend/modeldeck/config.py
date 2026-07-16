@@ -23,6 +23,7 @@ class Settings:
     allow_downloads: bool = False
     diagnostic_capture: bool = False
     diffusion_timeout_seconds: float = 900.0
+    scenechat_timeout_seconds: float = 75.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -38,4 +39,5 @@ class Settings:
             allow_downloads=allow_downloads,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
             diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),
+            scenechat_timeout_seconds=float(os.getenv("MODELDECK_SCENECHAT_TIMEOUT_SECONDS", "75")),
         )

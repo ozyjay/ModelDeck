@@ -45,6 +45,15 @@ tokenizer. The gateway only validates and propagates them. Invalid or misaligned
 worker metadata is returned as HTTP 502 with `invalid_worker_trace_metadata`, rather than as
 a misleading trace.
 
+## SceneChat vision API (`127.0.0.1:8600`)
+
+The stable gateway advertises `scenechat-vision` with `image_input` and
+`structured_output`. It accepts the SceneChat OpenAI-shaped request at
+`POST /v1/chat/completions` or `POST /v1/vision/analyse`, routes only to the pinned local
+Gemma 4 worker, and returns `local_provider_unavailable` when that worker is stopped. The
+gateway translates the alias to the exact worker model identifier and injects the private
+loopback credential internally.
+
 ## Direct SceneChat compatibility API (`127.0.0.1:8000`)
 
 The managed SceneChat worker preserves the existing client contract at `GET /v1/models`
@@ -58,4 +67,5 @@ by one approved SceneChat prompt, `temperature: 0.1`, `max_tokens` from 1 throug
 (clamped to the profile's 256-token generation ceiling),
 `response_format: {"type":"json_object"}`, and `stream: false`. Errors use a sanitised
 OpenAI-shaped `error` object with status 401, 413, 422, 429, 502, 503, or 504. This direct
-worker is intentionally absent from port 8600 routing during initial compatibility work.
+worker route is retained for supervisor smoke tests and diagnosis; applications use the
+stable gateway.
