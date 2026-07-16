@@ -41,13 +41,14 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert scenechat.alias == "scenechat-vision"
     assert scenechat.generation_family == "vision-language"
     assert scenechat.preferred_runtime == "vision-language-transformers-rocm"
-    assert scenechat.lifecycle == "exclusive"
+    assert scenechat.lifecycle == "on-demand"
     assert scenechat.port == 8000
     assert scenechat.capabilities.chat == "compatibility-only"
     assert scenechat.capabilities.streaming is False
     assert scenechat.capabilities.image_input is True
     assert scenechat.capabilities.structured_output is True
-    assert scenechat.settings["generation_timeout_seconds"] == 18
+    assert scenechat.settings["generation_timeout_seconds"] == 60
+    assert scenechat.settings["maximum_new_tokens"] == 256
 
 
 def test_qwen_workers_are_distinct_pinned_local_profiles() -> None:

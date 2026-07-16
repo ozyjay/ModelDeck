@@ -95,8 +95,10 @@ structured no-cloud gateway failure.
 
 - **ROCm mismatch:** the isolated pinned ROCm 7.2.1 environment passed allocation and Qwen
   smoke while Fedora's 7.1 RPMs remained untouched; continue preserving both fingerprints.
-- **Unified memory exhaustion:** one load at a time now; add measured reserve scheduling
-  before large workers.
+- **Unified memory exhaustion:** Gemma 4 E2B and Q4 DiffusionGemma passed simultaneous
+  residency and a structured image completion at 9.55 GiB and 18.06 GiB steady Torch
+  allocation respectively. Keep the DiffusionGemma variants mutually exclusive and add
+  measured reserve scheduling before broader large-worker concurrency.
 - **Port migration:** keep 8600 stable and provide explicit compatibility routes/adapters;
   never choose a hidden alternative.
 - **HSA preload instability:** scope it to one tested worker and record it in evidence.

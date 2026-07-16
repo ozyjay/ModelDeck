@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -22,6 +23,7 @@ from modeldeck.workers.scenechat_worker import (
     SceneChatRequestError,
     TransformersSceneChatEngine,
     _decode_image,
+    _run_generation,
     create_app,
 )
 from PIL import Image
@@ -107,6 +109,24 @@ class BlockingVisionEngine(FakeVisionEngine):
         while not self.release.wait(0.01):
             if cancellation.is_set():
                 return GenerationResult(self.output, 1, 0, cancelled=True)
+        return super().generate(
+            image=image,
+            question=question,
+            max_tokens=max_tokens,
+            cancellation=cancellation,
+        )
+
+
+class DelayedVisionEngine(FakeVisionEngine):
+    def generate(
+        self,
+        *,
+        image: Image.Image,
+        question: str,
+        max_tokens: int,
+        cancellation: threading.Event,
+    ) -> GenerationResult:
+        threading.Event().wait(0.16)
         return super().generate(
             image=image,
             question=question,
@@ -202,7 +222,7 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
         "mode": "RGB",
         "size": (32, 24),
         "question": "Describe the scene.",
-        "max_tokens": 700,
+        "max_tokens": 256,
     }
     assert capabilities.json()["image_input"] is True
     assert capabilities.json()["structured_output"] is True
@@ -522,8 +542,39 @@ async def test_timeout_cancels_generation_and_releases_the_slot() -> None:
 
     assert response.status_code == 504
     assert response.json()["error"]["code"] == "generation_timeout"
+    assert response.json()["error"]["message"] == "The local generation exceeded 0.05 seconds."
     assert metrics.json()["busy"] is False
     assert metrics.json()["timed_out_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_disconnect_polling_is_bounded_while_generation_runs() -> None:
+    class RequestProbe:
+        def __init__(self) -> None:
+            self.polls = 0
+            self.app = SimpleNamespace(state=SimpleNamespace(timed_out_requests=0))
+
+        async def is_disconnected(self) -> bool:
+            self.polls += 1
+            return False
+
+    request = RequestProbe()
+    image = Image.new("RGB", (8, 8), color="navy")
+    try:
+        result = await _run_generation(
+            request,
+            DelayedVisionEngine(),
+            image=image,
+            question="Describe the scene.",
+            max_tokens=16,
+            cancellation=threading.Event(),
+            timeout_seconds=1,
+        )
+    finally:
+        image.close()
+
+    assert result.completion_tokens == 42
+    assert 2 <= request.polls <= 6
 
 
 @pytest.mark.asyncio

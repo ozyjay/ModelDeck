@@ -27,9 +27,9 @@ The vision-language compatibility profile is `scenechat-gemma4-e2b-rocm`:
 - exact model `google/gemma-4-E2B-it` at revision
   `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`;
 - alias `scenechat-vision`, family `vision-language`, runtime
-  `vision-language-transformers-rocm`, exclusive lifecycle, and fixed port 8000;
-- BF16, local-only load, disabled trusted remote code, 8192-token context, 700-token output,
-  18-second generation deadline, 600-second startup, and 180-second warm-up;
+  `vision-language-transformers-rocm`, on-demand lifecycle, and fixed port 8000;
+- BF16, local-only load, disabled trusted remote code, 8192-token context, 256-token output,
+  60-second generation deadline, 600-second startup, and 180-second warm-up;
 - compatibility-only chat, image input, structured output, cancellation, and no streaming.
 
 `image_input` and `structured_output` are additive `CapabilitySet` fields and default to

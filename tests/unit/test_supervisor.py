@@ -5,6 +5,7 @@ import sys
 
 import pytest
 from modeldeck.profiles import default_model_profiles
+from modeldeck.protocol import LifecycleClass
 from modeldeck.supervisor.service import (
     WorkerSupervisor,
     build_mock_worker_command,
@@ -151,6 +152,33 @@ async def test_starting_exclusive_worker_stops_existing_exclusive_worker() -> No
         assert supervisor.get_worker(first.id)["state"] == "stopped"
         assert supervisor.get_worker(first.id)["pid"] is None
         assert supervisor.get_worker(second.id)["state"] == "ready"
+    finally:
+        await supervisor.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_on_demand_worker_can_run_with_exclusive_worker() -> None:
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-diffusion")
+    exclusive_port = free_port()
+    on_demand_port = free_port()
+    while on_demand_port == exclusive_port:
+        on_demand_port = free_port()
+    exclusive = base.model_copy(update={"id": "mock-exclusive", "port": exclusive_port})
+    on_demand = base.model_copy(
+        update={
+            "id": "mock-on-demand",
+            "port": on_demand_port,
+            "lifecycle": LifecycleClass.ON_DEMAND,
+        }
+    )
+    supervisor = WorkerSupervisor([exclusive, on_demand], startup_timeout=8, stop_timeout=2)
+
+    try:
+        await supervisor.start(exclusive.id)
+        await supervisor.start(on_demand.id)
+
+        assert supervisor.get_worker(exclusive.id)["state"] == "ready"
+        assert supervisor.get_worker(on_demand.id)["state"] == "ready"
     finally:
         await supervisor.stop_all()
 

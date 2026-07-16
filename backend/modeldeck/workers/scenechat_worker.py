@@ -64,8 +64,8 @@ class EngineConfig:
     cache_root: Path = Path("/mnt/work/models/huggingface/hub")
     dtype: str = "bfloat16"
     context_length: int = 8192
-    maximum_new_tokens: int = 700
-    generation_timeout_seconds: float = 18.0
+    maximum_new_tokens: int = 256
+    generation_timeout_seconds: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -308,8 +308,7 @@ class TransformersSceneChatEngine:
                 output = self.model.generate(
                     **inputs,
                     max_new_tokens=min(max_tokens, self.config.maximum_new_tokens),
-                    do_sample=True,
-                    temperature=0.1,
+                    do_sample=False,
                     use_cache=True,
                     stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
                 )
@@ -629,7 +628,7 @@ def create_app(
                 runtime,
                 image=image,
                 question=question,
-                max_tokens=body.max_tokens,
+                max_tokens=min(body.max_tokens, config.maximum_new_tokens),
                 cancellation=cancellation,
                 timeout_seconds=config.generation_timeout_seconds,
             )
@@ -889,15 +888,19 @@ async def _run_generation(
                 disconnected = True
                 cancellation.set()
                 break
+            await asyncio.sleep(min(0.05, max(0.0, timeout_seconds - elapsed)))
             disconnect_task = asyncio.create_task(request.is_disconnected())
-            await asyncio.sleep(0)
     if not disconnect_task.done():
         disconnect_task.cancel()
     result = await task
     if timed_out:
         request.app.state.timed_out_requests += 1
         LOGGER.info("Request timed out duration_seconds=%.4f", time.monotonic() - started)
-        raise SceneChatRequestError(504, "generation_timeout", "The local generation exceeded 18 seconds.")
+        raise SceneChatRequestError(
+            504,
+            "generation_timeout",
+            f"The local generation exceeded {timeout_seconds:g} seconds.",
+        )
     if disconnected:
         request.app.state.cancelled_requests += 1
         raise SceneChatRequestError(504, "client_disconnected", "The client disconnected during generation.")
@@ -928,7 +931,7 @@ def main() -> None:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=700)
-    parser.add_argument("--generation-timeout-seconds", type=float, default=18.0)
+    parser.add_argument("--generation-timeout-seconds", type=float, default=60.0)
     arguments = parser.parse_args()
     config = EngineConfig(
         model_id=arguments.model_id,

@@ -47,7 +47,7 @@ try {
         stream = $false
     } | ConvertTo-Json -Depth 12 -Compress
     $Completion = Invoke-RestMethod -Method Post -Uri "$WorkerUrl/v1/chat/completions" `
-        -Headers $Headers -ContentType 'application/json' -Body $Payload -TimeoutSec 25
+        -Headers $Headers -ContentType 'application/json' -Body $Payload -TimeoutSec 75
     $Analysis = $Completion.choices[0].message.content | ConvertFrom-Json
     if (-not $Analysis.summary) { throw 'The OpenAI-compatible response did not contain a scene summary.' }
 

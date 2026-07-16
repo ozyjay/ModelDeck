@@ -77,7 +77,7 @@ def default_model_profiles() -> list[ModelProfile]:
             alias="scenechat-vision",
             generation_family="vision-language",
             preferred_runtime="vision-language-transformers-rocm",
-            lifecycle="exclusive",
+            lifecycle="on-demand",
             port=8000,
             dtype="bfloat16",
             capabilities=CapabilitySet(
@@ -89,11 +89,11 @@ def default_model_profiles() -> list[ModelProfile]:
             ),
             settings={
                 "context_length": 8192,
-                "maximum_new_tokens": 700,
+                "maximum_new_tokens": 256,
                 "temperature": 0.1,
                 "startup_timeout_seconds": 600,
                 "warmup_timeout_seconds": 180,
-                "generation_timeout_seconds": 18,
+                "generation_timeout_seconds": 60,
                 "cache_root": "/mnt/work/models/huggingface/hub",
             },
         ),

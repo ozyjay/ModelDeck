@@ -394,9 +394,9 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             "--context-length",
             str(profile.settings.get("context_length", 8192)),
             "--maximum-new-tokens",
-            str(profile.settings.get("maximum_new_tokens", 700)),
+            str(profile.settings.get("maximum_new_tokens", 256)),
             "--generation-timeout-seconds",
-            str(profile.settings.get("generation_timeout_seconds", 18)),
+            str(profile.settings.get("generation_timeout_seconds", 60)),
         ]
         return WorkerLaunch(command=command, environment=environment)
     if profile.preferred_runtime in {

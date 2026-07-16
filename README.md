@@ -77,8 +77,10 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen 0.5B, BF16 DiffusionGemma baseline, and self-contained Q4 DiffusionGemma paths are
-compatibility-tested on the target Framework Desktop. The Qwen 1.5B and 3B workers are
+The Qwen 0.5B, SceneChat Gemma 4 E2B, BF16 DiffusionGemma baseline, and self-contained Q4
+DiffusionGemma paths are compatibility-tested on the target Framework Desktop. Gemma 4
+E2B and Q4 DiffusionGemma also passed simultaneous residency with a structured image
+completion. The Qwen 1.5B and 3B workers are
 registered against complete pinned local snapshots but require their own physical ROCm
 acceptance evidence. The BF16 and Qwen workers use `/mnt/work/models/huggingface/hub`;
 the self-contained Q4 worker reads only its packaged checkpoint. None of the smoke tests

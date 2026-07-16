@@ -8,7 +8,11 @@ from modeldeck.gateway.app import invalid_trace_metadata, json_loads, trace_toke
 
 
 @pytest.mark.asyncio
-async def test_gateway_returns_structured_local_unavailable_without_cloud() -> None:
+async def test_gateway_returns_structured_local_unavailable_without_cloud(monkeypatch) -> None:
+    async def unavailable_provider(_client, _profile):
+        return None, False
+
+    monkeypatch.setattr(gateway_module, "provider_health", unavailable_provider)
     app = create_gateway_app()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/v1/completions", json={"model": "fast-chat", "prompt": "hello"})

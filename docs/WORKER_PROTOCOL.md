@@ -79,8 +79,9 @@ ROCm stack works.
 
 ## SceneChat vision-language compatibility worker
 
-`scenechat-gemma4-e2b-rocm` is a ModelDeck-managed, exclusive worker that binds directly
-to `127.0.0.1:8000`. It is deliberately not routed through the stable port 8600 gateway
+`scenechat-gemma4-e2b-rocm` is a ModelDeck-managed, on-demand worker that can remain
+loaded alongside one exclusive DiffusionGemma worker and binds directly to
+`127.0.0.1:8000`. It is deliberately not routed through the stable port 8600 gateway
 while compatibility is under validation. Its public compatibility routes are authenticated
 `GET /v1/models`, `POST /v1/chat/completions`, and
 `POST /native/vision-language/smoke`.
@@ -88,8 +89,11 @@ while compatibility is under validation. Its public compatibility routes are aut
 The worker accepts only `google/gemma-4-E2B-it` revision
 `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`. It uses its own `Gemma4Processor`, pinned chat
 template, and image processing; neither the gateway nor SceneChat loads a tokenizer or
-processor. Readiness remains false until local processor/model loading and a one-token
-synthetic-image warm-up have succeeded.
+processor. Generation uses deterministic greedy decoding so the strict JSON contract does
+not depend on a stochastic sampling path, and the profile caps output at 256 tokens with a
+60-second deadline. Disconnect polling is bounded to avoid starving the generation thread.
+Readiness remains false until local processor/model loading and a one-token synthetic-image
+warm-up have succeeded.
 
 All trainable floating-point parameters must be BF16 on `cuda:0`. Gemma 4's named rotary,
 scaling, range, soft-cap, and standardisation buffers may remain FP32 where Transformers
