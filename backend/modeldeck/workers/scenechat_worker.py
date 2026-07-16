@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.contracts.scenechat import (
     CONTRACT_VERSION,
+    ModelOutputValidationError,
     canonicalise_model_output,
     extract_curated_question,
     system_messages,
@@ -40,6 +41,7 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 4096
 MAX_IMAGE_PIXELS = 16_000_000
 SUPPORTED_MIME_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG"}
+DEFAULT_MAXIMUM_NEW_TOKENS = 512
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 APPROVED_FP32_BUFFER_SUFFIXES = (
     "input_min",
@@ -64,7 +66,7 @@ class EngineConfig:
     cache_root: Path = Path("/mnt/work/models/huggingface/hub")
     dtype: str = "bfloat16"
     context_length: int = 8192
-    maximum_new_tokens: int = 256
+    maximum_new_tokens: int = DEFAULT_MAXIMUM_NEW_TOKENS
     generation_timeout_seconds: float = 60.0
 
 
@@ -74,6 +76,28 @@ class GenerationResult:
     prompt_tokens: int
     completion_tokens: int
     cancelled: bool = False
+
+
+def _log_output_validation_failure(
+    *,
+    request_id: str,
+    error: ModelOutputValidationError,
+    completion_tokens: int,
+    effective_token_limit: int,
+    elapsed_seconds: float,
+) -> None:
+    token_limit_reached = completion_tokens >= effective_token_limit
+    failure_category = "token_limit_reached" if token_limit_reached else error.category
+    LOGGER.warning(
+        "SceneChat output validation failed request_id=%s failure_category=%s "
+        "completion_tokens=%d effective_token_limit=%d token_limit_reached=%s elapsed_seconds=%.4f",
+        request_id,
+        failure_category,
+        completion_tokens,
+        effective_token_limit,
+        token_limit_reached,
+        elapsed_seconds,
+    )
 
 
 class ResponseFormat(BaseModel):
@@ -622,13 +646,14 @@ def create_app(
         started = time.perf_counter()
         request.app.state.requests += 1
         request.app.state.worker_state = WorkerState.BUSY
+        effective_token_limit = min(body.max_tokens, config.maximum_new_tokens)
         try:
             result = await _run_generation(
                 request,
                 runtime,
                 image=image,
                 question=question,
-                max_tokens=min(body.max_tokens, config.maximum_new_tokens),
+                max_tokens=effective_token_limit,
                 cancellation=cancellation,
                 timeout_seconds=config.generation_timeout_seconds,
             )
@@ -636,7 +661,14 @@ def create_app(
                 raise SceneChatRequestError(504, "request_cancelled", "The local generation was cancelled.")
             try:
                 content, _analysis = canonicalise_model_output(result.text)
-            except ValueError as error:
+            except ModelOutputValidationError as error:
+                _log_output_validation_failure(
+                    request_id=request_id,
+                    error=error,
+                    completion_tokens=result.completion_tokens,
+                    effective_token_limit=effective_token_limit,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
                 raise SceneChatRequestError(
                     502,
                     "invalid_model_output",
@@ -691,6 +723,7 @@ def create_app(
                 "worker_busy",
                 "The vision worker is already processing a request.",
             )
+        started = time.perf_counter()
         try:
             result = await asyncio.to_thread(
                 runtime.generate,
@@ -699,7 +732,21 @@ def create_app(
                 max_tokens=config.maximum_new_tokens,
                 cancellation=cancellation,
             )
-            content, _analysis = canonicalise_model_output(result.text)
+            try:
+                content, _analysis = canonicalise_model_output(result.text)
+            except ModelOutputValidationError as error:
+                _log_output_validation_failure(
+                    request_id=request_id,
+                    error=error,
+                    completion_tokens=result.completion_tokens,
+                    effective_token_limit=config.maximum_new_tokens,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+                raise SceneChatRequestError(
+                    502,
+                    "invalid_model_output",
+                    "The model returned output that did not satisfy the SceneChat contract.",
+                ) from error
             return {
                 "ok": True,
                 "request_id": request_id,
@@ -712,12 +759,6 @@ def create_app(
                     "completion_tokens": result.completion_tokens,
                 },
             }
-        except ValueError as error:
-            raise SceneChatRequestError(
-                502,
-                "invalid_model_output",
-                "The model returned output that did not satisfy the SceneChat contract.",
-            ) from error
         finally:
             image.close()
             await _release_slot(request, request_id)
@@ -892,6 +933,7 @@ async def _run_generation(
             disconnect_task = asyncio.create_task(request.is_disconnected())
     if not disconnect_task.done():
         disconnect_task.cancel()
+        await asyncio.gather(disconnect_task, return_exceptions=True)
     result = await task
     if timed_out:
         request.app.state.timed_out_requests += 1
@@ -930,7 +972,7 @@ def main() -> None:
     parser.add_argument("--cache-root", required=True, type=Path)
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--context-length", type=int, default=8192)
-    parser.add_argument("--maximum-new-tokens", type=int, default=700)
+    parser.add_argument("--maximum-new-tokens", type=int, default=DEFAULT_MAXIMUM_NEW_TOKENS)
     parser.add_argument("--generation-timeout-seconds", type=float, default=60.0)
     arguments = parser.parse_args()
     config = EngineConfig(

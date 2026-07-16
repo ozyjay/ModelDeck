@@ -95,7 +95,7 @@ The worker accepts only `google/gemma-4-E2B-it` revision
 `9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`. It uses its own `Gemma4Processor`, pinned chat
 template, and image processing; neither the gateway nor SceneChat loads a tokenizer or
 processor. Generation uses deterministic greedy decoding so the strict JSON contract does
-not depend on a stochastic sampling path, and the profile caps output at 256 tokens with a
+not depend on a stochastic sampling path, and the profile caps output at 512 tokens with a
 60-second deadline. Disconnect polling is bounded to avoid starving the generation thread.
 Readiness remains false until local processor/model loading and a one-token synthetic-image
 warm-up have succeeded.
@@ -138,3 +138,7 @@ fence may be accepted internally, but successful content is reserialised as bare
 JSON. Invalid output returns `502 invalid_model_output`; it is never repaired, retried,
 fabricated, or replaced. One request may run at a time and a second is rejected immediately
 with 429. The worker is implemented, but is not Open Day ready until the physical gates pass.
+
+Validation failures record only the request ID, a safe failure category, completion-token
+count, effective token limit, whether that limit was reached, and elapsed time. Images,
+prompts, raw model output, visitor-facing text, credentials, and headers are never logged.

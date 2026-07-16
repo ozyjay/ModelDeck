@@ -89,7 +89,7 @@ def default_model_profiles() -> list[ModelProfile]:
             ),
             settings={
                 "context_length": 8192,
-                "maximum_new_tokens": 256,
+                "maximum_new_tokens": 512,
                 "temperature": 0.1,
                 "startup_timeout_seconds": 600,
                 "warmup_timeout_seconds": 180,

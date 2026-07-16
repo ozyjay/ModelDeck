@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -53,8 +54,9 @@ class FakeVisionEngine:
         "load_seconds": 0.01,
     }
 
-    def __init__(self, output: str | None = None) -> None:
+    def __init__(self, output: str | None = None, *, completion_tokens: int = 42) -> None:
         self.output = output or json.dumps(VALID_ANALYSIS)
+        self.completion_tokens = completion_tokens
         self.loaded = False
         self.warmed = False
         self.closed = False
@@ -82,7 +84,11 @@ class FakeVisionEngine:
                 "max_tokens": max_tokens,
             }
         )
-        return GenerationResult(self.output, prompt_tokens=321, completion_tokens=42)
+        return GenerationResult(
+            self.output,
+            prompt_tokens=321,
+            completion_tokens=self.completion_tokens,
+        )
 
     def memory_metrics(self) -> dict[str, int]:
         return {"memory_allocated_bytes": 1024, "memory_reserved_bytes": 2048}
@@ -222,7 +228,7 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
         "mode": "RGB",
         "size": (32, 24),
         "question": "Describe the scene.",
-        "max_tokens": 256,
+        "max_tokens": 512,
     }
     assert capabilities.json()["image_input"] is True
     assert capabilities.json()["structured_output"] is True
@@ -433,6 +439,94 @@ async def test_invalid_or_unsafe_model_output_is_never_repaired(output: str) -> 
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "invalid_model_output"
     assert output not in response.text
+
+
+@pytest.mark.asyncio
+async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> None:
+    raw_output = 'PRIVATE_RAW_MODEL_OUTPUT {"summary":"unfinished webcam scene"'
+    data_url = image_data_url()
+    prompt = external_prompt("Describe the scene.")
+    engine = FakeVisionEngine(raw_output, completion_tokens=512)
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(model_id="google/gemma-4-E2B-it", revision="pinned"),
+        engine=engine,
+    )
+    caplog.set_level(logging.WARNING, logger="modeldeck.scenechat")
+
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local", "X-Request-ID": "webcam-truncated-1"},
+                json=request_payload(data_url=data_url, prompt=prompt),
+            )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invalid_model_output"
+    diagnostic = caplog.messages[-1]
+    assert "request_id=webcam-truncated-1" in diagnostic
+    assert "failure_category=token_limit_reached" in diagnostic
+    assert "completion_tokens=512" in diagnostic
+    assert "effective_token_limit=512" in diagnostic
+    assert "token_limit_reached=True" in diagnostic
+    assert "elapsed_seconds=" in diagnostic
+    assert raw_output not in caplog.text
+    assert prompt not in caplog.text
+    assert data_url not in caplog.text
+    assert "Bearer local" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("output", "expected_category"),
+    [
+        ("PRIVATE_INVALID_JSON", "invalid_json"),
+        (json.dumps({"summary": "PRIVATE_SCHEMA_CONTENT"}), "schema_violation"),
+        (
+            json.dumps({**VALID_ANALYSIS, "summary": "PRIVATE_CONTENT: The person is a child."}),
+            "prohibited_content",
+        ),
+        ("```yaml\nPRIVATE_FENCED_CONTENT\n```", "unsupported_fence"),
+    ],
+)
+async def test_non_truncation_validation_failures_use_safe_categories(
+    output: str,
+    expected_category: str,
+    caplog,
+) -> None:
+    engine = FakeVisionEngine(output, completion_tokens=42)
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(model_id="google/gemma-4-E2B-it", revision="pinned"),
+        engine=engine,
+    )
+    caplog.set_level(logging.WARNING, logger="modeldeck.scenechat")
+
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local", "X-Request-ID": "safe-category-1"},
+                json=request_payload(),
+            )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invalid_model_output"
+    diagnostic = caplog.messages[-1]
+    assert f"failure_category={expected_category}" in diagnostic
+    assert "completion_tokens=42" in diagnostic
+    assert "effective_token_limit=512" in diagnostic
+    assert "token_limit_reached=False" in diagnostic
+    assert output not in caplog.text
 
 
 @pytest.mark.asyncio

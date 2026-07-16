@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.workers.scenechat_worker import EngineConfig
 from pydantic import ValidationError
 
 
@@ -48,7 +49,10 @@ def test_default_profiles_keep_generation_engines_separate() -> None:
     assert scenechat.capabilities.image_input is True
     assert scenechat.capabilities.structured_output is True
     assert scenechat.settings["generation_timeout_seconds"] == 60
-    assert scenechat.settings["maximum_new_tokens"] == 256
+    assert scenechat.settings["maximum_new_tokens"] == 512
+    worker_defaults = EngineConfig(model_id=scenechat.model_id, revision=scenechat.revision)
+    assert worker_defaults.maximum_new_tokens == scenechat.settings["maximum_new_tokens"]
+    assert worker_defaults.generation_timeout_seconds == scenechat.settings["generation_timeout_seconds"]
 
 
 def test_qwen_workers_are_distinct_pinned_local_profiles() -> None:

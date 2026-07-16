@@ -64,7 +64,7 @@ and `POST /v1/chat/completions`, plus native smoke at
 
 Chat accepts the exact pinned model, one user message, one base64 JPEG/PNG image followed
 by one approved SceneChat prompt, `temperature: 0.1`, `max_tokens` from 1 through 700
-(clamped to the profile's 256-token generation ceiling),
+(clamped to the profile's 512-token generation ceiling),
 `response_format: {"type":"json_object"}`, and `stream: false`. Errors use a sanitised
 OpenAI-shaped `error` object with status 401, 413, 422, 429, 502, 503, or 504. This direct
 worker route is retained for supervisor smoke tests and diagnosis; applications use the
