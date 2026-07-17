@@ -49,6 +49,18 @@ The installed Qwen workers are `qwen-small-rocm` for 0.5B, `qwen-1-5b-rocm` for 
 and `qwen-3b-rocm` for 3B. They use fixed ports 8620, 8623, and 8624 respectively and
 remain stopped until explicitly selected.
 
+Benchmark all physical ROCm profiles with a repeatable representative workload:
+
+```powershell
+pwsh -NoProfile -File scripts/benchmark_models.ps1
+```
+
+Use `-Preset Quick` or `-Models qwen-small-rocm,qwen-1-5b-rocm` for a shorter run. The
+suite benchmarks one worker at a time, restores the initial worker state, and writes
+timestamped JSON and Markdown reports under `var/benchmarks/`. See
+[ROCm model benchmarks](docs/BENCHMARKS.md) for workload definitions, privacy guarantees,
+and report interpretation.
+
 The operator console is a committed React and TypeScript production bundle served by
 FastAPI. Node.js is required only by setup, verification, and frontend development; the
 running management service serves local static assets and does not start a Node process.

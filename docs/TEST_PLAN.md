@@ -32,6 +32,14 @@ The recorded Qwen run lasted 1,808.851 seconds and completed 343 gateway request
 zero failures. The in-flight cancellation and repeated start/stop checks also passed on
 the physical Framework Desktop.
 
+The cross-profile physical performance suite is
+`pwsh -NoProfile -File scripts/benchmark_models.ps1`. It runs one excluded benchmark
+warm-up and five measured representative requests per selected physical worker, records
+versioned JSON and Markdown reports, rejects mock gateway fallback, and restores the
+initial worker state. `-Preset Quick` reduces measured requests to two. This is an
+observational benchmark rather than a compatibility or release gate and remains outside
+normal CI.
+
 Unit tests cover profiles, cache resolution and state, fingerprints, launch arguments,
 redaction, and hardware probe resilience. Contract tests prove AR traces and diffusion
 frames remain distinct and that gateway failures are local and structured. Integration
