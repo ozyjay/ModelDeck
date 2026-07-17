@@ -49,13 +49,15 @@ The installed Qwen workers are `qwen-small-rocm` for 0.5B, `qwen-1-5b-rocm` for 
 and `qwen-3b-rocm` for 3B. They use fixed ports 8620, 8623, and 8624 respectively and
 remain stopped until explicitly selected.
 
-The Model library can also turn a recognised, complete Hugging Face autoregressive
-snapshot into a local ROCm worker configuration. Choose **Configure runtime**, assign a
+The Model library can also turn a recognised, complete Hugging Face snapshot into a local
+ROCm worker configuration when its architecture matches an allowlisted worker. Supported
+paths are causal-language-model Transformers, SceneChat Gemma 4, and DiffusionGemma block
+diffusion. Choose **Configure runtime**, assign a
 gateway alias, and select the bounded dtype, lifecycle, context, and output settings.
 ModelDeck derives the model, revision, cache root, runtime, port, capabilities, and safe
 launch manifest itself. The configuration persists in ModelDeck's local SQLite store;
-removing it never removes the cached model. Other generation families retain their
-dedicated built-in profiles until family-specific configuration workflows are added.
+removing it never removes the cached model. Unsupported architectures remain visible with
+the specific reason that configuration is unavailable.
 
 Benchmark all physical ROCm profiles with a repeatable representative workload:
 

@@ -119,6 +119,7 @@ nav { display: grid; gap: 0.3rem; }
 .state-badge.state-loading, .state-badge.state-warming, .state-badge.state-starting, .state-badge.state-validating { color: #c8dcff; border-color: #365682; background: #14243b; }
 .state-badge.state-installed-untested { color: #ffe0ac; border-color: #6a5431; background: #2d2415; }
 .state-badge.state-recognised, .state-badge.state-runtime-configured { color: #ffe0ac; border-color: #6a5431; background: #2d2415; }
+.state-badge.state-unsupported { color: #c8dcff; border-color: #365682; background: #14243b; }
 .inline-error { padding: 0.65rem; border: 1px solid #5f3440; border-radius: 0.55rem; background: #28151b; color: #ffc2c8; font-size: 0.78rem; overflow-wrap: anywhere; }
 details { border-top: 1px solid var(--line-soft); margin-top: 0.65rem; padding-top: 0.65rem; }
 summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }

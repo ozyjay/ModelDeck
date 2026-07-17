@@ -22,11 +22,13 @@ loading, disabled remote code, and the fixed `/mnt/work/models/huggingface/hub` 
 Only the 0.5B profile currently has physical compatibility evidence; registering the
 larger cached workers does not claim that they have passed the target GPU acceptance run.
 
-The operator may create additional autoregressive profiles from exact, complete snapshots
-recognised by the local Hugging Face cache scanner. The browser supplies only a safe alias,
-FP16/BF16 selection, lifecycle, context length, and output ceiling. ModelDeck fixes the
-Transformers ROCm runtime, offline and remote-code policy, capability set, cache root, and
-the first free port from 8630 through 8699. These profiles use `local-<alias>` identifiers,
+The operator may create additional profiles from exact, complete snapshots recognised by
+the local Hugging Face cache scanner when the architecture matches the allowlisted
+autoregressive Transformers, SceneChat Gemma 4, or DiffusionGemma worker. The browser
+supplies only a safe alias and bounded family-relevant settings. ModelDeck fixes the
+worker implementation, offline and remote-code policy, capability set, cache root, and the
+first free port from 8630 through 8699. Diffusion profiles are always exclusive. These
+profiles use `local-<alias>` identifiers,
 are stored in `model_profiles`, and remain observationally untested until their worker is
 started and smoke tested. Removing one removes only the runtime configuration.
 

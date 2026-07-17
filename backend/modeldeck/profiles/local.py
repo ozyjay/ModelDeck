@@ -22,7 +22,7 @@ RESERVED_GATEWAY_ALIASES = {
 }
 
 
-class LocalAutoregressiveProfileRequest(BaseModel):
+class LocalProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(min_length=3, max_length=256)
@@ -32,10 +32,11 @@ class LocalAutoregressiveProfileRequest(BaseModel):
     lifecycle: Literal["resident", "on-demand", "exclusive"] = "on-demand"
     context_length: int = Field(default=2048, ge=256, le=32768)
     maximum_new_tokens: int = Field(default=128, ge=1, le=512)
+    maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
 
 
 def create_local_autoregressive_profile(
-    request: LocalAutoregressiveProfileRequest,
+    request: LocalProfileRequest,
     *,
     cache_root: Path,
     port: int,
@@ -69,3 +70,75 @@ def create_local_autoregressive_profile(
             "cache_root": str(cache_root),
         },
     )
+
+
+def create_local_profile(
+    request: LocalProfileRequest,
+    *,
+    cache_root: Path,
+    port: int,
+    configuration_support: str,
+) -> ModelProfile:
+    if configuration_support == "autoregressive-transformers":
+        return create_local_autoregressive_profile(request, cache_root=cache_root, port=port)
+    if configuration_support == "scenechat-gemma4":
+        return ModelProfile(
+            id=f"local-{request.alias}",
+            model_id=request.model_id,
+            revision=request.revision,
+            alias=request.alias,
+            generation_family="vision-language",
+            preferred_runtime="vision-language-transformers-rocm",
+            lifecycle=request.lifecycle,
+            port=port,
+            local_files_only=True,
+            trust_remote_code=False,
+            dtype=request.dtype,
+            capabilities=CapabilitySet(
+                chat="compatibility-only",
+                streaming=False,
+                cancellation=True,
+                image_input=True,
+                structured_output=True,
+            ),
+            settings={
+                "context_length": request.context_length,
+                "maximum_new_tokens": request.maximum_new_tokens,
+                "generation_timeout_seconds": 60,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 180,
+                "cache_root": str(cache_root),
+            },
+        )
+    if configuration_support == "diffusiongemma-transformers":
+        return ModelProfile(
+            id=f"local-{request.alias}",
+            model_id=request.model_id,
+            revision=request.revision,
+            alias=request.alias,
+            generation_family="text-diffusion",
+            preferred_runtime="text-diffusion-transformers-rocm",
+            lifecycle="exclusive",
+            port=port,
+            local_files_only=True,
+            trust_remote_code=False,
+            dtype=request.dtype,
+            capabilities=CapabilitySet(
+                iterative_refinement=True,
+                intermediate_frames=True,
+                seeded_generation=True,
+                logits="model-specific",
+            ),
+            settings={
+                "maximum_new_tokens": request.maximum_new_tokens,
+                "maximum_denoising_steps": request.maximum_denoising_steps,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 300,
+                "hsa_preload_evidence": False,
+                "cache_root": str(cache_root),
+            },
+        )
+    raise ValueError("No allowlisted local worker supports this model architecture")
+
+
+LocalAutoregressiveProfileRequest = LocalProfileRequest

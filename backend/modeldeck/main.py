@@ -22,8 +22,8 @@ from modeldeck.profile_registry import load_local_profiles
 from modeldeck.profiles import (
     LOCAL_PORT_RANGE,
     RESERVED_GATEWAY_ALIASES,
-    LocalAutoregressiveProfileRequest,
-    create_local_autoregressive_profile,
+    LocalProfileRequest,
+    create_local_profile,
     default_model_profiles,
 )
 from modeldeck.supervisor import WorkerSupervisor
@@ -139,7 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
 
     @app.post("/api/profiles", status_code=201)
-    async def create_profile(payload: LocalAutoregressiveProfileRequest, request: Request):
+    async def create_profile(payload: LocalProfileRequest, request: Request):
         catalogue = discover_huggingface_models()
         cached = next(
             (
@@ -153,10 +153,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if cached is None:
             raise HTTPException(409, "The requested pinned snapshot is not complete in the local cache")
-        if cached["generation_family_hint"] != "autoregressive":
+        configuration_support = cached["configuration_support"]
+        if configuration_support is None:
             raise HTTPException(
                 409,
-                "This first configuration workflow supports recognised autoregressive models only",
+                cached["configuration_support_reason"],
             )
 
         profiles = request.app.state.profiles
@@ -173,10 +174,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "No local ModelDeck worker ports are available")
 
         cache_root = Path(cached["cache_location"]).parent
-        profile = create_local_autoregressive_profile(
+        profile = create_local_profile(
             payload,
             cache_root=cache_root,
             port=port,
+            configuration_support=configuration_support,
         )
         store = request.app.state.compatibility_store
         store.save_model_profile(profile.model_dump(mode="json"))

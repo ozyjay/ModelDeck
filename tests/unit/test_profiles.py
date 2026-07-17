@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 from modeldeck.profiles import (
     LocalAutoregressiveProfileRequest,
+    LocalProfileRequest,
     ModelProfile,
     create_local_autoregressive_profile,
+    create_local_profile,
     default_model_profiles,
 )
 from modeldeck.workers.scenechat_worker import EngineConfig
@@ -160,3 +162,47 @@ def test_local_profile_request_rejects_unsafe_or_unbounded_fields() -> None:
             alias="safe-alias",
             context_length=100_000,
         )
+
+
+@pytest.mark.parametrize(
+    ("support", "family", "runtime", "lifecycle"),
+    [
+        (
+            "scenechat-gemma4",
+            "vision-language",
+            "vision-language-transformers-rocm",
+            "on-demand",
+        ),
+        (
+            "diffusiongemma-transformers",
+            "text-diffusion",
+            "text-diffusion-transformers-rocm",
+            "exclusive",
+        ),
+    ],
+)
+def test_local_family_profiles_use_dedicated_allowlisted_workers(
+    tmp_path, support, family, runtime, lifecycle
+) -> None:
+    request = LocalProfileRequest(
+        model_id="google/supported-model",
+        revision="revision-1",
+        alias="family-model",
+        dtype="bfloat16",
+        lifecycle="on-demand",
+        maximum_new_tokens=256,
+        maximum_denoising_steps=24,
+    )
+
+    profile = create_local_profile(
+        request,
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support=support,
+    )
+
+    assert profile.generation_family == family
+    assert profile.preferred_runtime == runtime
+    assert profile.lifecycle == lifecycle
+    assert profile.trust_remote_code is False
+    assert profile.settings["cache_root"] == str(tmp_path)

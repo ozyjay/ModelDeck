@@ -533,15 +533,15 @@ function ModelsView({
         {models.length ? <div className="model-list">{models.map((model) => {
           const matchingProfiles = profiles.filter((profile) => profile.model_id === model.model_id && profile.revision === model.revision);
           const latest = compatibility.find((test) => test.evidence.model_id === model.model_id && test.evidence.model_revision === model.revision && matchingProfiles.some((profile) => profile.preferred_runtime === test.evidence.runtime));
-          const state = model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : "recognised");
-          const canConfigure = model.download_state !== "partial" && model.generation_family_hint === "autoregressive" && Boolean(model.revision);
+          const state = model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
+          const canConfigure = model.download_state !== "partial" && model.configuration_support !== null && Boolean(model.revision);
           const key = `${model.model_id}-${model.revision}`;
           return <article className="model-row" key={key}>
             <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unknown generation family"} · {formatBytes(model.physical_size_bytes)}</p></div><StateBadge state={state} /></div>
             <p className="model-stage">{modelStageDescription(state)}</p>
             <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
             {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => <div key={profile.id}><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" disabled={pendingProfile !== null} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div>)}</div>}
-            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{!canConfigure && model.download_state !== "partial" && <span>{model.generation_family_hint ? "This model family needs a dedicated runtime workflow." : "Model family could not be recognised safely."}</span>}</div>}
+            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{!canConfigure && <span>{model.configuration_support_reason}</span>}</div>}
           </article>;
         })}</div> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
       </section>
@@ -550,19 +550,22 @@ function ModelsView({
 }
 
 function RuntimeConfigurationForm({ model, pending, cancel, submit }: { model: ModelEntry; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
+  const support = model.configuration_support;
   const [alias, setAlias] = useState(() => suggestedAlias(model.model_id));
-  const [dtype, setDtype] = useState<LocalProfileRequest["dtype"]>("float16");
-  const [lifecycle, setLifecycle] = useState<LocalProfileRequest["lifecycle"]>("on-demand");
-  const [contextLength, setContextLength] = useState(2048);
-  const [maximumNewTokens, setMaximumNewTokens] = useState(128);
-  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens }); }}>
-    <div className="runtime-form-heading"><div><strong>Configure local ROCm runtime</strong><small>Model and cache paths are fixed from the recognised snapshot.</small></div></div>
+  const [dtype, setDtype] = useState<LocalProfileRequest["dtype"]>(support === "autoregressive-transformers" ? "float16" : "bfloat16");
+  const [lifecycle, setLifecycle] = useState<LocalProfileRequest["lifecycle"]>(support === "diffusiongemma-transformers" ? "exclusive" : "on-demand");
+  const [contextLength, setContextLength] = useState(support === "scenechat-gemma4" ? 8192 : 2048);
+  const [maximumNewTokens, setMaximumNewTokens] = useState(support === "autoregressive-transformers" ? 128 : support === "scenechat-gemma4" ? 512 : 256);
+  const [maximumDenoisingSteps, setMaximumDenoisingSteps] = useState(24);
+  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps }); }}>
+    <div className="runtime-form-heading"><div><strong>Configure {runtimeLabel(support)}</strong><small>Model, revision, cache path, worker implementation and port are fixed from the recognised snapshot.</small></div></div>
     <div className="runtime-fields">
       <label>Gateway alias<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={alias} onChange={(event) => setAlias(event.target.value)} /></label>
       <label>Data type<select value={dtype} onChange={(event) => setDtype(event.target.value as LocalProfileRequest["dtype"])}><option value="float16">float16</option><option value="bfloat16">bfloat16</option></select></label>
-      <label>Lifecycle<select value={lifecycle} onChange={(event) => setLifecycle(event.target.value as LocalProfileRequest["lifecycle"])}><option value="on-demand">On demand</option><option value="resident">Resident</option><option value="exclusive">Exclusive</option></select></label>
-      <label>Context length<input type="number" min={256} max={32768} step={256} value={contextLength} onChange={(event) => setContextLength(event.currentTarget.valueAsNumber)} /></label>
+      <label>Lifecycle<select disabled={support === "diffusiongemma-transformers"} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as LocalProfileRequest["lifecycle"])}><option value="on-demand">On demand</option><option value="resident">Resident</option><option value="exclusive">Exclusive</option></select></label>
+      {support !== "diffusiongemma-transformers" && <label>Context length<input type="number" min={256} max={32768} step={256} value={contextLength} onChange={(event) => setContextLength(event.currentTarget.valueAsNumber)} /></label>}
       <label>Maximum new tokens<input type="number" min={1} max={512} value={maximumNewTokens} onChange={(event) => setMaximumNewTokens(event.currentTarget.valueAsNumber)} /></label>
+      {support === "diffusiongemma-transformers" && <label>Maximum denoising steps<input type="number" min={1} max={48} value={maximumDenoisingSteps} onChange={(event) => setMaximumDenoisingSteps(event.currentTarget.valueAsNumber)} /></label>}
     </div>
     <p className="manifest-note">Local files only · remote code disabled · fixed Transformers ROCm worker · no download</p>
     <div className="runtime-form-actions"><button type="submit" disabled={pending}>{pending ? "Configuring…" : "Save runtime configuration"}</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
@@ -671,10 +674,16 @@ function suggestedAlias(modelId: string): string {
   const candidate = shortModelName(modelId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
   return /^[a-z][a-z0-9-]+$/.test(candidate) ? candidate : "local-model";
 }
+function runtimeLabel(support: ModelEntry["configuration_support"]): string {
+  if (support === "scenechat-gemma4") return "SceneChat Gemma 4 runtime";
+  if (support === "diffusiongemma-transformers") return "DiffusionGemma runtime";
+  return "autoregressive ROCm runtime";
+}
 function modelStageDescription(state: string): string {
   if (state === "partial") return "Download is incomplete. Finish or repair it in HuggingFacePull before configuring a runtime.";
   if (state === "recognised") return "Snapshot recognised. Configure a constrained local runtime to make it available to ModelDeck.";
   if (state === "runtime-configured") return "Runtime configured. Start the worker and run a smoke test to record compatibility evidence.";
+  if (state === "unsupported") return "Snapshot recognised, but it does not match an allowlisted ModelDeck worker implementation.";
   if (state === "tested-working") return "Tested working for the recorded hardware, runtime and model fingerprint.";
   return `${humanise(state)} compatibility evidence is recorded for this snapshot.`;
 }

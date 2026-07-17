@@ -71,6 +71,28 @@ def _generation_family(snapshot: Path) -> str | None:
     return None
 
 
+def _configuration_support(snapshot: Path) -> tuple[str | None, str]:
+    try:
+        config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "The snapshot has no readable Transformers configuration."
+    architectures = {str(value) for value in config.get("architectures") or ()}
+    model_type = str(config.get("model_type", "")).lower()
+    if config.get("quantization_config"):
+        return None, "Quantised snapshots require a dedicated, compatibility-tested runtime."
+    if any(architecture.endswith("ForCausalLM") for architecture in architectures) or config.get(
+        "is_decoder"
+    ):
+        return "autoregressive-transformers", "Supported by the local Transformers ROCm worker."
+    if model_type == "gemma4" and "Gemma4ForConditionalGeneration" in architectures:
+        return "scenechat-gemma4", "Supported by the dedicated SceneChat Gemma 4 worker."
+    if model_type == "diffusiongemma" or "DiffusionGemmaForBlockDiffusion" in architectures:
+        return "diffusiongemma-transformers", (
+            "Supported by the dedicated DiffusionGemma Transformers worker."
+        )
+    return None, "No allowlisted ModelDeck worker supports this architecture yet."
+
+
 def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dict[str, Any]]:
     models = []
     for cache_root in paths or resolve_cache_paths():
@@ -85,6 +107,11 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             chosen = complete[-1] if complete else (snapshots[-1] if snapshots else None)
             repo_id = model_dir.name.removeprefix("models--").replace("--", "/")
             state = "partial" if partial and not complete else "installed-untested" if complete else "partial"
+            support, support_reason = (
+                _configuration_support(chosen)
+                if chosen and complete
+                else (None, "Finish the local snapshot before configuring a runtime.")
+            )
             models.append(
                 {
                     "model_id": repo_id,
@@ -93,6 +120,8 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                     "physical_size_bytes": _physical_size((model_dir,)),
                     "download_state": state,
                     "generation_family_hint": _generation_family(chosen) if chosen else None,
+                    "configuration_support": support,
+                    "configuration_support_reason": support_reason,
                     "runnable": False,
                     "runnable_reason": "Compatibility has not been tested for the current stack.",
                 }

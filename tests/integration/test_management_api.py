@@ -60,6 +60,8 @@ async def test_cached_autoregressive_runtime_configuration_is_persistent_and_rem
         "physical_size_bytes": 1024,
         "download_state": "installed-untested",
         "generation_family_hint": "autoregressive",
+        "configuration_support": "autoregressive-transformers",
+        "configuration_support_reason": "Supported by the local Transformers ROCm worker.",
         "runnable": False,
         "runnable_reason": "Compatibility has not been tested for the current stack.",
     }
@@ -118,6 +120,8 @@ async def test_runtime_configuration_rejects_unrecognised_and_reserved_inputs(
         "physical_size_bytes": 1024,
         "download_state": "installed-untested",
         "generation_family_hint": "autoregressive",
+        "configuration_support": "autoregressive-transformers",
+        "configuration_support_reason": "Supported by the local Transformers ROCm worker.",
         "runnable": False,
         "runnable_reason": "Untested",
     }
@@ -147,6 +151,74 @@ async def test_runtime_configuration_rejects_unrecognised_and_reserved_inputs(
 
     assert reserved.status_code == 409
     assert arbitrary.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_management_configures_allowlisted_vision_and_diffusion_workers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    model_dir = tmp_path / "cache" / "model"
+    model_dir.mkdir(parents=True)
+    common = {
+        "revision": "revision-1",
+        "cache_location": str(model_dir),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "runnable": False,
+        "runnable_reason": "Untested",
+    }
+    catalogue = [
+        {
+            **common,
+            "model_id": "google/gemma-4-local",
+            "generation_family_hint": "vision-language",
+            "configuration_support": "scenechat-gemma4",
+            "configuration_support_reason": "Supported by SceneChat.",
+        },
+        {
+            **common,
+            "model_id": "google/diffusiongemma-local",
+            "generation_family_hint": "text-diffusion",
+            "configuration_support": "diffusiongemma-transformers",
+            "configuration_support_reason": "Supported by DiffusionGemma.",
+        },
+    ]
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: catalogue)
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            vision = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": "google/gemma-4-local",
+                    "revision": "revision-1",
+                    "alias": "local-vision",
+                    "dtype": "bfloat16",
+                    "context_length": 8192,
+                    "maximum_new_tokens": 512,
+                },
+            )
+            diffusion = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": "google/diffusiongemma-local",
+                    "revision": "revision-1",
+                    "alias": "local-diffusion",
+                    "dtype": "bfloat16",
+                    "lifecycle": "exclusive",
+                    "maximum_new_tokens": 256,
+                    "maximum_denoising_steps": 24,
+                },
+            )
+
+    assert vision.status_code == 201
+    assert vision.json()["preferred_runtime"] == "vision-language-transformers-rocm"
+    assert diffusion.status_code == 201
+    assert diffusion.json()["preferred_runtime"] == "text-diffusion-transformers-rocm"
+    assert diffusion.json()["lifecycle"] == "exclusive"
 
 
 @pytest.mark.asyncio

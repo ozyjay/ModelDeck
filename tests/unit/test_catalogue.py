@@ -27,6 +27,7 @@ def test_discovers_complete_cache_without_claiming_compatibility(tmp_path: Path)
     assert models[0]["model_id"] == "Qwen/Demo"
     assert models[0]["download_state"] == "installed-untested"
     assert models[0]["generation_family_hint"] == "autoregressive"
+    assert models[0]["configuration_support"] == "autoregressive-transformers"
     assert models[0]["runnable"] is False
 
 
@@ -64,4 +65,46 @@ def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_pat
     model = discover_huggingface_models([tmp_path])[0]
 
     assert model["generation_family_hint"] == "vision-language"
+    assert model["configuration_support"] == "scenechat-gemma4"
     assert model["runnable"] is False
+
+
+def test_identifies_diffusiongemma_configuration_support(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--google--diffusiongemma" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["DiffusionGemmaForBlockDiffusion"],
+                "model_type": "diffusion_gemma",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "text-diffusion"
+    assert model["configuration_support"] == "diffusiongemma-transformers"
+
+
+def test_does_not_offer_generic_configuration_for_quantised_snapshot(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Org--Quantised" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["DemoForCausalLM"],
+                "model_type": "demo",
+                "quantization_config": {"quant_method": "gptq"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] is None
+    assert "Quantised snapshots" in model["configuration_support_reason"]

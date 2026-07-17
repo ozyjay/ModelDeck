@@ -8,7 +8,8 @@ preset listing, stop-all, and same-origin gateway status. `GET /api/gateway/stat
 returns gateway health, advertised models, and providers, or a structured `available:
 false` response when the separate gateway process cannot be reached. Profile mutation
 is limited to `POST /api/profiles` and `DELETE /api/profiles/{profile_id}` for local
-autoregressive configurations. Creation requires an exact complete snapshot already
+configurations backed by allowlisted autoregressive, SceneChat Gemma 4, or DiffusionGemma
+workers. Creation requires an exact complete snapshot already
 returned by cache discovery and accepts only an alias, dtype, lifecycle, context length,
 and output ceiling. ModelDeck derives the cache root, Transformers ROCm runtime, port,
 capabilities, offline policy, and fixed launch arguments. Built-in profiles cannot be
@@ -35,7 +36,7 @@ jobs from local diffusion providers after a gateway restart. Diffusion request t
 default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECONDS`.
 `fast-chat` and `token-explainer` prefer the live Qwen worker when ready and fall back
 explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.
-Persisted local autoregressive profiles are discovered by the gateway on each request and
+Persisted local profiles are discovered by the gateway on each request and
 advertised under their configured alias without requiring a gateway restart.
 
 ### Native autoregressive trace token metadata

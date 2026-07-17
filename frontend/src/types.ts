@@ -69,6 +69,7 @@ export interface LocalProfileRequest {
   lifecycle: "resident" | "on-demand" | "exclusive";
   context_length: number;
   maximum_new_tokens: number;
+  maximum_denoising_steps: number;
 }
 
 export interface ModelEntry {
@@ -78,6 +79,12 @@ export interface ModelEntry {
   physical_size_bytes: number;
   download_state: "partial" | "installed-untested";
   generation_family_hint: string | null;
+  configuration_support:
+    | "autoregressive-transformers"
+    | "scenechat-gemma4"
+    | "diffusiongemma-transformers"
+    | null;
+  configuration_support_reason: string;
   runnable: boolean;
   runnable_reason: string;
 }

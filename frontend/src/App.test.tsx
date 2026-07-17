@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus, Profile } from "./types";
+import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile } from "./types";
 
 const capabilities = {
   chat: true,
@@ -52,24 +52,28 @@ const profile = {
   source: "built-in" as const,
 };
 
-const completeModel = {
+const completeModel: ModelEntry = {
   model_id: worker.model_id,
   revision: profile.revision,
   cache_location: "/mnt/work/models/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct",
   physical_size_bytes: 999_604_710,
   download_state: "installed-untested",
   generation_family_hint: "autoregressive",
+  configuration_support: "autoregressive-transformers" as const,
+  configuration_support_reason: "Supported by the local Transformers ROCm worker.",
   runnable: false,
   runnable_reason: "Compatibility has not been tested for the current stack.",
 };
 
-const partialModel = {
+const partialModel: ModelEntry = {
   ...completeModel,
   model_id: "ozyjay/diffusiongemma-q4",
   revision: null,
   physical_size_bytes: 40,
   download_state: "partial",
   generation_family_hint: null,
+  configuration_support: null,
+  configuration_support_reason: "Finish the local snapshot before configuring a runtime.",
 };
 
 const hardware = {
@@ -110,7 +114,7 @@ const defaultGateway = {
 let gateway: GatewayStatus = defaultGateway;
 let postFailure = false;
 let currentWorker = worker;
-let catalogueModels = [completeModel, partialModel];
+let catalogueModels: ModelEntry[] = [completeModel, partialModel];
 let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 let localProfiles: Profile[] = [];
@@ -315,7 +319,7 @@ describe("ModelDeck operator console", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
     fireEvent.click(screen.getByRole("button", { name: "Add runtime configuration" }));
-    expect(screen.getByText("Model and cache paths are fixed from the recognised snapshot.")).toBeInTheDocument();
+    expect(screen.getByText("Model, revision, cache path, worker implementation and port are fixed from the recognised snapshot.")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Gateway alias"), { target: { value: "my-local-qwen" } });
     fireEvent.click(screen.getByRole("button", { name: "Save runtime configuration" }));
 
@@ -324,6 +328,36 @@ describe("ModelDeck operator console", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove configuration" }));
     expect(await screen.findByText("Runtime my-local-qwen was removed. Its cached model files were kept.")).toBeInTheDocument();
     expect(window.confirm).toHaveBeenCalledWith("Remove runtime configuration my-local-qwen? Cached model files will be kept.");
+  });
+
+  it("offers dedicated forms for supported vision-language and diffusion models", async () => {
+    catalogueModels = [
+      {
+        ...completeModel,
+        model_id: "google/gemma-4-E2B-it",
+        generation_family_hint: "vision-language",
+        configuration_support: "scenechat-gemma4",
+        configuration_support_reason: "Supported by the dedicated SceneChat Gemma 4 worker.",
+      },
+      {
+        ...completeModel,
+        model_id: "google/diffusiongemma-26B-A4B-it",
+        generation_family_hint: "text-diffusion",
+        configuration_support: "diffusiongemma-transformers",
+        configuration_support_reason: "Supported by the dedicated DiffusionGemma Transformers worker.",
+      },
+    ];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
+
+    const cards = screen.getAllByRole("article");
+    fireEvent.click(within(cards[0]).getByRole("button", { name: "Configure runtime" }));
+    expect(within(cards[0]).getByText("Configure SceneChat Gemma 4 runtime")).toBeInTheDocument();
+    fireEvent.click(within(cards[0]).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(cards[1]).getByRole("button", { name: "Configure runtime" }));
+    expect(within(cards[1]).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
+    expect(within(cards[1]).getByLabelText("Lifecycle")).toBeDisabled();
+    expect(within(cards[1]).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
   });
 
   it("renders an explicit empty model-library state", async () => {
