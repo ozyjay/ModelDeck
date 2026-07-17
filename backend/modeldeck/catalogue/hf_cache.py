@@ -80,6 +80,8 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             snapshots = [path for path in (model_dir / "snapshots").glob("*") if path.is_dir()]
             complete = [path for path in snapshots if _snapshot_complete(path)]
             partial = any(model_dir.rglob("*.incomplete")) or bool(snapshots and not complete)
+            if not snapshots and not partial:
+                continue
             chosen = complete[-1] if complete else (snapshots[-1] if snapshots else None)
             repo_id = model_dir.name.removeprefix("models--").replace("--", "/")
             state = "partial" if partial and not complete else "installed-untested" if complete else "partial"

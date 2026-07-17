@@ -37,6 +37,14 @@ def test_marks_incomplete_snapshot_partial(tmp_path: Path) -> None:
     assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"
 
 
+def test_ignores_metadata_only_repository_without_a_snapshot(tmp_path: Path) -> None:
+    reference = tmp_path / "models--Org--Stale" / "refs" / "main"
+    reference.parent.mkdir(parents=True)
+    reference.write_text("missing-snapshot", encoding="utf-8")
+
+    assert discover_huggingface_models([tmp_path]) == []
+
+
 def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--google--gemma-4-E2B-it" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)
