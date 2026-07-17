@@ -34,6 +34,7 @@ def test_booth_browser_arguments_use_isolated_fullscreen_profile() -> None:
     arguments = _browser_arguments(windowed=False)
 
     assert "--user-data-dir=/tmp/modeldeck-booth-test" in arguments
+    assert "--disable-background-networking" in arguments
     assert "--kiosk" in arguments
     assert arguments[-1] == "http://127.0.0.1:3600"
 
@@ -60,6 +61,8 @@ def test_booth_launcher_hands_shutdown_to_background_watcher() -> None:
 
     assert "Start-Process" in launcher
     assert "watch_booth.ps1" in launcher
+    assert "-RedirectStandardOutput 'var/log/booth-browser.log'" in launcher
+    assert "-RedirectStandardError 'var/log/booth-browser-error.log'" in launcher
     assert "$BoothHandedOff = $true" in launcher
     assert "$BrowserProcess.WaitForExit()" in watcher
     assert "'stop.ps1'" in watcher

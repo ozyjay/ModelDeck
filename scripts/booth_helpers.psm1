@@ -44,6 +44,7 @@ function Get-BoothBrowserArguments {
     $Arguments = @(
         "--user-data-dir=$ProfileDirectory",
         '--no-first-run',
+        '--disable-background-networking',
         '--disable-session-crashed-bubble',
         '--disable-infobars'
     )

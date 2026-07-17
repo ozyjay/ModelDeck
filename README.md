@@ -82,7 +82,9 @@ isolated `.booth-browser-profile`. The launch command then returns to the prompt
 the booth browser stops the ModelDeck workers and services through a background watcher;
 you can instead stop them explicitly with `pwsh -NoProfile -File scripts/stop.ps1`. Set
 `BOOTH_BROWSER` to a Chromium, Chrome, or Edge executable name or path if automatic
-discovery does not find the intended browser.
+discovery does not find the intended browser. Booth Chromium background networking is
+disabled; any remaining browser diagnostics are written under `var/log` rather than to
+the launching terminal.
 
 ## Core ROCm model workers
 

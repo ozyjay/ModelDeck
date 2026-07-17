@@ -60,7 +60,12 @@ try {
         -ProfileDirectory $ProfileDirectory `
         -Windowed:$Windowed
     Write-Host 'ModelDeck is ready. Opening the dedicated booth browser.'
-    $BrowserProcess = Start-Process -FilePath $BrowserPath -ArgumentList $BrowserArguments -PassThru
+    $BrowserProcess = Start-Process `
+        -FilePath $BrowserPath `
+        -ArgumentList $BrowserArguments `
+        -RedirectStandardOutput 'var/log/booth-browser.log' `
+        -RedirectStandardError 'var/log/booth-browser-error.log' `
+        -PassThru
     $PowerShellPath = (Get-Process -Id $PID).Path
     $WatcherArguments = @(
         '-NoProfile',
