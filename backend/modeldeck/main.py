@@ -18,7 +18,7 @@ from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.hardware import probe_environment
-from modeldeck.profile_registry import load_local_profiles
+from modeldeck.profile_registry import load_local_profiles, profile_allowed, profile_uses_huggingface_cache
 from modeldeck.profiles import (
     LOCAL_PORT_RANGE,
     RESERVED_GATEWAY_ALIASES,
@@ -48,6 +48,12 @@ class LifecycleEvidence(BaseModel):
     stability_failures: int | None = Field(default=None, ge=0)
 
 
+class ModelCachePolicyRequest(BaseModel):
+    model_id: str = Field(min_length=3, max_length=256)
+    revision: str = Field(min_length=1, max_length=128)
+    allowed: bool
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
     built_in_profiles = default_model_profiles()
@@ -58,9 +64,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
         store.initialise()
         app.state.compatibility_store = store
+        policy = store.list_model_cache_policy()
+        for profile in built_in_profiles:
+            if not profile_allowed(profile, policy):
+                await app.state.supervisor.remove_profile(profile.id)
         for profile in load_local_profiles(configured.data_dir):
-            app.state.supervisor.register_profile(profile)
             app.state.profiles.append(profile)
+            if profile_allowed(profile, policy):
+                app.state.supervisor.register_profile(profile)
         yield
         await app.state.supervisor.stop_all()
 
@@ -124,16 +135,94 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/api/catalogue")
-    async def catalogue():
-        return {"models": await asyncio.to_thread(discover_huggingface_models), "downloads_started": False}
+    async def catalogue(request: Request):
+        models = await asyncio.to_thread(discover_huggingface_models)
+        policy = request.app.state.compatibility_store.list_model_cache_policy()
+        return {
+            "models": [
+                {
+                    **model,
+                    "modeldeck_allowed": policy.get((model["model_id"], model["revision"]), True),
+                }
+                for model in models
+            ],
+            "downloads_started": False,
+        }
+
+    @app.post("/api/catalogue/policy")
+    async def set_catalogue_policy(payload: ModelCachePolicyRequest, request: Request):
+        cached = next(
+            (
+                model
+                for model in discover_huggingface_models()
+                if model["model_id"] == payload.model_id and model["revision"] == payload.revision
+            ),
+            None,
+        )
+        if cached is None:
+            raise HTTPException(404, "The exact cached model revision was not discovered")
+        matching_profiles = [
+            profile
+            for profile in request.app.state.profiles
+            if profile.model_id == payload.model_id
+            and profile.revision == payload.revision
+            and profile_uses_huggingface_cache(profile)
+        ]
+        supervisor = request.app.state.supervisor
+        if not payload.allowed:
+            for profile in matching_profiles:
+                if profile.id not in supervisor.workers:
+                    continue
+                state = supervisor.get_worker(profile.id)["state"]
+                if state not in {"stopped", "failed"}:
+                    raise HTTPException(
+                        409,
+                        f"Stop worker {profile.id} before disallowing this cached model",
+                    )
+            removed_profiles = []
+            try:
+                for profile in matching_profiles:
+                    if profile.id in supervisor.workers:
+                        await supervisor.remove_profile(profile.id)
+                        removed_profiles.append(profile)
+            except RuntimeError as error:
+                for removed in removed_profiles:
+                    supervisor.register_profile(removed)
+                raise HTTPException(409, str(error)) from error
+        else:
+            registered_profiles = []
+            try:
+                for profile in matching_profiles:
+                    if profile.id not in supervisor.workers:
+                        supervisor.register_profile(profile)
+                        registered_profiles.append(profile)
+            except ValueError as error:
+                for registered in registered_profiles:
+                    await supervisor.remove_profile(registered.id)
+                raise HTTPException(409, str(error)) from error
+        request.app.state.compatibility_store.set_model_cache_allowed(
+            payload.model_id,
+            payload.revision,
+            allowed=payload.allowed,
+        )
+        return {
+            "ok": True,
+            "model_id": payload.model_id,
+            "revision": payload.revision,
+            "allowed": payload.allowed,
+            "cache_removed": False,
+            "affected_profiles": [profile.id for profile in matching_profiles],
+        }
 
     @app.get("/api/profiles")
     async def list_profiles(request: Request):
         built_in_ids = request.app.state.built_in_profile_ids
+        policy = request.app.state.compatibility_store.list_model_cache_policy()
         return [
             {
                 **profile.model_dump(mode="json"),
                 "source": "built-in" if profile.id in built_in_ids else "local",
+                "modeldeck_allowed": profile_allowed(profile, policy),
             }
             for profile in request.app.state.profiles
         ]
@@ -153,6 +242,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if cached is None:
             raise HTTPException(409, "The requested pinned snapshot is not complete in the local cache")
+        if not request.app.state.compatibility_store.model_cache_allowed(payload.model_id, payload.revision):
+            raise HTTPException(409, "Allow this cached model in ModelDeck before configuring it")
         configuration_support = cached["configuration_support"]
         if configuration_support is None:
             raise HTTPException(
@@ -200,10 +291,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if profile is None:
             raise HTTPException(404, "Unknown local runtime configuration")
-        try:
-            await request.app.state.supervisor.remove_profile(profile_id)
-        except RuntimeError as error:
-            raise HTTPException(409, str(error)) from error
+        if profile_id in request.app.state.supervisor.workers:
+            try:
+                await request.app.state.supervisor.remove_profile(profile_id)
+            except RuntimeError as error:
+                raise HTTPException(409, str(error)) from error
         request.app.state.compatibility_store.delete_model_profile(profile_id)
         request.app.state.profiles.remove(profile)
         return {

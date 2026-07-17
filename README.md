@@ -59,6 +59,12 @@ launch manifest itself. The configuration persists in ModelDeck's local SQLite s
 removing it never removes the cached model. Unsupported architectures remain visible with
 the specific reason that configuration is unavailable.
 
+Each complete cached revision can also be **Disallowed in ModelDeck** without deleting it
+from the Hugging Face cache. Disallowing a stopped model removes its cache-backed workers
+and gateway routes while retaining built-in or local profile configuration. Re-allowing
+the revision restores those workers. Packaged checkpoints, including the ModelDeck
+DiffusionGemma Q4 profile, are independent of this HF-cache policy.
+
 Benchmark all physical ROCm profiles with a repeatable representative workload:
 
 ```powershell

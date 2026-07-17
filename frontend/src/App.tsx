@@ -59,14 +59,16 @@ export default function App() {
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
+      getJson<{ models: ModelEntry[] }>("/api/catalogue"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
     setGateway(nextGateway);
+    setModels(catalogue.models);
   }, []);
 
   const load = useCallback(async () => {
@@ -524,6 +526,27 @@ function ModelsView({
     }
   };
 
+  const setModelPolicy = async (model: ModelEntry, allowed: boolean) => {
+    if (!model.revision) return;
+    if (!allowed && !window.confirm(`Disallow ${model.model_id} in ModelDeck? Cached files and runtime configurations will be kept.`)) return;
+    setPendingProfile(`policy:${model.model_id}`);
+    setFeedback(null);
+    try {
+      await postJson("/api/catalogue/policy", {
+        model_id: model.model_id,
+        revision: model.revision,
+        allowed,
+      });
+      await configurationChanged();
+      setConfiguring(null);
+      setFeedback({ tone: "good", message: allowed ? `${model.model_id} is allowed in ModelDeck again.` : `${model.model_id} is disallowed in ModelDeck. Its cached files and configurations were kept.` });
+    } catch (reason) {
+      setFeedback({ tone: "bad", message: messageFrom(reason) });
+    } finally {
+      setPendingProfile(null);
+    }
+  };
+
   return (
     <div className="view-stack">
       <section className="notice-panel"><strong>Cache-backed runtime configuration</strong><p>HuggingFacePull still owns acquisition and cleanup. ModelDeck can configure recognised local snapshots, but never downloads or deletes model files.</p></section>
@@ -533,15 +556,15 @@ function ModelsView({
         {models.length ? <div className="model-list">{models.map((model) => {
           const matchingProfiles = profiles.filter((profile) => profile.model_id === model.model_id && profile.revision === model.revision);
           const latest = compatibility.find((test) => test.evidence.model_id === model.model_id && test.evidence.model_revision === model.revision && matchingProfiles.some((profile) => profile.preferred_runtime === test.evidence.runtime));
-          const state = model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
-          const canConfigure = model.download_state !== "partial" && model.configuration_support !== null && Boolean(model.revision);
+          const state = !model.modeldeck_allowed ? "disallowed" : model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
+          const canConfigure = model.modeldeck_allowed && model.download_state !== "partial" && model.configuration_support !== null && Boolean(model.revision);
           const key = `${model.model_id}-${model.revision}`;
           return <article className="model-row" key={key}>
             <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unknown generation family"} · {formatBytes(model.physical_size_bytes)}</p></div><StateBadge state={state} /></div>
             <p className="model-stage">{modelStageDescription(state)}</p>
-            <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
+            <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ["ModelDeck use", model.modeldeck_allowed ? "Allowed" : "Disallowed"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
             {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => <div key={profile.id}><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" disabled={pendingProfile !== null} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div>)}</div>}
-            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{!canConfigure && <span>{model.configuration_support_reason}</span>}</div>}
+            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
           </article>;
         })}</div> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
       </section>
@@ -680,6 +703,7 @@ function runtimeLabel(support: ModelEntry["configuration_support"]): string {
   return "autoregressive ROCm runtime";
 }
 function modelStageDescription(state: string): string {
+  if (state === "disallowed") return "Cached files are retained, but this revision is excluded from ModelDeck workers and gateway routes.";
   if (state === "partial") return "Download is incomplete. Finish or repair it in HuggingFacePull before configuring a runtime.";
   if (state === "recognised") return "Snapshot recognised. Configure a constrained local runtime to make it available to ModelDeck.";
   if (state === "runtime-configured") return "Runtime configured. Start the worker and run a smoke test to record compatibility evidence.";

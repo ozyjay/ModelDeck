@@ -74,6 +74,11 @@ environment variable, remote model identifier, or remote-code flag is accepted f
 browser. Local profiles are persisted in SQLite, loaded by management at startup, and
 discovered dynamically by the gateway.
 
+An exact model/revision allow policy controls whether Hugging Face cache-backed profiles
+participate in management workers and gateway routes. Disallowing is reversible and never
+mutates the cache or deletes profile configuration. Profiles reading packaged ModelDeck
+checkpoints do not inherit policy merely because they record the same upstream model ID.
+
 ## Data and security
 
 SQLite stores model profiles, compatibility tests, worker events, and presets. Logs are

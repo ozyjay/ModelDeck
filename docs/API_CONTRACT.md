@@ -16,6 +16,12 @@ capabilities, offline policy, and fixed launch arguments. Built-in profiles cann
 removed, active local workers must be stopped first, and deleting a profile never deletes
 cache content.
 
+`POST /api/catalogue/policy` persists an allow/disallow decision for an exact cached
+`model_id` and `revision`. Disallowing requires every matching cache-backed worker to be
+stopped, then removes those workers and gateway routes from active ModelDeck use without
+deleting cache files or profile documents. Re-allowing restores configured workers.
+Profiles backed by packaged checkpoints rather than the Hugging Face cache are unaffected.
+
 FastAPI also serves the committed operator-console assets and returns the SPA entry point
 for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
 through to the frontend.
@@ -38,6 +44,7 @@ default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECO
 explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.
 Persisted local profiles are discovered by the gateway on each request and
 advertised under their configured alias without requiring a gateway restart.
+The gateway applies the persisted HF-cache allow policy on every route refresh.
 
 ### Native autoregressive trace token metadata
 

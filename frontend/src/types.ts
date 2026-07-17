@@ -59,6 +59,7 @@ export interface Profile {
   capabilities: Capabilities;
   settings: Record<string, string | number | boolean>;
   source: "built-in" | "local";
+  modeldeck_allowed: boolean;
 }
 
 export interface LocalProfileRequest {
@@ -85,6 +86,7 @@ export interface ModelEntry {
     | "diffusiongemma-transformers"
     | null;
   configuration_support_reason: string;
+  modeldeck_allowed: boolean;
   runnable: boolean;
   runnable_reason: string;
 }

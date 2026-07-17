@@ -120,6 +120,33 @@ async def test_gateway_discovers_persisted_local_aliases_without_restart(monkeyp
     assert capabilities.json()["local-example"]["completions"] is True
 
 
+@pytest.mark.asyncio
+async def test_gateway_excludes_disallowed_hf_profile_but_keeps_packaged_q4(monkeypatch, tmp_path) -> None:
+    async def unavailable_provider(_client, _profile):
+        return None, False
+
+    monkeypatch.setattr(gateway_module, "provider_health", unavailable_provider)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    store.set_model_cache_allowed(
+        "google/diffusiongemma-26B-A4B-it",
+        "52de6b914ee1749a7d4933202505ddf5b414ec43",
+        allowed=False,
+    )
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        models = await client.get("/v1/models")
+        providers = await client.get("/v1/providers")
+
+    aliases = {model["id"] for model in models.json()["data"]}
+    provider_ids = {provider["id"] for provider in providers.json()["providers"]}
+    assert "text-diffusion-bf16" not in aliases
+    assert "text-diffusion" in aliases
+    assert "diffusiongemma-rocm" not in provider_ids
+    assert "diffusiongemma-q4-rocm" in provider_ids
+
+
 def test_scenechat_gateway_translation_uses_exact_model_and_internal_credential(monkeypatch) -> None:
     profile = next(
         profile for profile in default_model_profiles() if profile.id == "scenechat-gemma4-e2b-rocm"

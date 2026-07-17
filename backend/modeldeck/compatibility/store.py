@@ -46,6 +46,13 @@ class CompatibilityStore:
                 CREATE TABLE IF NOT EXISTS model_profiles (
                     id TEXT PRIMARY KEY, document_json TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS model_cache_policy (
+                    model_id TEXT NOT NULL,
+                    revision TEXT NOT NULL,
+                    allowed INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (model_id, revision)
+                );
                 CREATE TABLE IF NOT EXISTS compatibility_tests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     fingerprint TEXT NOT NULL,
@@ -123,6 +130,31 @@ class CompatibilityStore:
         with sqlite3.connect(self.path) as database:
             cursor = database.execute("DELETE FROM model_profiles WHERE id = ?", (profile_id,))
         return cursor.rowcount > 0
+
+    def list_model_cache_policy(self) -> dict[tuple[str, str], bool]:
+        if not self.path.exists():
+            return {}
+        try:
+            with sqlite3.connect(self.path) as database:
+                rows = database.execute(
+                    "SELECT model_id, revision, allowed FROM model_cache_policy"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {(str(row[0]), str(row[1])): bool(row[2]) for row in rows}
+
+    def model_cache_allowed(self, model_id: str, revision: str) -> bool:
+        return self.list_model_cache_policy().get((model_id, revision), True)
+
+    def set_model_cache_allowed(self, model_id: str, revision: str, *, allowed: bool) -> None:
+        updated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO model_cache_policy (model_id, revision, allowed, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
+                "allowed = excluded.allowed, updated_at = excluded.updated_at",
+                (model_id, revision, int(allowed), updated_at),
+            )
 
     def record_test(
         self,

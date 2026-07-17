@@ -50,6 +50,7 @@ const profile = {
   capabilities,
   settings: { cache_root: "/mnt/work/models/huggingface/hub" },
   source: "built-in" as const,
+  modeldeck_allowed: true,
 };
 
 const completeModel: ModelEntry = {
@@ -61,6 +62,7 @@ const completeModel: ModelEntry = {
   generation_family_hint: "autoregressive",
   configuration_support: "autoregressive-transformers" as const,
   configuration_support_reason: "Supported by the local Transformers ROCm worker.",
+  modeldeck_allowed: true,
   runnable: false,
   runnable_reason: "Compatibility has not been tested for the current stack.",
 };
@@ -175,6 +177,15 @@ function mockFetch() {
         };
         localProfiles.push(created);
         return json(created, 201);
+      }
+      if (path === "/api/catalogue/policy") {
+        const payload = JSON.parse(String(init.body));
+        catalogueModels = catalogueModels.map((model) =>
+          model.model_id === payload.model_id && model.revision === payload.revision
+            ? { ...model, modeldeck_allowed: payload.allowed }
+            : model,
+        );
+        return json({ ok: true, ...payload, cache_removed: false });
       }
       if (path.endsWith("/start")) currentWorker = { ...currentWorker, state: "ready" };
       if (path.endsWith("/stop")) currentWorker = { ...currentWorker, state: "stopped" };
@@ -358,6 +369,19 @@ describe("ModelDeck operator console", () => {
     expect(within(cards[1]).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
     expect(within(cards[1]).getByLabelText("Lifecycle")).toBeDisabled();
     expect(within(cards[1]).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
+  });
+
+  it("disallows and re-allows a cached model without deleting it", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disallow in ModelDeck" }));
+
+    expect(await screen.findByText(`${completeModel.model_id} is disallowed in ModelDeck. Its cached files and configurations were kept.`)).toBeInTheDocument();
+    expect(screen.getAllByText("Disallowed")).toHaveLength(2);
+    expect(screen.getByText("This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow in ModelDeck" }));
+    expect(await screen.findByText(`${completeModel.model_id} is allowed in ModelDeck again.`)).toBeInTheDocument();
+    expect(window.confirm).toHaveBeenCalledWith(`Disallow ${completeModel.model_id} in ModelDeck? Cached files and runtime configurations will be kept.`);
   });
 
   it("renders an explicit empty model-library state", async () => {

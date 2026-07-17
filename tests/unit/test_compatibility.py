@@ -41,3 +41,14 @@ def test_compatibility_store_persists_and_removes_local_profiles(tmp_path) -> No
     assert store.list_model_profiles() == [profile]
     assert store.delete_model_profile("local-example") is True
     assert store.list_model_profiles() == []
+
+
+def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
+    store.initialise()
+
+    assert store.model_cache_allowed("google/model", "revision-1") is True
+    store.set_model_cache_allowed("google/model", "revision-1", allowed=False)
+
+    assert store.model_cache_allowed("google/model", "revision-1") is False
+    assert store.list_model_cache_policy() == {("google/model", "revision-1"): False}

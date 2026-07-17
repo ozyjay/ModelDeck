@@ -222,6 +222,85 @@ async def test_management_configures_allowlisted_vision_and_diffusion_workers(
 
 
 @pytest.mark.asyncio
+async def test_disallowing_hf_model_keeps_cache_profiles_and_packaged_q4(monkeypatch, tmp_path: Path) -> None:
+    model_id = "google/diffusiongemma-26B-A4B-it"
+    revision = "52de6b914ee1749a7d4933202505ddf5b414ec43"
+    cached = {
+        "model_id": model_id,
+        "revision": revision,
+        "cache_location": str(tmp_path / "cache" / "models--google--diffusiongemma"),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "text-diffusion",
+        "configuration_support": "diffusiongemma-transformers",
+        "configuration_support_reason": "Supported by DiffusionGemma.",
+        "runnable": False,
+        "runnable_reason": "Untested",
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    settings = Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs")
+    app = create_app(settings)
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            disallowed = await client.post(
+                "/api/catalogue/policy",
+                json={"model_id": model_id, "revision": revision, "allowed": False},
+            )
+            workers = await client.get("/api/workers")
+            profiles = await client.get("/api/profiles")
+            catalogue = await client.get("/api/catalogue")
+            allowed = await client.post(
+                "/api/catalogue/policy",
+                json={"model_id": model_id, "revision": revision, "allowed": True},
+            )
+            restored_workers = await client.get("/api/workers")
+
+    worker_ids = {worker["id"] for worker in workers.json()}
+    assert disallowed.status_code == 200
+    assert disallowed.json()["cache_removed"] is False
+    assert "diffusiongemma-rocm" not in worker_ids
+    assert "diffusiongemma-q4-rocm" in worker_ids
+    assert any(profile["id"] == "diffusiongemma-rocm" for profile in profiles.json())
+    assert catalogue.json()["models"][0]["modeldeck_allowed"] is False
+    assert allowed.status_code == 200
+    assert any(worker["id"] == "diffusiongemma-rocm" for worker in restored_workers.json())
+
+
+@pytest.mark.asyncio
+async def test_disallowing_requires_matching_worker_to_be_stopped(monkeypatch, tmp_path: Path) -> None:
+    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+    revision = "7ae557604adf67be50417f59c2c2f167def9a775"
+    monkeypatch.setattr(
+        main_module,
+        "discover_huggingface_models",
+        lambda: [
+            {
+                "model_id": model_id,
+                "revision": revision,
+                "download_state": "installed-untested",
+            }
+        ],
+    )
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with app.router.lifespan_context(app):
+        app.state.supervisor.workers["qwen-small-rocm"].state = "ready"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/catalogue/policy",
+                json={"model_id": model_id, "revision": revision, "allowed": False},
+            )
+
+    assert response.status_code == 409
+    assert "Stop worker qwen-small-rocm" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_gateway_status_is_same_origin_and_structured(monkeypatch, tmp_path: Path) -> None:
     original_client = httpx.AsyncClient
 

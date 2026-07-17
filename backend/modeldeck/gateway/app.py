@@ -9,8 +9,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
-from modeldeck.profile_registry import load_local_profiles
+from modeldeck.profile_registry import load_local_profiles, profile_allowed
 from modeldeck.profiles import ModelProfile, default_model_profiles
 
 
@@ -42,7 +43,13 @@ def create_gateway_app(
             for profile in load_local_profiles(configured.data_dir):
                 if profile.alias not in routes:
                     routes[profile.alias] = [profile]
-        return routes
+        policy = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3").list_model_cache_policy()
+        filtered = {}
+        for alias, candidates in routes.items():
+            allowed_candidates = [profile for profile in candidates if profile_allowed(profile, policy)]
+            if allowed_candidates:
+                filtered[alias] = allowed_candidates
+        return filtered
 
     async def providers() -> list[dict[str, Any]]:
         result = []
