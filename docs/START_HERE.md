@@ -12,7 +12,10 @@ bundle. Node.js is needed for setup and verification, but not while ModelDeck is
 2. Read [architecture](ARCHITECTURE.md) and [worker protocol](WORKER_PROTOCOL.md).
 3. Run `pwsh -NoProfile -File scripts/setup.ps1` to prepare both environments, then run
    `pwsh -NoProfile -File scripts/verify.ps1`.
-4. Start with `pwsh -NoProfile -File scripts/run.ps1`, then start the selected ROCm
+4. Optionally copy `.env.example` to the gitignored `.env` and change only required local
+   settings. Process environment variables have priority, values are literal, and
+   unsupported names fail startup.
+5. Start with `pwsh -NoProfile -File scripts/run.ps1`, then start the selected ROCm
    worker and confirm it is the gateway's effective provider.
 
 The core Transformers integrations are deliberately isolated in project Python 3.12 ROCm

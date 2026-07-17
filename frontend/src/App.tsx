@@ -9,6 +9,7 @@ import type {
   ManagementHealth,
   ModelEntry,
   Profile,
+  ScenechatProviderSelection,
   Telemetry,
   Worker,
   WorkerEvent,
@@ -40,6 +41,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
+  const [scenechatSelection, setScenechatSelection] = useState<ScenechatProviderSelection | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [eventStreamConnected, setEventStreamConnected] = useState(false);
@@ -55,27 +57,34 @@ export default function App() {
   }, []);
 
   const refreshGateway = useCallback(async () => {
-    setGateway(await getJson<GatewayStatus>("/api/gateway/status"));
+    const [nextGateway, selection] = await Promise.all([
+      getJson<GatewayStatus>("/api/gateway/status"),
+      getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
+    ]);
+    setGateway(nextGateway);
+    setScenechatSelection(selection);
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue, selection] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
+      getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
     setGateway(nextGateway);
     setModels(catalogue.models);
+    setScenechatSelection(selection);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests] =
+      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selection] =
         await Promise.all([
           getJson<ManagementHealth>("/api/health"),
           getJson<GatewayStatus>("/api/gateway/status"),
@@ -85,6 +94,7 @@ export default function App() {
           getJson<Profile[]>("/api/profiles"),
           getJson<{ models: ModelEntry[] }>("/api/catalogue"),
           getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
+          getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
         ]);
       setHealth(nextHealth);
       setGateway(nextGateway);
@@ -94,6 +104,7 @@ export default function App() {
       setProfiles(nextProfiles);
       setModels(catalogue.models);
       setCompatibility(tests.tests);
+      setScenechatSelection(selection);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -161,7 +172,7 @@ export default function App() {
     setError(null);
     try {
       await postJson(`/api/workers/${encodeURIComponent(worker.id)}/${operation}`);
-      await refreshWorkers();
+      await Promise.all([refreshWorkers(), refreshGateway()]);
       if (operation === "smoke") await refreshCompatibility();
     } catch (reason) {
       setError(`${worker.id}: ${messageFrom(reason)}`);
@@ -176,7 +187,24 @@ export default function App() {
     setError(null);
     try {
       await postJson("/api/presets/stop-all");
-      await refreshWorkers();
+      await Promise.all([refreshWorkers(), refreshGateway()]);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const selectScenechatProvider = async (profileId: string) => {
+    setPending("scenechat-selection");
+    setError(null);
+    try {
+      const selection = await postJson<ScenechatProviderSelection>(
+        "/api/gateway/provider-selections/scenechat-vision",
+        { profile_id: profileId },
+      );
+      setScenechatSelection(selection);
+      await refreshGateway();
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -252,9 +280,11 @@ export default function App() {
             profiles={profiles}
             models={models}
             compatibility={compatibility}
+            scenechatSelection={scenechatSelection}
             pending={pending}
             operate={operate}
             stopAll={stopAll}
+            selectScenechatProvider={selectScenechatProvider}
           />
         ) : view === "models" ? (
           <ModelsView
@@ -413,14 +443,16 @@ function Overview({
   );
 }
 
-function WorkersView({ workers, profiles, models, compatibility, pending, operate, stopAll }: {
+function WorkersView({ workers, profiles, models, compatibility, scenechatSelection, pending, operate, stopAll, selectScenechatProvider }: {
   workers: Worker[];
   profiles: Profile[];
   models: ModelEntry[];
   compatibility: CompatibilityTest[];
+  scenechatSelection: ScenechatProviderSelection | null;
   pending: string | null;
   operate: (worker: Worker, operation: WorkerOperation) => Promise<void>;
   stopAll: () => Promise<void>;
+  selectScenechatProvider: (profileId: string) => Promise<void>;
 }) {
   const groups = [
     { title: "Qwen autoregressive", description: "Pinned Transformers workers for chat, completions, and token traces.", workers: workers.filter((worker) => worker.model_id.startsWith("Qwen/")) },
@@ -431,6 +463,7 @@ function WorkersView({ workers, profiles, models, compatibility, pending, operat
   return (
     <div className="view-stack">
       <div className="view-actions"><p>Start only the runtime you intend to use. Model loading may take several minutes.</p><button className="danger secondary" disabled={pending === "stop-all"} onClick={() => void stopAll()}>{pending === "stop-all" ? "Stopping…" : "Stop all workers"}</button></div>
+      {scenechatSelection && <ScenechatProviderControl selection={scenechatSelection} workers={workers} gatewayReady={scenechatSelection.gateway_ready} pending={pending === "scenechat-selection"} selectProvider={selectScenechatProvider} />}
       {groups.map((group) => (
         <section className="worker-group" key={group.title}>
           <PanelHeading title={group.title} detail={`${group.workers.length} workers`} />
@@ -448,6 +481,22 @@ function WorkersView({ workers, profiles, models, compatibility, pending, operat
       ))}
     </div>
   );
+}
+
+function ScenechatProviderControl({ selection, workers, gatewayReady, pending, selectProvider }: { selection: ScenechatProviderSelection; workers: Worker[]; gatewayReady: boolean; pending: boolean; selectProvider: (profileId: string) => Promise<void> }) {
+  const [chosen, setChosen] = useState(selection.selected_provider);
+  useEffect(() => setChosen(selection.selected_provider), [selection.selected_provider]);
+  const selected = selection.candidates.find((candidate) => candidate.profile_id === selection.selected_provider);
+  const workerState = workers.find((worker) => worker.id === selection.selected_provider)?.state ?? selected?.worker_state ?? "stopped";
+  return <section className="panel provider-selection-panel">
+    <PanelHeading title="SceneChat provider" detail="Reserved alias: scenechat-vision" />
+    <p className="section-description">Applications keep using <code>scenechat-vision</code>. Selecting a physical provider changes routing only; start, stop and smoke testing remain separate.</p>
+    <div className="provider-selection-controls">
+      <label>Physical provider<select value={chosen} onChange={(event) => setChosen(event.target.value)}>{selection.candidates.map((candidate) => <option key={candidate.profile_id} value={candidate.profile_id}>{candidate.profile_alias} · {candidate.model_id}</option>)}</select></label>
+      <button disabled={pending || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => void selectProvider(chosen)}>{pending ? "Selecting…" : "Select provider"}</button>
+    </div>
+    <DefinitionList rows={[["Selected provider", selection.selected_provider], ["Worker state", humanise(workerState)], ["Gateway readiness", gatewayReady ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
+  </section>;
 }
 
 function WorkerCard({ worker, profile, model, tests, pending, operate }: {

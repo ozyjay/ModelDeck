@@ -53,6 +53,11 @@ class CompatibilityStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (model_id, revision)
                 );
+                CREATE TABLE IF NOT EXISTS gateway_provider_selection (
+                    alias TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS compatibility_tests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     fingerprint TEXT NOT NULL,
@@ -154,6 +159,29 @@ class CompatibilityStore:
                 "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
                 "allowed = excluded.allowed, updated_at = excluded.updated_at",
                 (model_id, revision, int(allowed), updated_at),
+            )
+
+    def gateway_provider_selection(self, alias: str) -> str | None:
+        if not self.path.exists():
+            return None
+        try:
+            with sqlite3.connect(self.path) as database:
+                row = database.execute(
+                    "SELECT profile_id FROM gateway_provider_selection WHERE alias = ?",
+                    (alias,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return str(row[0]) if row is not None else None
+
+    def set_gateway_provider_selection(self, alias: str, profile_id: str) -> None:
+        updated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO gateway_provider_selection (alias, profile_id, updated_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(alias) DO UPDATE SET "
+                "profile_id = excluded.profile_id, updated_at = excluded.updated_at",
+                (alias, profile_id, updated_at),
             )
 
     def record_test(

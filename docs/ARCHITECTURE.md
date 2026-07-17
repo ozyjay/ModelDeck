@@ -46,8 +46,8 @@ Process existence alone never means ready.
 
 Aliases route by declared generation family and capability. `fast-chat` prefers the core
 Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
-worker. `scenechat-vision` routes image-and-text requests to the pinned Gemma 4 worker and
-injects its private loopback credential. Each fallback-capable alias retains an explicit
+worker. `scenechat-vision` routes image-and-text requests to the explicitly selected Gemma 4
+profile and injects its private loopback credential. Each fallback-capable alias retains an explicit
 mock provider for GPU-unavailable demonstrations
 and contract testing. When no candidate is ready, the gateway returns a structured local
 unavailable response; no cloud request occurs. The gateway and management API are
@@ -76,6 +76,14 @@ and derives its cache root; no filesystem path, runtime executable, command argu
 environment variable, remote model identifier, or remote-code flag is accepted from the
 browser. Local profiles are persisted in SQLite, loaded by management at startup, and
 discovered dynamically by the gateway.
+
+The reserved `scenechat-vision` alias is application-facing and cannot be claimed by a
+local profile. SQLite stores its selected physical profile ID. Management owns constrained
+selection; the gateway rereads the mapping, local profiles, and cache policy whenever it
+assembles routes, so promotion requires no gateway restart. The default is
+`scenechat-gemma4-e2b-rocm`. An explicit selection is exclusive for the stable alias:
+provider unavailability produces a not-ready alias rather than fallback. Requests are
+rewritten to the selected profile's physical `model_id` before reaching the worker.
 
 An exact model/revision allow policy controls whether Hugging Face cache-backed profiles
 participate in management workers and gateway routes. Disallowing is reversible and never

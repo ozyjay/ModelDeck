@@ -52,3 +52,15 @@ def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tm
 
     assert store.model_cache_allowed("google/model", "revision-1") is False
     assert store.list_model_cache_policy() == {("google/model", "revision-1"): False}
+
+
+def test_gateway_provider_selection_persists(tmp_path) -> None:
+    path = tmp_path / "evidence.sqlite3"
+    store = CompatibilityStore(path)
+    store.initialise()
+
+    assert store.gateway_provider_selection("scenechat-vision") is None
+    store.set_gateway_provider_selection("scenechat-vision", "local-gemma-26b")
+
+    restored = CompatibilityStore(path)
+    assert restored.gateway_provider_selection("scenechat-vision") == "local-gemma-26b"

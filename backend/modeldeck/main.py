@@ -32,6 +32,11 @@ from modeldeck.profiles import (
     create_local_profile,
     default_model_profiles,
 )
+from modeldeck.provider_selection import (
+    DEFAULT_SCENECHAT_PROVIDER_ID,
+    SCENECHAT_ALIAS,
+    scenechat_provider_compatible,
+)
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
 from modeldeck.supervisor import WorkerSupervisor
 
@@ -70,6 +75,10 @@ class ModelCachePolicyRequest(BaseModel):
     model_id: str = Field(min_length=3, max_length=256)
     revision: str = Field(min_length=1, max_length=128)
     allowed: bool
+
+
+class GatewayProviderSelectionRequest(BaseModel):
+    profile_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -139,6 +148,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def gateway_status(request: Request):
         return await _gateway_status(request.app.state.settings)
 
+    async def scenechat_selection_status(request: Request) -> dict:
+        store = request.app.state.compatibility_store
+        stored_selection = store.gateway_provider_selection(SCENECHAT_ALIAS)
+        selected_provider = stored_selection or DEFAULT_SCENECHAT_PROVIDER_ID
+        policy = store.list_model_cache_policy()
+        supervisor = request.app.state.supervisor
+        gateway = await _gateway_status(request.app.state.settings)
+        gateway_model = next(
+            (
+                model
+                for model in (gateway.get("models") or {}).get("data", [])
+                if model.get("id") == SCENECHAT_ALIAS
+            ),
+            {},
+        )
+        effective_provider = gateway_model.get("effective_provider")
+        candidates = []
+        for profile in request.app.state.profiles:
+            if (
+                profile.id not in supervisor.workers
+                or not scenechat_provider_compatible(profile)
+                or not profile_allowed(profile, policy)
+            ):
+                continue
+            worker = supervisor.get_worker(profile.id)
+            candidates.append(
+                {
+                    "profile_id": profile.id,
+                    "profile_alias": profile.alias,
+                    "model_id": profile.model_id,
+                    "selected": profile.id == selected_provider,
+                    "worker_state": worker["state"],
+                    "gateway_ready": profile.id == effective_provider,
+                }
+            )
+        candidates.sort(
+            key=lambda candidate: (
+                candidate["profile_id"] != DEFAULT_SCENECHAT_PROVIDER_ID,
+                candidate["profile_id"],
+            )
+        )
+        return {
+            "alias": SCENECHAT_ALIAS,
+            "default_provider": DEFAULT_SCENECHAT_PROVIDER_ID,
+            "explicit_selection": stored_selection is not None,
+            "selected_provider": selected_provider,
+            "effective_provider": effective_provider,
+            "gateway_ready": gateway_model.get("ready") is True,
+            "candidates": candidates,
+        }
+
+    @app.get("/api/gateway/provider-selections/scenechat-vision")
+    async def get_scenechat_selection(request: Request):
+        return await scenechat_selection_status(request)
+
+    @app.post("/api/gateway/provider-selections/scenechat-vision")
+    async def set_scenechat_selection(
+        payload: GatewayProviderSelectionRequest,
+        request: Request,
+    ):
+        profile = next(
+            (candidate for candidate in request.app.state.profiles if candidate.id == payload.profile_id),
+            None,
+        )
+        if profile is None or profile.id not in request.app.state.supervisor.workers:
+            raise HTTPException(409, "Select an existing registered ModelDeck runtime profile")
+        if not scenechat_provider_compatible(profile):
+            raise HTTPException(
+                409,
+                "The selected profile must be a vision-language runtime with image input "
+                "and structured output",
+            )
+        policy = request.app.state.compatibility_store.list_model_cache_policy()
+        if not profile_allowed(profile, policy):
+            raise HTTPException(409, "Allow the selected cached model in ModelDeck first")
+        request.app.state.compatibility_store.set_gateway_provider_selection(
+            SCENECHAT_ALIAS,
+            profile.id,
+        )
+        return await scenechat_selection_status(request)
+
     @app.get("/api/hardware")
     async def hardware():
         return await asyncio.to_thread(probe_environment)
@@ -185,6 +275,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if profile_cache_identity(profile) == (payload.model_id, payload.revision)
             and profile_uses_huggingface_cache(profile)
         ]
+        selected_scenechat = (
+            request.app.state.compatibility_store.gateway_provider_selection(SCENECHAT_ALIAS)
+            or DEFAULT_SCENECHAT_PROVIDER_ID
+        )
+        if not payload.allowed and any(profile.id == selected_scenechat for profile in matching_profiles):
+            raise HTTPException(
+                409,
+                "Select a different scenechat-vision provider before disallowing this model",
+            )
         supervisor = request.app.state.supervisor
         if not payload.allowed:
             for profile in matching_profiles:
@@ -321,6 +420,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if profile is None:
             raise HTTPException(404, "Unknown local runtime configuration")
+        if request.app.state.compatibility_store.gateway_provider_selection(SCENECHAT_ALIAS) == profile_id:
+            raise HTTPException(
+                409,
+                "Select a different scenechat-vision provider before removing this runtime configuration",
+            )
         if profile_id in request.app.state.supervisor.workers:
             try:
                 await request.app.state.supervisor.remove_profile(profile_id)

@@ -13,6 +13,11 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.profile_registry import load_local_profiles, profile_allowed
 from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.provider_selection import (
+    DEFAULT_SCENECHAT_PROVIDER_ID,
+    SCENECHAT_ALIAS,
+    scenechat_provider_compatible,
+)
 
 
 def create_gateway_app(
@@ -28,7 +33,7 @@ def create_gateway_app(
         "qwen-0-5b": [defaults["qwen-small-rocm"]],
         "qwen-1-5b": [defaults["qwen-1-5b-rocm"]],
         "qwen-3b": [defaults["qwen-3b-rocm"]],
-        "scenechat-vision": [defaults["scenechat-gemma4-e2b-rocm"]],
+        SCENECHAT_ALIAS: [defaults[DEFAULT_SCENECHAT_PROVIDER_ID]],
         "text-diffusion": [
             defaults["diffusiongemma-q4-rocm"],
             defaults["mock-diffusion"],
@@ -36,24 +41,41 @@ def create_gateway_app(
         "text-diffusion-bf16": [defaults["diffusiongemma-rocm"]],
     }
     job_routes: dict[str, ModelProfile] = {}
+    store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
+
+    def selected_scenechat_provider_id() -> str:
+        if alias_routes is not None:
+            candidates = base_routes.get(SCENECHAT_ALIAS, [])
+            return candidates[0].id if candidates else DEFAULT_SCENECHAT_PROVIDER_ID
+        return store.gateway_provider_selection(SCENECHAT_ALIAS) or DEFAULT_SCENECHAT_PROVIDER_ID
 
     def active_routes() -> dict[str, list[ModelProfile]]:
         routes = {alias: list(candidates) for alias, candidates in base_routes.items()}
+        all_profiles = dict(defaults)
         if alias_routes is None:
             for profile in load_local_profiles(configured.data_dir):
+                all_profiles[profile.id] = profile
                 if profile.alias not in routes:
                     routes[profile.alias] = [profile]
-        policy = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3").list_model_cache_policy()
+            selected = all_profiles.get(selected_scenechat_provider_id())
+            routes[SCENECHAT_ALIAS] = (
+                [selected] if selected is not None and scenechat_provider_compatible(selected) else []
+            )
+        policy = store.list_model_cache_policy()
         filtered = {}
         for alias, candidates in routes.items():
             allowed_candidates = [profile for profile in candidates if profile_allowed(profile, policy)]
-            if allowed_candidates:
+            if allowed_candidates or alias == SCENECHAT_ALIAS:
                 filtered[alias] = allowed_candidates
         return filtered
 
-    async def providers() -> list[dict[str, Any]]:
+    async def providers(routes: dict[str, list[ModelProfile]] | None = None) -> list[dict[str, Any]]:
         result = []
-        profiles = {profile.id: profile for candidates in active_routes().values() for profile in candidates}
+        profiles = {
+            profile.id: profile
+            for candidates in (routes if routes is not None else active_routes()).values()
+            for profile in candidates
+        }
         async with httpx.AsyncClient(timeout=0.3) as client:
             for profile in profiles.values():
                 health, ready = await provider_health(client, profile)
@@ -81,7 +103,7 @@ def create_gateway_app(
     @app.get("/v1/models")
     async def models():
         routes = active_routes()
-        states = {state["id"]: state for state in await providers()}
+        states = {state["id"]: state for state in await providers(routes)}
         return {
             "object": "list",
             "data": [
@@ -90,6 +112,11 @@ def create_gateway_app(
                     "object": "model",
                     "owned_by": "modeldeck-local",
                     "ready": any(states[profile.id]["ready"] for profile in candidates),
+                    "selected_provider": (
+                        selected_scenechat_provider_id()
+                        if alias == SCENECHAT_ALIAS
+                        else (candidates[0].id if candidates else None)
+                    ),
                     "effective_provider": next(
                         (profile.id for profile in candidates if states[profile.id]["ready"]), None
                     ),
@@ -101,7 +128,14 @@ def create_gateway_app(
     @app.get("/v1/capabilities")
     async def capabilities():
         routes = active_routes()
-        return {alias: candidates[0].capabilities.model_dump() for alias, candidates in routes.items()}
+        return {
+            alias: (
+                candidates[0].capabilities
+                if candidates
+                else defaults[DEFAULT_SCENECHAT_PROVIDER_ID].capabilities
+            ).model_dump()
+            for alias, candidates in routes.items()
+        }
 
     @app.get("/v1/providers")
     async def provider_list():
@@ -195,7 +229,7 @@ def create_gateway_app(
             request,
             active_routes(),
             "/v1/chat/completions",
-            "scenechat-vision",
+            SCENECHAT_ALIAS,
             timeout_seconds=configured.scenechat_timeout_seconds,
         )
 

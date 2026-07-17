@@ -3,6 +3,8 @@ param([switch]$OpenDay)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'environment_helpers.psm1') -Force
+Import-ModelDeckEnvironment -Path (Join-Path (Get-Location) '.env')
 if ($OpenDay) {
     $Env:MODELDECK_OPEN_DAY = '1'
     $Env:MODELDECK_ALLOW_DOWNLOADS = '0'

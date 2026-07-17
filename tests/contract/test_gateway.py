@@ -17,9 +17,27 @@ from modeldeck.gateway.app import (
 )
 from modeldeck.profiles import (
     LocalAutoregressiveProfileRequest,
+    LocalProfileRequest,
     create_local_autoregressive_profile,
+    create_local_profile,
     default_model_profiles,
 )
+
+
+def local_scenechat_profile(tmp_path):
+    return create_local_profile(
+        LocalProfileRequest(
+            model_id="google/gemma-4-26B-A4B-it",
+            revision="26b-revision",
+            alias="gemma-4-26b",
+            dtype="bfloat16",
+            context_length=8192,
+            maximum_new_tokens=512,
+        ),
+        cache_root=tmp_path / "cache",
+        port=8630,
+        configuration_support="scenechat-gemma4",
+    )
 
 
 @pytest.mark.asyncio
@@ -88,8 +106,106 @@ async def test_default_scenechat_alias_advertises_multimodal_provider(monkeypatc
     models = {model["id"]: model for model in models_response.json()["data"]}
     capabilities = capabilities_response.json()["scenechat-vision"]
     assert models["scenechat-vision"]["effective_provider"] == "scenechat-gemma4-e2b-rocm"
+    assert models["scenechat-vision"]["selected_provider"] == "scenechat-gemma4-e2b-rocm"
     assert capabilities["image_input"] is True
     assert capabilities["structured_output"] is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_observes_persisted_scenechat_selection_without_restart(monkeypatch, tmp_path) -> None:
+    profile = local_scenechat_profile(tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    store.save_model_profile(profile.model_dump(mode="json"))
+
+    async def ready_provider(_client, candidate):
+        return {"ready": True}, candidate.id in {
+            "scenechat-gemma4-e2b-rocm",
+            profile.id,
+        }
+
+    monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        before = await client.get("/v1/models")
+        store.set_gateway_provider_selection("scenechat-vision", profile.id)
+        after = await client.get("/v1/models")
+
+    before_model = next(model for model in before.json()["data"] if model["id"] == "scenechat-vision")
+    after_model = next(model for model in after.json()["data"] if model["id"] == "scenechat-vision")
+    assert before_model["effective_provider"] == "scenechat-gemma4-e2b-rocm"
+    assert after_model == {
+        "id": "scenechat-vision",
+        "object": "model",
+        "owned_by": "modeldeck-local",
+        "ready": True,
+        "selected_provider": profile.id,
+        "effective_provider": profile.id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_selected_stopped_scenechat_provider_does_not_fall_back(monkeypatch, tmp_path) -> None:
+    profile = local_scenechat_profile(tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    store.save_model_profile(profile.model_dump(mode="json"))
+    store.set_gateway_provider_selection("scenechat-vision", profile.id)
+
+    async def only_default_ready(_client, candidate):
+        return {"ready": candidate.id == "scenechat-gemma4-e2b-rocm"}, (
+            candidate.id == "scenechat-gemma4-e2b-rocm"
+        )
+
+    monkeypatch.setattr(gateway_module, "provider_health", only_default_ready)
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/models")
+
+    model = next(item for item in response.json()["data"] if item["id"] == "scenechat-vision")
+    assert model["selected_provider"] == profile.id
+    assert model["ready"] is False
+    assert model["effective_provider"] is None
+
+
+@pytest.mark.asyncio
+async def test_selected_scenechat_request_rewrites_physical_model_and_provider_header(
+    monkeypatch, tmp_path
+) -> None:
+    profile = local_scenechat_profile(tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    store.save_model_profile(profile.model_dump(mode="json"))
+    store.set_gateway_provider_selection("scenechat-vision", profile.id)
+    captured: dict[str, object] = {}
+    original_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/health":
+            return httpx.Response(200, json={"ready": True})
+        captured["path"] = request.url.path
+        captured["body"] = json_loads(request.content)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(
+        gateway_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
+
+    async with original_client(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/vision/analyse",
+            json={"model": "scenechat-vision", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-modeldeck-provider"] == profile.id
+    assert captured["path"] == "/v1/chat/completions"
+    assert captured["body"]["model"] == profile.model_id
 
 
 @pytest.mark.asyncio

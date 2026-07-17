@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile } from "./types";
+import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ScenechatProviderSelection } from "./types";
 
 const capabilities = {
   chat: true,
@@ -114,7 +114,7 @@ const telemetry = {
 const defaultGateway = {
   available: true,
   health: { status: "ok", ready_providers: 0 },
-  models: { data: [{ id: "fast-chat", ready: false, effective_provider: null }] },
+  models: { data: [{ id: "fast-chat", ready: false, selected_provider: worker.id, effective_provider: null }] },
   providers: { providers: [{ id: worker.id, alias: worker.alias, ready: false }] },
   error: null,
 };
@@ -126,6 +126,24 @@ let catalogueModels: ModelEntry[] = [completeModel, partialModel];
 let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 let localProfiles: Profile[] = [];
+let scenechatSelection: ScenechatProviderSelection = {
+  alias: "scenechat-vision",
+  default_provider: "scenechat-gemma4-e2b-rocm",
+  explicit_selection: false,
+  selected_provider: "scenechat-gemma4-e2b-rocm",
+  effective_provider: null,
+  gateway_ready: false,
+  candidates: [
+    {
+      profile_id: "scenechat-gemma4-e2b-rocm",
+      profile_alias: "scenechat-vision",
+      model_id: "google/gemma-4-E2B-it",
+      selected: true,
+      worker_state: "stopped",
+      gateway_ready: false,
+    },
+  ],
+};
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -193,6 +211,22 @@ function mockFetch() {
         );
         return json({ ok: true, ...payload, cache_removed: false });
       }
+      if (path === "/api/gateway/provider-selections/scenechat-vision") {
+        const payload = JSON.parse(String(init.body));
+        scenechatSelection = {
+          ...scenechatSelection,
+          explicit_selection: true,
+          selected_provider: payload.profile_id,
+          effective_provider: null,
+          gateway_ready: false,
+          candidates: scenechatSelection.candidates.map((candidate) => ({
+            ...candidate,
+            selected: candidate.profile_id === payload.profile_id,
+            gateway_ready: false,
+          })),
+        };
+        return json(scenechatSelection);
+      }
       if (path.endsWith("/start")) currentWorker = { ...currentWorker, state: "ready" };
       if (path.endsWith("/stop")) currentWorker = { ...currentWorker, state: "stopped" };
       if (path.endsWith("/smoke")) {
@@ -213,6 +247,7 @@ function mockFetch() {
     }
     if (path === "/api/health") return json({ status: "ok", service: "modeldeck-management", open_day: false, downloads_allowed: false, gateway_url: "http://127.0.0.1:8600" });
     if (path === "/api/gateway/status") return json(gateway);
+    if (path === "/api/gateway/provider-selections/scenechat-vision") return json(scenechatSelection);
     if (path === "/api/hardware") return json(hardware);
     if (path === "/api/telemetry") return json(telemetry);
     if (path === "/api/workers") return json([currentWorker]);
@@ -233,6 +268,24 @@ describe("ModelDeck operator console", () => {
     compatibilityTests = [];
     managementFailure = false;
     localProfiles = [];
+    scenechatSelection = {
+      alias: "scenechat-vision",
+      default_provider: "scenechat-gemma4-e2b-rocm",
+      explicit_selection: false,
+      selected_provider: "scenechat-gemma4-e2b-rocm",
+      effective_provider: null,
+      gateway_ready: false,
+      candidates: [
+        {
+          profile_id: "scenechat-gemma4-e2b-rocm",
+          profile_alias: "scenechat-vision",
+          model_id: "google/gemma-4-E2B-it",
+          selected: true,
+          worker_state: "stopped",
+          gateway_ready: false,
+        },
+      ],
+    };
     MockEventSource.instances = [];
     window.history.replaceState({}, "", "/");
     vi.stubGlobal("EventSource", MockEventSource);
@@ -260,6 +313,38 @@ describe("ModelDeck operator console", () => {
     render(<App />);
     expect(await screen.findByText("Gateway unavailable")).toBeInTheDocument();
     expect(screen.getByText("No ready gateway providers. Requests return a structured local-unavailable response.")).toBeInTheDocument();
+  });
+
+  it("selects a compatible physical provider for the stable SceneChat alias", async () => {
+    scenechatSelection.candidates.push({
+      profile_id: "local-gemma-4-26b",
+      profile_alias: "gemma-4-26b",
+      model_id: "google/gemma-4-26B-A4B-it",
+      selected: false,
+      worker_state: "ready",
+      gateway_ready: false,
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    expect(screen.getByText("Reserved alias: scenechat-vision")).toBeInTheDocument();
+    expect(screen.getByText("None — no fallback")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Physical provider"), {
+      target: { value: "local-gemma-4-26b" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Select provider" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("local-gemma-4-26b")).toBeInTheDocument();
+    });
+    const selectionRequest = vi.mocked(fetch).mock.calls.find(
+      ([path, init]) =>
+        String(path) === "/api/gateway/provider-selections/scenechat-vision" &&
+        init?.method === "POST",
+    );
+    expect(selectionRequest?.[1]?.body).toBe(
+      JSON.stringify({ profile_id: "local-gemma-4-26b" }),
+    );
   });
 
   it("shows a recoverable management-unavailable state", async () => {

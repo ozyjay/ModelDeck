@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -25,6 +26,7 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
             health = await client.get("/api/health")
             workers = await client.get("/api/workers")
             profiles = await client.get("/api/profiles")
+            selection = await client.get("/api/gateway/provider-selections/scenechat-vision")
     assert health.status_code == 200
     assert health.json()["downloads_allowed"] is False
     assert all(worker["state"] == "stopped" for worker in workers.json())
@@ -33,6 +35,8 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
         "text-diffusion",
         "vision-language",
     }
+    assert selection.json()["selected_provider"] == "scenechat-gemma4-e2b-rocm"
+    assert selection.json()["explicit_selection"] is False
     assert (tmp_path / "modeldeck.sqlite3").exists()
 
 
@@ -219,6 +223,181 @@ async def test_management_configures_allowlisted_vision_and_diffusion_workers(
     assert diffusion.status_code == 201
     assert diffusion.json()["preferred_runtime"] == "text-diffusion-transformers-rocm"
     assert diffusion.json()["lifecycle"] == "exclusive"
+
+
+@pytest.mark.asyncio
+async def test_management_selects_and_persists_compatible_scenechat_provider(
+    monkeypatch, tmp_path: Path
+) -> None:
+    model_dir = tmp_path / "cache" / "models--google--gemma-4-26B-A4B-it"
+    model_dir.mkdir(parents=True)
+    cached = {
+        "model_id": "google/gemma-4-26B-A4B-it",
+        "revision": "26b-revision",
+        "cache_location": str(model_dir),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "vision-language",
+        "configuration_support": "scenechat-gemma4",
+        "configuration_support_reason": "Supported by SceneChat.",
+        "runnable": False,
+        "runnable_reason": "Untested",
+    }
+
+    async def unavailable_gateway(_settings):
+        return {
+            "available": True,
+            "health": {"status": "ok", "ready_providers": 0},
+            "models": {
+                "data": [
+                    {
+                        "id": "scenechat-vision",
+                        "ready": False,
+                        "selected_provider": None,
+                        "effective_provider": None,
+                    }
+                ]
+            },
+            "providers": {"providers": []},
+            "error": None,
+        }
+
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    monkeypatch.setattr(main_module, "_gateway_status", unavailable_gateway)
+    settings = Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs")
+    app = create_app(settings)
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "gemma-4-26b",
+                    "dtype": "bfloat16",
+                    "context_length": 8192,
+                    "maximum_new_tokens": 512,
+                },
+            )
+            profile_id = created.json()["id"]
+            app.state.compatibility_store.set_model_cache_allowed(
+                cached["model_id"], cached["revision"], allowed=False
+            )
+            disallowed = await client.post(
+                "/api/gateway/provider-selections/scenechat-vision",
+                json={"profile_id": profile_id},
+            )
+            app.state.compatibility_store.set_model_cache_allowed(
+                cached["model_id"], cached["revision"], allowed=True
+            )
+            selected = await client.post(
+                "/api/gateway/provider-selections/scenechat-vision",
+                json={"profile_id": profile_id},
+            )
+            selected_disallow = await client.post(
+                "/api/catalogue/policy",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "allowed": False,
+                },
+            )
+            selected_remove = await client.delete(f"/api/profiles/{profile_id}")
+
+    assert disallowed.status_code == 409
+    assert selected.status_code == 200
+    document = selected.json()
+    assert document["alias"] == "scenechat-vision"
+    assert document["selected_provider"] == profile_id
+    assert document["explicit_selection"] is True
+    assert document["effective_provider"] is None
+    assert selected_disallow.status_code == 409
+    assert selected_remove.status_code == 409
+    assert document["candidates"] == [
+        {
+            "profile_id": "scenechat-gemma4-e2b-rocm",
+            "profile_alias": "scenechat-vision",
+            "model_id": "google/gemma-4-E2B-it",
+            "selected": False,
+            "worker_state": "stopped",
+            "gateway_ready": False,
+        },
+        {
+            "profile_id": profile_id,
+            "profile_alias": "gemma-4-26b",
+            "model_id": cached["model_id"],
+            "selected": True,
+            "worker_state": "stopped",
+            "gateway_ready": False,
+        },
+    ]
+    serialised = json.dumps(document)
+    assert "cache_root" not in serialised
+    assert str(tmp_path) not in serialised
+    assert "credential" not in serialised.lower()
+
+    restored = create_app(settings)
+    async with restored.router.lifespan_context(restored):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restored), base_url="http://test"
+        ) as client:
+            persisted = await client.get("/api/gateway/provider-selections/scenechat-vision")
+
+    assert persisted.json()["selected_provider"] == profile_id
+    assert persisted.json()["explicit_selection"] is True
+
+
+@pytest.mark.asyncio
+async def test_management_rejects_incompatible_missing_and_incomplete_scenechat_profiles(
+    monkeypatch, tmp_path: Path
+) -> None:
+    async def unavailable_gateway(_settings):
+        return {
+            "available": False,
+            "health": None,
+            "models": None,
+            "providers": None,
+            "error": "unavailable",
+        }
+
+    monkeypatch.setattr(main_module, "_gateway_status", unavailable_gateway)
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with app.router.lifespan_context(app):
+        scenechat = next(
+            profile for profile in app.state.profiles if profile.id == "scenechat-gemma4-e2b-rocm"
+        )
+        incomplete = scenechat.model_copy(
+            update={
+                "id": "incomplete-vision",
+                "alias": "incomplete-vision",
+                "port": 8698,
+                "capabilities": scenechat.capabilities.model_copy(update={"structured_output": False}),
+            }
+        )
+        app.state.profiles.append(incomplete)
+        app.state.supervisor.register_profile(incomplete)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            responses = [
+                await client.post(
+                    "/api/gateway/provider-selections/scenechat-vision",
+                    json={"profile_id": profile_id},
+                )
+                for profile_id in (
+                    "qwen-small-rocm",
+                    "diffusiongemma-rocm",
+                    "mock-ar",
+                    "incomplete-vision",
+                    "missing-profile",
+                )
+            ]
+
+    assert all(response.status_code == 409 for response in responses)
 
 
 @pytest.mark.asyncio

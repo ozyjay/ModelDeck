@@ -32,6 +32,12 @@ The allowlisted physical profiles are:
 - `diffusiongemma-q4-rocm` and `diffusiongemma-rocm`;
 - `scenechat-gemma4-e2b-rocm`.
 
+The benchmark suite selects its fixed physical profile IDs directly; it does not follow
+the current `scenechat-vision` provider selection. In this phase its vision workload still
+measures `scenechat-gemma4-e2b-rocm`. A configured 26B profile requires a separate physical
+acceptance run until it is explicitly added to the benchmark suite. Benchmarking never
+promotes a provider or alters the persisted selection.
+
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
 

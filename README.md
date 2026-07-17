@@ -14,8 +14,18 @@ diagnosis remain useful when the target hardware is unavailable.
 
 ```powershell
 pwsh -NoProfile -File scripts/setup.ps1
+Copy-Item .env.example .env # optional local overrides
 pwsh -NoProfile -File scripts/run.ps1
 ```
+
+`scripts/run.ps1` loads an optional, gitignored `.env` before launching management and
+gateway processes. Only the variables documented in `.env.example` are accepted; unknown,
+duplicate, malformed, or unterminated entries stop startup without printing their values.
+Values are literal and are never evaluated as PowerShell. Variables already set in the
+launching process take precedence, and `-OpenDay` still forces its safety overrides after
+loading. The checked-in defaults work without a `.env`; create one when local ports,
+storage, timeouts, runtime interpreters, cache location, or the SceneChat credential need
+to differ.
 
 ModelDeck deliberately uses three environments with different responsibilities:
 

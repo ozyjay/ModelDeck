@@ -8,6 +8,13 @@ variables, tokens, arbitrary filesystem paths, Docker access, camera data, uploa
 cloud endpoints. Worker IDs select prevalidated manifests. Subprocesses use argument
 arrays without a shell.
 
+The optional repository `.env` is trusted operator configuration, is gitignored, and is
+read only by the PowerShell launch path. Its parser accepts a fixed name allowlist, treats
+values literally without expansion or command execution, does not print values, and fails
+closed on unknown, duplicate, malformed, or unterminated entries. Existing process
+environment variables take precedence. `.env` is not readable or writable through the
+management API or operator console.
+
 Visitor prompts and generated content are not stored or logged. Supervisor log capture is
 bounded to the latest 500 records per worker and redacts prompt, output, authorisation,
 API-key, and token-shaped fields before persisting JSON Lines files under

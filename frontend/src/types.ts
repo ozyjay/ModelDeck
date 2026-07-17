@@ -182,9 +182,28 @@ export interface CompatibilityTest {
 export interface GatewayStatus {
   available: boolean;
   health: { status: string; ready_providers: number } | null;
-  models: { data: Array<{ id: string; ready: boolean; effective_provider: string | null }> } | null;
+  models: { data: Array<{ id: string; ready: boolean; selected_provider: string | null; effective_provider: string | null }> } | null;
   providers: { providers: Array<{ id: string; alias: string; ready: boolean }> } | null;
   error: string | null;
+}
+
+export interface ScenechatProviderCandidate {
+  profile_id: string;
+  profile_alias: string;
+  model_id: string;
+  selected: boolean;
+  worker_state: WorkerState;
+  gateway_ready: boolean;
+}
+
+export interface ScenechatProviderSelection {
+  alias: "scenechat-vision";
+  default_provider: string;
+  explicit_selection: boolean;
+  selected_provider: string;
+  effective_provider: string | null;
+  gateway_ready: boolean;
+  candidates: ScenechatProviderCandidate[];
 }
 
 export interface ManagementHealth {

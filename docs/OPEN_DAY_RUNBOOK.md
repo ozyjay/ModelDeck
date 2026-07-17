@@ -37,6 +37,11 @@ on port 8000. Before the event:
 4. Run `pwsh -NoProfile -File scripts/smoke_rocm_scenechat.ps1`. It preflights port 8000 and
    the snapshot, starts Open Day mode, waits for readiness, exercises native smoke and both
    `/v1` routes, then stops the worker and confirms process exit.
+5. If using a configured alternative such as Gemma 4 26B, start and smoke-test its unique
+   worker first, then choose it under **Workers → SceneChat provider**. SceneChat continues
+   using `scenechat-vision`. Confirm `/v1/models` reports the chosen profile as both
+   `selected_provider` and `effective_provider`. Selection does not start the worker, and
+   ModelDeck will not silently return to E2B if the selected worker stops.
 
 SVG remains a trusted SceneChat replay format and does not invoke ModelDeck. Do not claim
 the worker is Open Day ready until the ten-request latency/memory run, 60-minute camera run,

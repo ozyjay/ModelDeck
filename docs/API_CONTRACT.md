@@ -24,6 +24,15 @@ Profiles backed by packaged checkpoints rather than the Hugging Face cache are u
 Downloaded Q4 releases are controlled by their derivative repository and revision, not
 by the upstream base-model policy.
 
+`GET` and `POST /api/gateway/provider-selections/scenechat-vision` expose and update the
+physical provider selected for the reserved `scenechat-vision` alias. The POST body
+contains only an existing profile ID. Management accepts registered, policy-allowed
+vision-language profiles advertising both image input and structured output. The response
+reports selection, worker state, gateway readiness, and eligible profiles without
+settings, filesystem paths, endpoints, or credentials. Selection does not start or stop
+workers. A selected local profile must be replaced before its configuration can be
+removed or its cached revision disallowed.
+
 FastAPI also serves the committed operator-console assets and returns the SPA entry point
 for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
 through to the frontend.
@@ -44,6 +53,11 @@ jobs from local diffusion providers after a gateway restart. Diffusion request t
 default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECONDS`.
 `fast-chat` and `token-explainer` prefer the live Qwen worker when ready and fall back
 explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.
+Applications always request `scenechat-vision`; ModelDeck resolves that stable alias to
+the explicitly selected physical vision profile. With no stored selection, the pinned E2B
+profile is selected. Once stored, only that profile is considered: if it is unavailable,
+the alias is not ready and there is no E2B or cloud fallback. `/v1/models` reports both
+`selected_provider` and the ready `effective_provider`.
 Persisted local profiles are discovered by the gateway on each request and
 advertised under their configured alias without requiring a gateway restart.
 The gateway applies the persisted HF-cache allow policy on every route refresh.
@@ -67,7 +81,7 @@ a misleading trace.
 
 The stable gateway advertises `scenechat-vision` with `image_input` and
 `structured_output`. It accepts the SceneChat OpenAI-shaped request at
-`POST /v1/chat/completions` or `POST /v1/vision/analyse`, routes only to the pinned local
+`POST /v1/chat/completions` or `POST /v1/vision/analyse`, routes only to the selected local
 Gemma 4 worker, and returns `local_provider_unavailable` when that worker is stopped. The
 gateway translates the alias to the exact worker model identifier and injects the private
 loopback credential internally.
