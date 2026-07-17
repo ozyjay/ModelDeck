@@ -61,6 +61,27 @@ and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
 and next steps.
 
+## Booth mode
+
+For Open Day, start ModelDeck and a dedicated fullscreen Chromium-family browser with one
+command:
+
+```powershell
+pwsh -NoProfile -File scripts/run_booth.ps1
+```
+
+For a windowed rehearsal that is easier to exit and inspect:
+
+```powershell
+pwsh -NoProfile -File scripts/run_booth.ps1 -Windowed
+```
+
+Booth mode stops an earlier ModelDeck session, starts the services with Open Day policy,
+waits for both management and gateway health, and opens the operator console in an
+isolated `.booth-browser-profile`. Closing the booth browser stops the ModelDeck workers
+and services. Set `BOOTH_BROWSER` to a Chromium, Chrome, or Edge executable name or path
+if automatic discovery does not find the intended browser.
+
 ## Core ROCm model workers
 
 ```powershell

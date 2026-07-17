@@ -15,3 +15,4 @@ var/
 frontend/node_modules/
 frontend/coverage/
 frontend/*.tsbuildinfo
+.booth-browser-profile/

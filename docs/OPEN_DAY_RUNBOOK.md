@@ -14,6 +14,11 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
 5. Start the selected ROCm worker and wait for `ready`, not merely a PID. Confirm the
    gateway reports that ROCm profile as the effective provider before opening the demo.
 
+For a booth session, `pwsh -NoProfile -File scripts/run_booth.ps1` combines steps 3 and 4
+and opens the operator console in a dedicated fullscreen browser profile. Use `-Windowed`
+for rehearsal. Closing that browser stops ModelDeck; it does not stop a separately
+launched downstream demo such as SceneChat.
+
 ### SceneChat Gemma 4 preflight
 
 SceneChat uses the stable port 8600 gateway, which routes privately to its managed worker
