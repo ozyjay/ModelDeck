@@ -31,9 +31,8 @@ def _revision(model_dir: Path, snapshot: Path) -> str:
 
 
 def _snapshot_complete(snapshot: Path) -> bool:
-    config = snapshot / "config.json"
     weights = any(snapshot.glob("*.safetensors")) or any(snapshot.glob("pytorch_model*.bin"))
-    return config.exists() and weights
+    return weights
 
 
 def _physical_size(paths: Iterable[Path]) -> int:

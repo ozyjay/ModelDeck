@@ -38,6 +38,35 @@ def test_marks_incomplete_snapshot_partial(tmp_path: Path) -> None:
     assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"
 
 
+def test_model_payload_without_transformers_config_is_complete_but_unsupported(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "models--kyutai--moshiko-pytorch-bf16" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    (snapshot / "tokenizer.model").write_bytes(b"tokenizer")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["download_state"] == "installed-untested"
+    assert model["configuration_support"] is None
+    assert model["configuration_support_reason"] == (
+        "The snapshot has no readable Transformers configuration."
+    )
+
+
+def test_transformers_config_without_model_payload_remains_partial(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Org--ConfigOnly" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps({"architectures": ["DemoForCausalLM"]}), encoding="utf-8"
+    )
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["download_state"] == "partial"
+
+
 def test_ignores_metadata_only_repository_without_a_snapshot(tmp_path: Path) -> None:
     reference = tmp_path / "models--Org--Stale" / "refs" / "main"
     reference.parent.mkdir(parents=True)

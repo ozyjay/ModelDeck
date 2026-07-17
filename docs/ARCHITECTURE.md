@@ -65,7 +65,9 @@ decisions. Parameter count alone will not.
 
 The scanner resolves `HF_HUB_CACHE`, `${HF_HOME}/hub`, the normal user cache, then
 `/mnt/work/models/huggingface/hub`. It reads snapshots, config hints, incomplete markers,
-revision refs, and physical size. It never calls the Hub and never treats files as proof
+revision refs, model payloads, and physical size. A snapshot with model weights is shown
+as completely acquired even when it has no Transformers configuration; runtime support
+is reported separately. The scanner never calls the Hub and never treats files as proof
 that a model is runnable. For recognised complete snapshots matching the allowlisted
 autoregressive, SceneChat Gemma 4, DiffusionGemma BF16, or self-contained ModelDeck Q4
 implementations, the operator may
