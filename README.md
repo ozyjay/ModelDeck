@@ -51,8 +51,10 @@ remain stopped until explicitly selected.
 
 The Model library can also turn a recognised, complete Hugging Face snapshot into a local
 ROCm worker configuration when its architecture matches an allowlisted worker. Supported
-paths are causal-language-model Transformers, SceneChat Gemma 4, and DiffusionGemma block
-diffusion. Choose **Configure runtime**, assign a
+paths are causal-language-model Transformers, SceneChat Gemma 4, DiffusionGemma block
+diffusion, and self-contained ModelDeck DiffusionGemma Q4 format 2 releases. Q4 releases
+must retain their manifests, quality evidence, complete file inventory, and checksums;
+generic GPTQ repositories are not accepted. Choose **Configure runtime**, assign a
 gateway alias, and select the bounded dtype, lifecycle, context, and output settings.
 ModelDeck derives the model, revision, cache root, runtime, port, capabilities, and safe
 launch manifest itself. The configuration persists in ModelDeck's local SQLite store;
@@ -62,8 +64,10 @@ the specific reason that configuration is unavailable.
 Each complete cached revision can also be **Disallowed in ModelDeck** without deleting it
 from the Hugging Face cache. Disallowing a stopped model removes its cache-backed workers
 and gateway routes while retaining built-in or local profile configuration. Re-allowing
-the revision restores those workers. Packaged checkpoints, including the ModelDeck
-DiffusionGemma Q4 profile, are independent of this HF-cache policy.
+the revision restores those workers. The built-in packaged Q4 checkpoint is independent
+of this HF-cache policy. A Q4 runtime configured from a downloaded Hugging Face release
+follows the policy of that derivative repository and revision, separately from its
+upstream Google base model.
 
 Benchmark all physical ROCm profiles with a repeatable representative workload:
 

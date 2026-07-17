@@ -67,7 +67,8 @@ The scanner resolves `HF_HUB_CACHE`, `${HF_HOME}/hub`, the normal user cache, th
 `/mnt/work/models/huggingface/hub`. It reads snapshots, config hints, incomplete markers,
 revision refs, and physical size. It never calls the Hub and never treats files as proof
 that a model is runnable. For recognised complete snapshots matching the allowlisted
-autoregressive, SceneChat Gemma 4, or DiffusionGemma implementations, the operator may
+autoregressive, SceneChat Gemma 4, DiffusionGemma BF16, or self-contained ModelDeck Q4
+implementations, the operator may
 create a constrained local profile. The server resolves the selected catalogue entry
 and derives its cache root; no filesystem path, runtime executable, command argument,
 environment variable, remote model identifier, or remote-code flag is accepted from the
@@ -78,6 +79,9 @@ An exact model/revision allow policy controls whether Hugging Face cache-backed 
 participate in management workers and gateway routes. Disallowing is reversible and never
 mutates the cache or deletes profile configuration. Profiles reading packaged ModelDeck
 checkpoints do not inherit policy merely because they record the same upstream model ID.
+Downloaded Q4 profiles instead carry a separate derivative artefact identity, so their
+policy follows the exact Hugging Face repository revision while worker loading and smoke
+evidence retain the pinned base-model identity.
 
 ## Data and security
 

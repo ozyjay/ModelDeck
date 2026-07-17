@@ -39,6 +39,8 @@ const profile = {
   id: worker.id,
   model_id: worker.model_id,
   revision: "7ae557604adf67be50417f59c2c2f167def9a775",
+  artifact_model_id: null,
+  artifact_revision: null,
   alias: worker.alias,
   generation_family: worker.generation_family,
   preferred_runtime: worker.runtime,
@@ -63,6 +65,9 @@ const completeModel: ModelEntry = {
   configuration_support: "autoregressive-transformers" as const,
   configuration_support_reason: "Supported by the local Transformers ROCm worker.",
   modeldeck_allowed: true,
+  snapshot_location: "/mnt/work/models/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775",
+  base_model_id: null,
+  base_model_revision: null,
   runnable: false,
   runnable_reason: "Compatibility has not been tested for the current stack.",
 };
@@ -76,6 +81,7 @@ const partialModel: ModelEntry = {
   generation_family_hint: null,
   configuration_support: null,
   configuration_support_reason: "Finish the local snapshot before configuring a runtime.",
+  snapshot_location: null,
 };
 
 const hardware = {
@@ -357,6 +363,16 @@ describe("ModelDeck operator console", () => {
         configuration_support: "diffusiongemma-transformers",
         configuration_support_reason: "Supported by the dedicated DiffusionGemma Transformers worker.",
       },
+      {
+        ...completeModel,
+        model_id: "ozyjay/diffusiongemma-modeldeck-q4",
+        revision: "release-revision",
+        generation_family_hint: "text-diffusion",
+        configuration_support: "diffusiongemma-modeldeck-q4",
+        configuration_support_reason: "Supported by the dedicated ModelDeck DiffusionGemma Q4 runtime.",
+        base_model_id: "google/diffusiongemma-26B-A4B-it",
+        base_model_revision: "52de6b914ee1749a7d4933202505ddf5b414ec43",
+      },
     ];
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
@@ -369,6 +385,11 @@ describe("ModelDeck operator console", () => {
     expect(within(cards[1]).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
     expect(within(cards[1]).getByLabelText("Lifecycle")).toBeDisabled();
     expect(within(cards[1]).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
+    fireEvent.click(within(cards[1]).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(cards[2]).getByRole("button", { name: "Configure runtime" }));
+    expect(within(cards[2]).getByText("Configure ModelDeck DiffusionGemma Q4 runtime")).toBeInTheDocument();
+    expect(within(cards[2]).getByLabelText("Lifecycle")).toBeDisabled();
+    expect(within(cards[2]).getByLabelText("Data type")).toBeDisabled();
   });
 
   it("disallows and re-allows a cached model without deleting it", async () => {

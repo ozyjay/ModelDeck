@@ -206,3 +206,32 @@ def test_local_family_profiles_use_dedicated_allowlisted_workers(
     assert profile.lifecycle == lifecycle
     assert profile.trust_remote_code is False
     assert profile.settings["cache_root"] == str(tmp_path)
+
+
+def test_local_q4_profile_separates_release_and_base_model_identity(tmp_path) -> None:
+    request = LocalProfileRequest(
+        model_id="ozyjay/diffusiongemma-modeldeck-q4",
+        revision="release-revision",
+        alias="local-diffusion-q4",
+        maximum_new_tokens=128,
+        maximum_denoising_steps=24,
+    )
+    checkpoint_dir = tmp_path / "snapshots" / "release-revision"
+
+    profile = create_local_profile(
+        request,
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="diffusiongemma-modeldeck-q4",
+        checkpoint_dir=checkpoint_dir,
+        base_model_id="google/diffusiongemma-26B-A4B-it",
+        base_model_revision="52de6b914ee1749a7d4933202505ddf5b414ec43",
+    )
+
+    assert profile.model_id == "google/diffusiongemma-26B-A4B-it"
+    assert profile.artifact_model_id == request.model_id
+    assert profile.artifact_revision == request.revision
+    assert profile.preferred_runtime == "text-diffusion-gptq-rocm"
+    assert profile.lifecycle == "exclusive"
+    assert profile.dtype == "bfloat16"
+    assert profile.settings["q4_checkpoint_dir"] == str(checkpoint_dir)

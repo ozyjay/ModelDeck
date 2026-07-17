@@ -222,6 +222,72 @@ async def test_management_configures_allowlisted_vision_and_diffusion_workers(
 
 
 @pytest.mark.asyncio
+async def test_management_configures_verified_hf_q4_release(monkeypatch, tmp_path: Path) -> None:
+    model_dir = tmp_path / "cache" / "models--ozyjay--diffusiongemma-modeldeck-q4"
+    snapshot_dir = model_dir / "snapshots" / "release-revision"
+    snapshot_dir.mkdir(parents=True)
+    cached = {
+        "model_id": "ozyjay/diffusiongemma-modeldeck-q4",
+        "revision": "release-revision",
+        "cache_location": str(model_dir),
+        "snapshot_location": str(snapshot_dir),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "text-diffusion",
+        "configuration_support": "diffusiongemma-modeldeck-q4",
+        "configuration_support_reason": "Supported by ModelDeck Q4.",
+        "base_model_id": "google/diffusiongemma-26B-A4B-it",
+        "base_model_revision": "52de6b914ee1749a7d4933202505ddf5b414ec43",
+        "runnable": False,
+        "runnable_reason": "Untested",
+    }
+    verified: list[Path] = []
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    monkeypatch.setattr(
+        main_module,
+        "verify_modeldeck_q4_release",
+        lambda path: verified.append(path),
+    )
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "local-diffusion-q4",
+                    "maximum_new_tokens": 128,
+                    "maximum_denoising_steps": 24,
+                },
+            )
+            disallowed = await client.post(
+                "/api/catalogue/policy",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "allowed": False,
+                },
+            )
+            workers = await client.get("/api/workers")
+
+    assert created.status_code == 201
+    document = created.json()
+    assert verified == [snapshot_dir]
+    assert document["model_id"] == cached["base_model_id"]
+    assert document["revision"] == cached["base_model_revision"]
+    assert document["artifact_model_id"] == cached["model_id"]
+    assert document["artifact_revision"] == cached["revision"]
+    assert document["preferred_runtime"] == "text-diffusion-gptq-rocm"
+    assert document["settings"]["q4_checkpoint_dir"] == str(snapshot_dir)
+    assert disallowed.status_code == 200
+    assert "local-local-diffusion-q4" not in {worker["id"] for worker in workers.json()}
+
+
+@pytest.mark.asyncio
 async def test_disallowing_hf_model_keeps_cache_profiles_and_packaged_q4(monkeypatch, tmp_path: Path) -> None:
     model_id = "google/diffusiongemma-26B-A4B-it"
     revision = "52de6b914ee1749a7d4933202505ddf5b414ec43"

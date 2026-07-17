@@ -48,6 +48,8 @@ export interface Profile {
   id: string;
   model_id: string;
   revision: string;
+  artifact_model_id: string | null;
+  artifact_revision: string | null;
   alias: string;
   generation_family: string;
   preferred_runtime: string;
@@ -84,9 +86,13 @@ export interface ModelEntry {
     | "autoregressive-transformers"
     | "scenechat-gemma4"
     | "diffusiongemma-transformers"
+    | "diffusiongemma-modeldeck-q4"
     | null;
   configuration_support_reason: string;
   modeldeck_allowed: boolean;
+  snapshot_location: string | null;
+  base_model_id: string | null;
+  base_model_revision: string | null;
   runnable: boolean;
   runnable_reason: string;
 }

@@ -23,12 +23,12 @@ from modeldeck.profiles import (
 
 
 @pytest.mark.asyncio
-async def test_gateway_returns_structured_local_unavailable_without_cloud(monkeypatch) -> None:
+async def test_gateway_returns_structured_local_unavailable_without_cloud(monkeypatch, tmp_path) -> None:
     async def unavailable_provider(_client, _profile):
         return None, False
 
     monkeypatch.setattr(gateway_module, "provider_health", unavailable_provider)
-    app = create_gateway_app()
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/v1/completions", json={"model": "fast-chat", "prompt": "hello"})
     assert response.status_code == 503
@@ -37,7 +37,7 @@ async def test_gateway_returns_structured_local_unavailable_without_cloud(monkey
 
 
 @pytest.mark.asyncio
-async def test_default_text_diffusion_alias_prefers_q4(monkeypatch) -> None:
+async def test_default_text_diffusion_alias_prefers_q4(monkeypatch, tmp_path) -> None:
     async def ready_provider(_client, profile):
         return {"ready": True}, profile.id in {
             "diffusiongemma-q4-rocm",
@@ -45,7 +45,7 @@ async def test_default_text_diffusion_alias_prefers_q4(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
-    app = create_gateway_app()
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/models")
@@ -57,12 +57,12 @@ async def test_default_text_diffusion_alias_prefers_q4(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch) -> None:
+async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch, tmp_path) -> None:
     async def ready_provider(_client, profile):
         return {"ready": True}, profile.id.startswith("qwen-")
 
     monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
-    app = create_gateway_app()
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/models")
@@ -74,12 +74,12 @@ async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_default_scenechat_alias_advertises_multimodal_provider(monkeypatch) -> None:
+async def test_default_scenechat_alias_advertises_multimodal_provider(monkeypatch, tmp_path) -> None:
     async def ready_provider(_client, profile):
         return {"ready": True}, profile.id == "scenechat-gemma4-e2b-rocm"
 
     monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
-    app = create_gateway_app()
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         models_response = await client.get("/v1/models")

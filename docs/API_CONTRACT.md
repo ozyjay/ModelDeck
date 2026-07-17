@@ -8,8 +8,8 @@ preset listing, stop-all, and same-origin gateway status. `GET /api/gateway/stat
 returns gateway health, advertised models, and providers, or a structured `available:
 false` response when the separate gateway process cannot be reached. Profile mutation
 is limited to `POST /api/profiles` and `DELETE /api/profiles/{profile_id}` for local
-configurations backed by allowlisted autoregressive, SceneChat Gemma 4, or DiffusionGemma
-workers. Creation requires an exact complete snapshot already
+configurations backed by allowlisted autoregressive, SceneChat Gemma 4, DiffusionGemma
+BF16, or manifest-verified ModelDeck DiffusionGemma Q4 workers. Creation requires an exact complete snapshot already
 returned by cache discovery and accepts only an alias, dtype, lifecycle, context length,
 and output ceiling. ModelDeck derives the cache root, Transformers ROCm runtime, port,
 capabilities, offline policy, and fixed launch arguments. Built-in profiles cannot be
@@ -21,6 +21,8 @@ cache content.
 stopped, then removes those workers and gateway routes from active ModelDeck use without
 deleting cache files or profile documents. Re-allowing restores configured workers.
 Profiles backed by packaged checkpoints rather than the Hugging Face cache are unaffected.
+Downloaded Q4 releases are controlled by their derivative repository and revision, not
+by the upstream base-model policy.
 
 FastAPI also serves the committed operator-console assets and returns the SPA entry point
 for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling

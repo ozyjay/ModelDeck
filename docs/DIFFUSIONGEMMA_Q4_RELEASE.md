@@ -145,3 +145,12 @@ payload entries themselves.
 
 Publishing remains a separate, explicit action; the packaging command performs no
 network upload or repository creation.
+
+After HuggingFacePull places the complete repository snapshot in the normal Hugging Face
+cache, it appears in ModelDeck's Model library as a recognised ModelDeck DiffusionGemma
+Q4 release. Choose **Configure runtime** to create an exclusive local worker. ModelDeck
+re-verifies every release-inventory checksum before saving the configuration; this can
+take a little time for the full payload. The derivative repository revision remains the
+library and allow/disallow identity, while the pinned Google model and revision remain
+the worker's base-model identity. Removing or disallowing the runtime never deletes the
+downloaded snapshot.

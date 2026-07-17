@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -18,7 +19,12 @@ from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.hardware import probe_environment
-from modeldeck.profile_registry import load_local_profiles, profile_allowed, profile_uses_huggingface_cache
+from modeldeck.profile_registry import (
+    load_local_profiles,
+    profile_allowed,
+    profile_cache_identity,
+    profile_uses_huggingface_cache,
+)
 from modeldeck.profiles import (
     LOCAL_PORT_RANGE,
     RESERVED_GATEWAY_ALIASES,
@@ -26,6 +32,7 @@ from modeldeck.profiles import (
     create_local_profile,
     default_model_profiles,
 )
+from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
 from modeldeck.supervisor import WorkerSupervisor
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
@@ -34,6 +41,17 @@ FRONTEND_FALLBACK = """<!doctype html><html lang="en-AU"><head><meta charset="ut
 <body><main><h1>ModelDeck operator console is not built</h1>
 <p>Run <code>pwsh -NoProfile -File scripts/build_frontend.ps1</code> and restart ModelDeck.</p>
 </main></body></html>"""
+
+
+async def _run_blocking[BlockingResult](
+    function: Callable[..., BlockingResult],
+    *arguments: object,
+) -> BlockingResult:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="modeldeck-management")
+    try:
+        return await asyncio.get_running_loop().run_in_executor(executor, function, *arguments)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 class LifecycleEvidence(BaseModel):
@@ -164,8 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         matching_profiles = [
             profile
             for profile in request.app.state.profiles
-            if profile.model_id == payload.model_id
-            and profile.revision == payload.revision
+            if profile_cache_identity(profile) == (payload.model_id, payload.revision)
             and profile_uses_huggingface_cache(profile)
         ]
         supervisor = request.app.state.supervisor
@@ -250,6 +267,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 409,
                 cached["configuration_support_reason"],
             )
+        checkpoint_dir = (
+            Path(cached["snapshot_location"])
+            if configuration_support == "diffusiongemma-modeldeck-q4"
+            else None
+        )
+        if checkpoint_dir is not None:
+            try:
+                await _run_blocking(verify_modeldeck_q4_release, checkpoint_dir)
+            except (OSError, Q4ReleaseError) as error:
+                raise HTTPException(409, f"ModelDeck Q4 release verification failed: {error}") from error
 
         profiles = request.app.state.profiles
         profile_id = f"local-{payload.alias}"
@@ -270,6 +297,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cache_root=cache_root,
             port=port,
             configuration_support=configuration_support,
+            checkpoint_dir=checkpoint_dir,
+            base_model_id=cached.get("base_model_id"),
+            base_model_revision=cached.get("base_model_revision"),
         )
         store = request.app.state.compatibility_store
         store.save_model_profile(profile.model_dump(mode="json"))

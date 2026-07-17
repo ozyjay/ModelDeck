@@ -22,6 +22,8 @@ class ModelProfile(BaseModel):
     id: str
     model_id: str
     revision: str
+    artifact_model_id: str | None = None
+    artifact_revision: str | None = None
     alias: str
     generation_family: GenerationFamily
     preferred_runtime: str
@@ -49,6 +51,8 @@ class ModelProfile(BaseModel):
 
     @model_validator(mode="after")
     def generation_contract(self) -> ModelProfile:
+        if (self.artifact_model_id is None) != (self.artifact_revision is None):
+            raise ValueError("artifact model and revision must be supplied together")
         if (
             self.generation_family == GenerationFamily.AUTOREGRESSIVE
             and self.capabilities.iterative_refinement

@@ -24,13 +24,21 @@ larger cached workers does not claim that they have passed the target GPU accept
 
 The operator may create additional profiles from exact, complete snapshots recognised by
 the local Hugging Face cache scanner when the architecture matches the allowlisted
-autoregressive Transformers, SceneChat Gemma 4, or DiffusionGemma worker. The browser
+autoregressive Transformers, SceneChat Gemma 4, DiffusionGemma BF16, or manifest-verified
+ModelDeck DiffusionGemma Q4 worker. The browser
 supplies only a safe alias and bounded family-relevant settings. ModelDeck fixes the
 worker implementation, offline and remote-code policy, capability set, cache root, and the
 first free port from 8630 through 8699. Diffusion profiles are always exclusive. These
 profiles use `local-<alias>` identifiers,
 are stored in `model_profiles`, and remain observationally untested until their worker is
 started and smoke tested. Removing one removes only the runtime configuration.
+
+A Hugging Face Q4 profile records two exact identities. `artifact_model_id` and
+`artifact_revision` identify the downloaded derivative release for library matching and
+allow/disallow policy. `model_id` and `revision` retain the pinned upstream Google base
+identity required by the custom loader and compatibility evidence. Configuration hashes
+the complete release inventory and refuses missing shards, altered files, failed quality
+evidence, unsupported quantisation metadata, or a different base revision.
 
 The vision-language compatibility profile is `scenechat-gemma4-e2b-rocm`:
 

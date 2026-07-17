@@ -78,6 +78,9 @@ def create_local_profile(
     cache_root: Path,
     port: int,
     configuration_support: str,
+    checkpoint_dir: Path | None = None,
+    base_model_id: str | None = None,
+    base_model_revision: str | None = None,
 ) -> ModelProfile:
     if configuration_support == "autoregressive-transformers":
         return create_local_autoregressive_profile(request, cache_root=cache_root, port=port)
@@ -136,6 +139,39 @@ def create_local_profile(
                 "warmup_timeout_seconds": 300,
                 "hsa_preload_evidence": False,
                 "cache_root": str(cache_root),
+            },
+        )
+    if configuration_support == "diffusiongemma-modeldeck-q4":
+        if checkpoint_dir is None or base_model_id is None or base_model_revision is None:
+            raise ValueError("ModelDeck Q4 release identity is incomplete")
+        return ModelProfile(
+            id=f"local-{request.alias}",
+            model_id=base_model_id,
+            revision=base_model_revision,
+            artifact_model_id=request.model_id,
+            artifact_revision=request.revision,
+            alias=request.alias,
+            generation_family="text-diffusion",
+            preferred_runtime="text-diffusion-gptq-rocm",
+            lifecycle="exclusive",
+            port=port,
+            local_files_only=True,
+            trust_remote_code=False,
+            dtype="bfloat16",
+            capabilities=CapabilitySet(
+                iterative_refinement=True,
+                intermediate_frames=True,
+                seeded_generation=True,
+                logits="model-specific",
+            ),
+            settings={
+                "maximum_new_tokens": request.maximum_new_tokens,
+                "maximum_denoising_steps": request.maximum_denoising_steps,
+                "startup_timeout_seconds": 600,
+                "warmup_timeout_seconds": 300,
+                "hsa_preload_evidence": False,
+                "cache_root": str(cache_root),
+                "q4_checkpoint_dir": str(checkpoint_dir),
             },
         )
     raise ValueError("No allowlisted local worker supports this model architecture")
