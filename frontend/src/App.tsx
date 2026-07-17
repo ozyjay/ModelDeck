@@ -9,7 +9,7 @@ import type {
   ManagementHealth,
   ModelEntry,
   Profile,
-  ScenechatProviderSelection,
+  ProviderSelection,
   Telemetry,
   Worker,
   WorkerEvent,
@@ -41,7 +41,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
-  const [scenechatSelection, setScenechatSelection] = useState<ScenechatProviderSelection | null>(null);
+  const [providerSelections, setProviderSelections] = useState<ProviderSelection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [eventStreamConnected, setEventStreamConnected] = useState(false);
@@ -57,34 +57,34 @@ export default function App() {
   }, []);
 
   const refreshGateway = useCallback(async () => {
-    const [nextGateway, selection] = await Promise.all([
+    const [nextGateway, selections] = await Promise.all([
       getJson<GatewayStatus>("/api/gateway/status"),
-      getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
+      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
     ]);
     setGateway(nextGateway);
-    setScenechatSelection(selection);
+    setProviderSelections(selections.selections);
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue, selection] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
-      getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
+      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
     setGateway(nextGateway);
     setModels(catalogue.models);
-    setScenechatSelection(selection);
+    setProviderSelections(selections.selections);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selection] =
+      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections] =
         await Promise.all([
           getJson<ManagementHealth>("/api/health"),
           getJson<GatewayStatus>("/api/gateway/status"),
@@ -94,7 +94,7 @@ export default function App() {
           getJson<Profile[]>("/api/profiles"),
           getJson<{ models: ModelEntry[] }>("/api/catalogue"),
           getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
-          getJson<ScenechatProviderSelection>("/api/gateway/provider-selections/scenechat-vision"),
+          getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
         ]);
       setHealth(nextHealth);
       setGateway(nextGateway);
@@ -104,7 +104,7 @@ export default function App() {
       setProfiles(nextProfiles);
       setModels(catalogue.models);
       setCompatibility(tests.tests);
-      setScenechatSelection(selection);
+      setProviderSelections(selections.selections);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -195,15 +195,15 @@ export default function App() {
     }
   };
 
-  const selectScenechatProvider = async (profileId: string) => {
-    setPending("scenechat-selection");
+  const selectProvider = async (alias: string, profileId: string) => {
+    setPending(`provider-selection:${alias}`);
     setError(null);
     try {
-      const selection = await postJson<ScenechatProviderSelection>(
-        "/api/gateway/provider-selections/scenechat-vision",
+      const selection = await postJson<ProviderSelection>(
+        `/api/gateway/provider-selections/${encodeURIComponent(alias)}`,
         { profile_id: profileId },
       );
-      setScenechatSelection(selection);
+      setProviderSelections((current) => current.map((item) => item.alias === alias ? selection : item));
       await refreshGateway();
     } catch (reason) {
       setError(messageFrom(reason));
@@ -280,11 +280,11 @@ export default function App() {
             profiles={profiles}
             models={models}
             compatibility={compatibility}
-            scenechatSelection={scenechatSelection}
+            providerSelections={providerSelections}
             pending={pending}
             operate={operate}
             stopAll={stopAll}
-            selectScenechatProvider={selectScenechatProvider}
+            selectProvider={selectProvider}
           />
         ) : view === "models" ? (
           <ModelsView
@@ -443,16 +443,16 @@ function Overview({
   );
 }
 
-function WorkersView({ workers, profiles, models, compatibility, scenechatSelection, pending, operate, stopAll, selectScenechatProvider }: {
+function WorkersView({ workers, profiles, models, compatibility, providerSelections, pending, operate, stopAll, selectProvider }: {
   workers: Worker[];
   profiles: Profile[];
   models: ModelEntry[];
   compatibility: CompatibilityTest[];
-  scenechatSelection: ScenechatProviderSelection | null;
+  providerSelections: ProviderSelection[];
   pending: string | null;
   operate: (worker: Worker, operation: WorkerOperation) => Promise<void>;
   stopAll: () => Promise<void>;
-  selectScenechatProvider: (profileId: string) => Promise<void>;
+  selectProvider: (alias: string, profileId: string) => Promise<void>;
 }) {
   const groups = [
     { title: "Qwen autoregressive", description: "Pinned Transformers workers for chat, completions, and token traces.", workers: workers.filter((worker) => worker.model_id.startsWith("Qwen/")) },
@@ -463,7 +463,7 @@ function WorkersView({ workers, profiles, models, compatibility, scenechatSelect
   return (
     <div className="view-stack">
       <div className="view-actions"><p>Start only the runtime you intend to use. Model loading may take several minutes.</p><button className="danger secondary" disabled={pending === "stop-all"} onClick={() => void stopAll()}>{pending === "stop-all" ? "Stopping…" : "Stop all workers"}</button></div>
-      {scenechatSelection && <ScenechatProviderControl selection={scenechatSelection} workers={workers} gatewayReady={scenechatSelection.gateway_ready} pending={pending === "scenechat-selection"} selectProvider={selectScenechatProvider} />}
+      {providerSelections.map((selection) => <ProviderControl key={selection.alias} selection={selection} workers={workers} pending={pending === `provider-selection:${selection.alias}`} selectProvider={selectProvider} />)}
       {groups.map((group) => (
         <section className="worker-group" key={group.title}>
           <PanelHeading title={group.title} detail={`${group.workers.length} workers`} />
@@ -483,19 +483,19 @@ function WorkersView({ workers, profiles, models, compatibility, scenechatSelect
   );
 }
 
-function ScenechatProviderControl({ selection, workers, gatewayReady, pending, selectProvider }: { selection: ScenechatProviderSelection; workers: Worker[]; gatewayReady: boolean; pending: boolean; selectProvider: (profileId: string) => Promise<void> }) {
+function ProviderControl({ selection, workers, pending, selectProvider }: { selection: ProviderSelection; workers: Worker[]; pending: boolean; selectProvider: (alias: string, profileId: string) => Promise<void> }) {
   const [chosen, setChosen] = useState(selection.selected_provider);
   useEffect(() => setChosen(selection.selected_provider), [selection.selected_provider]);
   const selected = selection.candidates.find((candidate) => candidate.profile_id === selection.selected_provider);
   const workerState = workers.find((worker) => worker.id === selection.selected_provider)?.state ?? selected?.worker_state ?? "stopped";
   return <section className="panel provider-selection-panel">
-    <PanelHeading title="SceneChat provider" detail="Reserved alias: scenechat-vision" />
-    <p className="section-description">Applications keep using <code>scenechat-vision</code>. Selecting a physical provider changes routing only; start, stop and smoke testing remain separate.</p>
+    <PanelHeading title={selection.display_name} detail={`Reserved alias: ${selection.alias}`} />
+    <p className="section-description">Applications keep using <code>{selection.alias}</code>. Selecting a physical provider changes routing only; start, stop and smoke testing remain separate.</p>
     <div className="provider-selection-controls">
       <label>Physical provider<select value={chosen} onChange={(event) => setChosen(event.target.value)}>{selection.candidates.map((candidate) => <option key={candidate.profile_id} value={candidate.profile_id}>{candidate.profile_alias} · {candidate.model_id}</option>)}</select></label>
-      <button disabled={pending || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => void selectProvider(chosen)}>{pending ? "Selecting…" : "Select provider"}</button>
+      <button disabled={pending || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => void selectProvider(selection.alias, chosen)}>{pending ? "Selecting…" : "Select provider"}</button>
     </div>
-    <DefinitionList rows={[["Selected provider", selection.selected_provider], ["Worker state", humanise(workerState)], ["Gateway readiness", gatewayReady ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
+    <DefinitionList rows={[["Selected provider", selection.selected_provider], ["Worker state", humanise(workerState)], ["Gateway readiness", selection.gateway_ready ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
   </section>;
 }
 

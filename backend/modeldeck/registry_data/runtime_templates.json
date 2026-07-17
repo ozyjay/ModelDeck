@@ -1,0 +1,43 @@
+{
+  "format": "modeldeck-runtime-templates",
+  "version": 1,
+  "templates": [
+    {
+      "id": "autoregressive-transformers",
+      "runtime": "transformers-rocm",
+      "generation_family": "autoregressive",
+      "capabilities": {"chat": true, "completions": true, "logits": true, "top_k_trace": true, "hidden_states": "optional", "seeded_generation": true},
+      "settings": {"top_k": 5, "startup_timeout_seconds": 300, "warmup_timeout_seconds": 60},
+      "cache_setting": "cache_root"
+    },
+    {
+      "id": "scenechat-gemma4",
+      "runtime": "vision-language-transformers-rocm",
+      "generation_family": "vision-language",
+      "capabilities": {"chat": "compatibility-only", "streaming": false, "cancellation": true, "image_input": true, "structured_output": true},
+      "settings": {"generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180},
+      "cache_setting": "cache_root"
+    },
+    {
+      "id": "diffusiongemma-transformers",
+      "runtime": "text-diffusion-transformers-rocm",
+      "generation_family": "text-diffusion",
+      "capabilities": {"iterative_refinement": true, "intermediate_frames": true, "seeded_generation": true, "logits": "model-specific"},
+      "settings": {"startup_timeout_seconds": 600, "warmup_timeout_seconds": 300, "hsa_preload_evidence": false},
+      "cache_setting": "cache_root",
+      "lifecycle": "exclusive"
+    },
+    {
+      "id": "diffusiongemma-modeldeck-q4",
+      "runtime": "text-diffusion-gptq-rocm",
+      "generation_family": "text-diffusion",
+      "capabilities": {"iterative_refinement": true, "intermediate_frames": true, "seeded_generation": true, "logits": "model-specific"},
+      "settings": {"startup_timeout_seconds": 600, "warmup_timeout_seconds": 300, "hsa_preload_evidence": false},
+      "cache_setting": "q4_checkpoint_dir",
+      "include_cache_root": true,
+      "lifecycle": "exclusive",
+      "dtype": "bfloat16",
+      "uses_base_model_identity": true
+    }
+  ]
+}

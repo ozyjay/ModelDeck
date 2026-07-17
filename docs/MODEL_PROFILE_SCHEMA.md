@@ -1,5 +1,13 @@
 # Model profile schema
 
+Built-in profiles are packaged as versioned seed data in
+`backend/modeldeck/registry_data/model_profiles.json`; they are validated through the same
+`ModelProfile` schema as SQLite-backed local profiles. Recognised cache architectures map
+to entries in `runtime_templates.json`, while application-facing reserved aliases and
+their capability contracts live in `reserved_aliases.json`. JSON data cannot provide a
+command, executable, environment variable, endpoint, or arbitrary filesystem path to the
+worker launcher; each runtime ID must still map to a trusted Python launch builder.
+
 Profiles are typed Pydantic documents and reject unknown fields, unsafe identifiers,
 unallowlisted runtimes, invalid ports, and contradictory generation capabilities.
 

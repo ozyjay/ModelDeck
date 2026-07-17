@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ScenechatProviderSelection } from "./types";
+import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ProviderSelection } from "./types";
 
 const capabilities = {
   chat: true,
@@ -126,8 +126,9 @@ let catalogueModels: ModelEntry[] = [completeModel, partialModel];
 let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 let localProfiles: Profile[] = [];
-let scenechatSelection: ScenechatProviderSelection = {
+let scenechatSelection: ProviderSelection = {
   alias: "scenechat-vision",
+  display_name: "SceneChat provider",
   default_provider: "scenechat-gemma4-e2b-rocm",
   explicit_selection: false,
   selected_provider: "scenechat-gemma4-e2b-rocm",
@@ -247,7 +248,7 @@ function mockFetch() {
     }
     if (path === "/api/health") return json({ status: "ok", service: "modeldeck-management", open_day: false, downloads_allowed: false, gateway_url: "http://127.0.0.1:8600" });
     if (path === "/api/gateway/status") return json(gateway);
-    if (path === "/api/gateway/provider-selections/scenechat-vision") return json(scenechatSelection);
+    if (path === "/api/gateway/provider-selections") return json({ selections: [scenechatSelection] });
     if (path === "/api/hardware") return json(hardware);
     if (path === "/api/telemetry") return json(telemetry);
     if (path === "/api/workers") return json([currentWorker]);
@@ -270,6 +271,7 @@ describe("ModelDeck operator console", () => {
     localProfiles = [];
     scenechatSelection = {
       alias: "scenechat-vision",
+      display_name: "SceneChat provider",
       default_provider: "scenechat-gemma4-e2b-rocm",
       explicit_selection: false,
       selected_provider: "scenechat-gemma4-e2b-rocm",

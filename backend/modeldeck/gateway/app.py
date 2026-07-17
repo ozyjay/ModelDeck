@@ -13,11 +13,8 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.profile_registry import load_local_profiles, profile_allowed
 from modeldeck.profiles import ModelProfile, default_model_profiles
-from modeldeck.provider_selection import (
-    DEFAULT_SCENECHAT_PROVIDER_ID,
-    SCENECHAT_ALIAS,
-    scenechat_provider_compatible,
-)
+from modeldeck.provider_selection import SCENECHAT_ALIAS
+from modeldeck.registry import ReservedAlias, reserved_aliases
 
 
 def create_gateway_app(
@@ -27,27 +24,19 @@ def create_gateway_app(
     configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
     defaults = {profile.id: profile for profile in default_model_profiles()}
+    alias_contracts = reserved_aliases()
     base_routes = alias_routes or {
-        "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
-        "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
-        "qwen-0-5b": [defaults["qwen-small-rocm"]],
-        "qwen-1-5b": [defaults["qwen-1-5b-rocm"]],
-        "qwen-3b": [defaults["qwen-3b-rocm"]],
-        SCENECHAT_ALIAS: [defaults[DEFAULT_SCENECHAT_PROVIDER_ID]],
-        "text-diffusion": [
-            defaults["diffusiongemma-q4-rocm"],
-            defaults["mock-diffusion"],
-        ],
-        "text-diffusion-bf16": [defaults["diffusiongemma-rocm"]],
+        alias: [defaults[profile_id] for profile_id in contract.providers]
+        for alias, contract in alias_contracts.items()
     }
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
 
-    def selected_scenechat_provider_id() -> str:
+    def selected_provider_id(alias: str, contract: ReservedAlias) -> str | None:
         if alias_routes is not None:
-            candidates = base_routes.get(SCENECHAT_ALIAS, [])
-            return candidates[0].id if candidates else DEFAULT_SCENECHAT_PROVIDER_ID
-        return store.gateway_provider_selection(SCENECHAT_ALIAS) or DEFAULT_SCENECHAT_PROVIDER_ID
+            candidates = base_routes.get(alias, [])
+            return candidates[0].id if candidates else contract.default_provider
+        return store.gateway_provider_selection(alias) or contract.default_provider
 
     def active_routes() -> dict[str, list[ModelProfile]]:
         routes = {alias: list(candidates) for alias, candidates in base_routes.items()}
@@ -57,15 +46,17 @@ def create_gateway_app(
                 all_profiles[profile.id] = profile
                 if profile.alias not in routes:
                     routes[profile.alias] = [profile]
-            selected = all_profiles.get(selected_scenechat_provider_id())
-            routes[SCENECHAT_ALIAS] = (
-                [selected] if selected is not None and scenechat_provider_compatible(selected) else []
-            )
+            for alias, contract in alias_contracts.items():
+                if contract.selection != "explicit":
+                    continue
+                selected = all_profiles.get(selected_provider_id(alias, contract) or "")
+                routes[alias] = [selected] if selected is not None and contract.accepts(selected) else []
         policy = store.list_model_cache_policy()
         filtered = {}
         for alias, candidates in routes.items():
             allowed_candidates = [profile for profile in candidates if profile_allowed(profile, policy)]
-            if allowed_candidates or alias == SCENECHAT_ALIAS:
+            contract = alias_contracts.get(alias)
+            if allowed_candidates or (contract is not None and contract.selection == "explicit"):
                 filtered[alias] = allowed_candidates
         return filtered
 
@@ -113,8 +104,8 @@ def create_gateway_app(
                     "owned_by": "modeldeck-local",
                     "ready": any(states[profile.id]["ready"] for profile in candidates),
                     "selected_provider": (
-                        selected_scenechat_provider_id()
-                        if alias == SCENECHAT_ALIAS
+                        selected_provider_id(alias, alias_contracts[alias])
+                        if alias in alias_contracts and alias_contracts[alias].selection == "explicit"
                         else (candidates[0].id if candidates else None)
                     ),
                     "effective_provider": next(
@@ -132,7 +123,7 @@ def create_gateway_app(
             alias: (
                 candidates[0].capabilities
                 if candidates
-                else defaults[DEFAULT_SCENECHAT_PROVIDER_ID].capabilities
+                else defaults[alias_contracts[alias].default_provider].capabilities
             ).model_dump()
             for alias, candidates in routes.items()
         }

@@ -24,10 +24,11 @@ Profiles backed by packaged checkpoints rather than the Hugging Face cache are u
 Downloaded Q4 releases are controlled by their derivative repository and revision, not
 by the upstream base-model policy.
 
-`GET` and `POST /api/gateway/provider-selections/scenechat-vision` expose and update the
-physical provider selected for the reserved `scenechat-vision` alias. The POST body
+`GET /api/gateway/provider-selections` lists every explicitly selectable reserved alias.
+`GET` and `POST /api/gateway/provider-selections/{alias}` expose and update one selection;
+`scenechat-vision` is currently the packaged selectable contract. The POST body
 contains only an existing profile ID. Management accepts registered, policy-allowed
-vision-language profiles advertising both image input and structured output. The response
+profiles satisfying the selected alias's packaged family and capability contract. The response
 reports selection, worker state, gateway readiness, and eligible profiles without
 settings, filesystem paths, endpoints, or credentials. Selection does not start or stop
 workers. A selected local profile must be replaced before its configuration can be

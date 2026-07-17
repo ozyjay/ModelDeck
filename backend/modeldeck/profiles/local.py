@@ -5,21 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from modeldeck.protocol import CapabilitySet
+from modeldeck.registry import reserved_aliases, runtime_templates
 
 from .models import ModelProfile
 
 LOCAL_PORT_RANGE = range(8630, 8700)
-RESERVED_GATEWAY_ALIASES = {
-    "fast-chat",
-    "token-explainer",
-    "qwen-0-5b",
-    "qwen-1-5b",
-    "qwen-3b",
-    "scenechat-vision",
-    "text-diffusion",
-    "text-diffusion-bf16",
-}
+RESERVED_GATEWAY_ALIASES = frozenset(reserved_aliases())
 
 
 class LocalProfileRequest(BaseModel):
@@ -41,34 +32,11 @@ def create_local_autoregressive_profile(
     cache_root: Path,
     port: int,
 ) -> ModelProfile:
-    return ModelProfile(
-        id=f"local-{request.alias}",
-        model_id=request.model_id,
-        revision=request.revision,
-        alias=request.alias,
-        generation_family="autoregressive",
-        preferred_runtime="transformers-rocm",
-        lifecycle=request.lifecycle,
+    return create_local_profile(
+        request,
+        cache_root=cache_root,
         port=port,
-        local_files_only=True,
-        trust_remote_code=False,
-        dtype=request.dtype,
-        capabilities=CapabilitySet(
-            chat=True,
-            completions=True,
-            logits=True,
-            top_k_trace=True,
-            hidden_states="optional",
-            seeded_generation=True,
-        ),
-        settings={
-            "context_length": request.context_length,
-            "maximum_new_tokens": request.maximum_new_tokens,
-            "top_k": 5,
-            "startup_timeout_seconds": 300,
-            "warmup_timeout_seconds": 60,
-            "cache_root": str(cache_root),
-        },
+        configuration_support="autoregressive-transformers",
     )
 
 
@@ -82,99 +50,41 @@ def create_local_profile(
     base_model_id: str | None = None,
     base_model_revision: str | None = None,
 ) -> ModelProfile:
-    if configuration_support == "autoregressive-transformers":
-        return create_local_autoregressive_profile(request, cache_root=cache_root, port=port)
-    if configuration_support == "scenechat-gemma4":
-        return ModelProfile(
-            id=f"local-{request.alias}",
-            model_id=request.model_id,
-            revision=request.revision,
-            alias=request.alias,
-            generation_family="vision-language",
-            preferred_runtime="vision-language-transformers-rocm",
-            lifecycle=request.lifecycle,
-            port=port,
-            local_files_only=True,
-            trust_remote_code=False,
-            dtype=request.dtype,
-            capabilities=CapabilitySet(
-                chat="compatibility-only",
-                streaming=False,
-                cancellation=True,
-                image_input=True,
-                structured_output=True,
-            ),
-            settings={
-                "context_length": request.context_length,
-                "maximum_new_tokens": request.maximum_new_tokens,
-                "generation_timeout_seconds": 60,
-                "startup_timeout_seconds": 600,
-                "warmup_timeout_seconds": 180,
-                "cache_root": str(cache_root),
-            },
-        )
-    if configuration_support == "diffusiongemma-transformers":
-        return ModelProfile(
-            id=f"local-{request.alias}",
-            model_id=request.model_id,
-            revision=request.revision,
-            alias=request.alias,
-            generation_family="text-diffusion",
-            preferred_runtime="text-diffusion-transformers-rocm",
-            lifecycle="exclusive",
-            port=port,
-            local_files_only=True,
-            trust_remote_code=False,
-            dtype=request.dtype,
-            capabilities=CapabilitySet(
-                iterative_refinement=True,
-                intermediate_frames=True,
-                seeded_generation=True,
-                logits="model-specific",
-            ),
-            settings={
-                "maximum_new_tokens": request.maximum_new_tokens,
-                "maximum_denoising_steps": request.maximum_denoising_steps,
-                "startup_timeout_seconds": 600,
-                "warmup_timeout_seconds": 300,
-                "hsa_preload_evidence": False,
-                "cache_root": str(cache_root),
-            },
-        )
-    if configuration_support == "diffusiongemma-modeldeck-q4":
-        if checkpoint_dir is None or base_model_id is None or base_model_revision is None:
-            raise ValueError("ModelDeck Q4 release identity is incomplete")
-        return ModelProfile(
-            id=f"local-{request.alias}",
-            model_id=base_model_id,
-            revision=base_model_revision,
-            artifact_model_id=request.model_id,
-            artifact_revision=request.revision,
-            alias=request.alias,
-            generation_family="text-diffusion",
-            preferred_runtime="text-diffusion-gptq-rocm",
-            lifecycle="exclusive",
-            port=port,
-            local_files_only=True,
-            trust_remote_code=False,
-            dtype="bfloat16",
-            capabilities=CapabilitySet(
-                iterative_refinement=True,
-                intermediate_frames=True,
-                seeded_generation=True,
-                logits="model-specific",
-            ),
-            settings={
-                "maximum_new_tokens": request.maximum_new_tokens,
-                "maximum_denoising_steps": request.maximum_denoising_steps,
-                "startup_timeout_seconds": 600,
-                "warmup_timeout_seconds": 300,
-                "hsa_preload_evidence": False,
-                "cache_root": str(cache_root),
-                "q4_checkpoint_dir": str(checkpoint_dir),
-            },
-        )
-    raise ValueError("No allowlisted local worker supports this model architecture")
+    template = runtime_templates().get(configuration_support)
+    if template is None:
+        raise ValueError("No allowlisted local worker supports this model architecture")
+    if template.uses_base_model_identity and (
+        checkpoint_dir is None or base_model_id is None or base_model_revision is None
+    ):
+        raise ValueError("ModelDeck Q4 release identity is incomplete")
+    settings = dict(template.settings)
+    settings["maximum_new_tokens"] = request.maximum_new_tokens
+    if template.generation_family.value == "autoregressive":
+        settings["context_length"] = request.context_length
+    elif template.generation_family.value == "vision-language":
+        settings["context_length"] = request.context_length
+    else:
+        settings["maximum_denoising_steps"] = request.maximum_denoising_steps
+    settings[template.cache_setting] = str(checkpoint_dir or cache_root)
+    if template.include_cache_root:
+        settings["cache_root"] = str(cache_root)
+    return ModelProfile(
+        id=f"local-{request.alias}",
+        model_id=base_model_id if template.uses_base_model_identity else request.model_id,
+        revision=base_model_revision if template.uses_base_model_identity else request.revision,
+        artifact_model_id=request.model_id if template.uses_base_model_identity else None,
+        artifact_revision=request.revision if template.uses_base_model_identity else None,
+        alias=request.alias,
+        generation_family=template.generation_family,
+        preferred_runtime=template.runtime,
+        lifecycle=template.lifecycle or request.lifecycle,
+        port=port,
+        local_files_only=True,
+        trust_remote_code=False,
+        dtype=template.dtype or request.dtype,
+        capabilities=template.capabilities.model_copy(deep=True),
+        settings=settings,
+    )
 
 
 LocalAutoregressiveProfileRequest = LocalProfileRequest

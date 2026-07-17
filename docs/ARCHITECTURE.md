@@ -26,6 +26,22 @@ registry storage when inspected. ModelDeck owns profiles, runtime process lifecy
 scheduling, evidence, fixed local routing, and management presentation. Demos retain
 public wording, interaction state, reset, and prepared replay assets.
 
+## Packaged registries
+
+Built-in configuration is packaged as three versioned, validated JSON registries under
+`backend/modeldeck/registry_data`: runtime templates, model-profile seeds, and reserved
+gateway aliases. The profile seeds replace Python-constructed built-ins. Runtime templates
+describe the bounded profile fields ModelDeck may derive for a recognised cache model;
+they select, but cannot define, a trusted Python worker launch implementation. Reserved
+alias contracts define packaged provider order or explicit selection, display wording,
+generation family, and required capabilities. Registry loading rejects unknown versions,
+duplicate IDs, missing seed references, invalid capabilities, and runtime implementations
+without a trusted launch builder.
+
+SQLite remains the home for operator-created profiles, cache policy, compatibility
+evidence, and explicit provider selections. Packaged seed data is read-only and versioned
+with the application, so upgrades are deterministic and do not overwrite local choices.
+
 ## Process and failure model
 
 The management API does not import model libraries or hold model tensors. Each worker is
@@ -44,7 +60,7 @@ Process existence alone never means ready.
 
 ## Gateway and routing
 
-Aliases route by declared generation family and capability. `fast-chat` prefers the core
+Aliases route according to the reserved-alias registry and declared capability contract. `fast-chat` prefers the core
 Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
 worker. `scenechat-vision` routes image-and-text requests to the explicitly selected Gemma 4
 profile and injects its private loopback credential. Each fallback-capable alias retains an explicit

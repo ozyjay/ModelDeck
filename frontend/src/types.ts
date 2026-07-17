@@ -187,7 +187,7 @@ export interface GatewayStatus {
   error: string | null;
 }
 
-export interface ScenechatProviderCandidate {
+export interface ProviderCandidate {
   profile_id: string;
   profile_alias: string;
   model_id: string;
@@ -196,14 +196,15 @@ export interface ScenechatProviderCandidate {
   gateway_ready: boolean;
 }
 
-export interface ScenechatProviderSelection {
-  alias: "scenechat-vision";
-  default_provider: string;
+export interface ProviderSelection {
+  alias: string;
+  display_name: string;
+  default_provider: string | null;
   explicit_selection: boolean;
   selected_provider: string;
   effective_provider: string | null;
   gateway_ready: boolean;
-  candidates: ScenechatProviderCandidate[];
+  candidates: ProviderCandidate[];
 }
 
 export interface ManagementHealth {

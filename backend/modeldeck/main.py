@@ -32,12 +32,9 @@ from modeldeck.profiles import (
     create_local_profile,
     default_model_profiles,
 )
-from modeldeck.provider_selection import (
-    DEFAULT_SCENECHAT_PROVIDER_ID,
-    SCENECHAT_ALIAS,
-    scenechat_provider_compatible,
-)
+from modeldeck.provider_selection import provider_compatible, selectable_aliases
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
+from modeldeck.registry import ReservedAlias
 from modeldeck.supervisor import WorkerSupervisor
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
@@ -148,19 +145,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def gateway_status(request: Request):
         return await _gateway_status(request.app.state.settings)
 
-    async def scenechat_selection_status(request: Request) -> dict:
+    async def provider_selection_status(
+        alias: str,
+        contract: ReservedAlias,
+        request: Request,
+    ) -> dict:
         store = request.app.state.compatibility_store
-        stored_selection = store.gateway_provider_selection(SCENECHAT_ALIAS)
-        selected_provider = stored_selection or DEFAULT_SCENECHAT_PROVIDER_ID
+        stored_selection = store.gateway_provider_selection(alias)
+        selected_provider = stored_selection or contract.default_provider
         policy = store.list_model_cache_policy()
         supervisor = request.app.state.supervisor
         gateway = await _gateway_status(request.app.state.settings)
         gateway_model = next(
-            (
-                model
-                for model in (gateway.get("models") or {}).get("data", [])
-                if model.get("id") == SCENECHAT_ALIAS
-            ),
+            (model for model in (gateway.get("models") or {}).get("data", []) if model.get("id") == alias),
             {},
         )
         effective_provider = gateway_model.get("effective_provider")
@@ -168,7 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for profile in request.app.state.profiles:
             if (
                 profile.id not in supervisor.workers
-                or not scenechat_provider_compatible(profile)
+                or not provider_compatible(contract, profile)
                 or not profile_allowed(profile, policy)
             ):
                 continue
@@ -185,13 +182,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         candidates.sort(
             key=lambda candidate: (
-                candidate["profile_id"] != DEFAULT_SCENECHAT_PROVIDER_ID,
+                candidate["profile_id"] != contract.default_provider,
                 candidate["profile_id"],
             )
         )
         return {
-            "alias": SCENECHAT_ALIAS,
-            "default_provider": DEFAULT_SCENECHAT_PROVIDER_ID,
+            "alias": alias,
+            "display_name": contract.display_name,
+            "default_provider": contract.default_provider,
             "explicit_selection": stored_selection is not None,
             "selected_provider": selected_provider,
             "effective_provider": effective_provider,
@@ -199,35 +197,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "candidates": candidates,
         }
 
-    @app.get("/api/gateway/provider-selections/scenechat-vision")
-    async def get_scenechat_selection(request: Request):
-        return await scenechat_selection_status(request)
+    @app.get("/api/gateway/provider-selections")
+    async def list_provider_selections(request: Request):
+        return {
+            "selections": [
+                await provider_selection_status(alias, contract, request)
+                for alias, contract in selectable_aliases().items()
+            ]
+        }
 
-    @app.post("/api/gateway/provider-selections/scenechat-vision")
-    async def set_scenechat_selection(
+    @app.get("/api/gateway/provider-selections/{alias}")
+    async def get_provider_selection(alias: str, request: Request):
+        contract = selectable_aliases().get(alias)
+        if contract is None:
+            raise HTTPException(404, "Unknown selectable reserved gateway alias")
+        return await provider_selection_status(alias, contract, request)
+
+    @app.post("/api/gateway/provider-selections/{alias}")
+    async def set_provider_selection(
+        alias: str,
         payload: GatewayProviderSelectionRequest,
         request: Request,
     ):
+        contract = selectable_aliases().get(alias)
+        if contract is None:
+            raise HTTPException(404, "Unknown selectable reserved gateway alias")
         profile = next(
             (candidate for candidate in request.app.state.profiles if candidate.id == payload.profile_id),
             None,
         )
         if profile is None or profile.id not in request.app.state.supervisor.workers:
             raise HTTPException(409, "Select an existing registered ModelDeck runtime profile")
-        if not scenechat_provider_compatible(profile):
+        if not provider_compatible(contract, profile):
             raise HTTPException(
                 409,
-                "The selected profile must be a vision-language runtime with image input "
-                "and structured output",
+                "The selected profile does not satisfy this reserved alias contract",
             )
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         if not profile_allowed(profile, policy):
             raise HTTPException(409, "Allow the selected cached model in ModelDeck first")
         request.app.state.compatibility_store.set_gateway_provider_selection(
-            SCENECHAT_ALIAS,
+            alias,
             profile.id,
         )
-        return await scenechat_selection_status(request)
+        return await provider_selection_status(alias, contract, request)
 
     @app.get("/api/hardware")
     async def hardware():
@@ -275,14 +288,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if profile_cache_identity(profile) == (payload.model_id, payload.revision)
             and profile_uses_huggingface_cache(profile)
         ]
-        selected_scenechat = (
-            request.app.state.compatibility_store.gateway_provider_selection(SCENECHAT_ALIAS)
-            or DEFAULT_SCENECHAT_PROVIDER_ID
-        )
-        if not payload.allowed and any(profile.id == selected_scenechat for profile in matching_profiles):
+        selected_providers = {
+            request.app.state.compatibility_store.gateway_provider_selection(alias)
+            or contract.default_provider
+            for alias, contract in selectable_aliases().items()
+        }
+        if not payload.allowed and any(profile.id in selected_providers for profile in matching_profiles):
             raise HTTPException(
                 409,
-                "Select a different scenechat-vision provider before disallowing this model",
+                "Select a different reserved-alias provider before disallowing this model",
             )
         supervisor = request.app.state.supervisor
         if not payload.allowed:
@@ -420,10 +434,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if profile is None:
             raise HTTPException(404, "Unknown local runtime configuration")
-        if request.app.state.compatibility_store.gateway_provider_selection(SCENECHAT_ALIAS) == profile_id:
+        selected_alias = next(
+            (
+                alias
+                for alias in selectable_aliases()
+                if request.app.state.compatibility_store.gateway_provider_selection(alias) == profile_id
+            ),
+            None,
+        )
+        if selected_alias is not None:
             raise HTTPException(
                 409,
-                "Select a different scenechat-vision provider before removing this runtime configuration",
+                f"Select a different {selected_alias} provider before removing this runtime configuration",
             )
         if profile_id in request.app.state.supervisor.workers:
             try:
