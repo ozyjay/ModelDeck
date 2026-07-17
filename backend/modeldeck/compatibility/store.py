@@ -90,6 +90,40 @@ class CompatibilityStore:
             for row in rows
         ]
 
+    def list_model_profiles(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        try:
+            with sqlite3.connect(self.path) as database:
+                rows = database.execute("SELECT document_json FROM model_profiles ORDER BY id").fetchall()
+        except sqlite3.OperationalError:
+            return []
+        profiles = []
+        for (document_json,) in rows:
+            try:
+                document = json.loads(document_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(document, dict):
+                profiles.append(document)
+        return profiles
+
+    def save_model_profile(self, profile: Mapping[str, Any]) -> None:
+        profile_id = str(profile["id"])
+        updated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO model_profiles (id, document_json, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET document_json = excluded.document_json, "
+                "updated_at = excluded.updated_at",
+                (profile_id, json.dumps(dict(profile), sort_keys=True), updated_at),
+            )
+
+    def delete_model_profile(self, profile_id: str) -> bool:
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute("DELETE FROM model_profiles WHERE id = ?", (profile_id,))
+        return cursor.rowcount > 0
+
     def record_test(
         self,
         evidence: Mapping[str, Any],

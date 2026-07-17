@@ -18,7 +18,14 @@ from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.hardware import probe_environment
-from modeldeck.profiles import default_model_profiles
+from modeldeck.profile_registry import load_local_profiles
+from modeldeck.profiles import (
+    LOCAL_PORT_RANGE,
+    RESERVED_GATEWAY_ALIASES,
+    LocalAutoregressiveProfileRequest,
+    create_local_autoregressive_profile,
+    default_model_profiles,
+)
 from modeldeck.supervisor import WorkerSupervisor
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
@@ -43,7 +50,7 @@ class LifecycleEvidence(BaseModel):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
-    profiles = default_model_profiles()
+    built_in_profiles = default_model_profiles()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -51,6 +58,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
         store.initialise()
         app.state.compatibility_store = store
+        for profile in load_local_profiles(configured.data_dir):
+            app.state.supervisor.register_profile(profile)
+            app.state.profiles.append(profile)
         yield
         await app.state.supervisor.stop_all()
 
@@ -61,8 +71,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
-    app.state.supervisor = WorkerSupervisor(profiles, log_dir=configured.log_dir)
-    app.state.profiles = profiles
+    app.state.supervisor = WorkerSupervisor(built_in_profiles, log_dir=configured.log_dir)
+    app.state.profiles = list(built_in_profiles)
+    app.state.built_in_profile_ids = {profile.id for profile in built_in_profiles}
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
@@ -118,7 +129,86 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/profiles")
     async def list_profiles(request: Request):
-        return [profile.model_dump(mode="json") for profile in request.app.state.profiles]
+        built_in_ids = request.app.state.built_in_profile_ids
+        return [
+            {
+                **profile.model_dump(mode="json"),
+                "source": "built-in" if profile.id in built_in_ids else "local",
+            }
+            for profile in request.app.state.profiles
+        ]
+
+    @app.post("/api/profiles", status_code=201)
+    async def create_profile(payload: LocalAutoregressiveProfileRequest, request: Request):
+        catalogue = discover_huggingface_models()
+        cached = next(
+            (
+                model
+                for model in catalogue
+                if model["model_id"] == payload.model_id
+                and model["revision"] == payload.revision
+                and model["download_state"] == "installed-untested"
+            ),
+            None,
+        )
+        if cached is None:
+            raise HTTPException(409, "The requested pinned snapshot is not complete in the local cache")
+        if cached["generation_family_hint"] != "autoregressive":
+            raise HTTPException(
+                409,
+                "This first configuration workflow supports recognised autoregressive models only",
+            )
+
+        profiles = request.app.state.profiles
+        profile_id = f"local-{payload.alias}"
+        if payload.alias in RESERVED_GATEWAY_ALIASES or any(
+            profile.alias == payload.alias for profile in profiles
+        ):
+            raise HTTPException(409, "That gateway alias is already reserved or configured")
+        if any(profile.id == profile_id for profile in profiles):
+            raise HTTPException(409, "That local runtime configuration already exists")
+        used_ports = {profile.port for profile in profiles}
+        port = next((candidate for candidate in LOCAL_PORT_RANGE if candidate not in used_ports), None)
+        if port is None:
+            raise HTTPException(409, "No local ModelDeck worker ports are available")
+
+        cache_root = Path(cached["cache_location"]).parent
+        profile = create_local_autoregressive_profile(
+            payload,
+            cache_root=cache_root,
+            port=port,
+        )
+        store = request.app.state.compatibility_store
+        store.save_model_profile(profile.model_dump(mode="json"))
+        try:
+            request.app.state.supervisor.register_profile(profile)
+        except ValueError as error:
+            store.delete_model_profile(profile.id)
+            raise HTTPException(409, str(error)) from error
+        profiles.append(profile)
+        return {**profile.model_dump(mode="json"), "source": "local"}
+
+    @app.delete("/api/profiles/{profile_id}")
+    async def delete_profile(profile_id: str, request: Request):
+        if profile_id in request.app.state.built_in_profile_ids:
+            raise HTTPException(409, "Built-in runtime configurations cannot be removed")
+        profile = next(
+            (candidate for candidate in request.app.state.profiles if candidate.id == profile_id),
+            None,
+        )
+        if profile is None:
+            raise HTTPException(404, "Unknown local runtime configuration")
+        try:
+            await request.app.state.supervisor.remove_profile(profile_id)
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
+        request.app.state.compatibility_store.delete_model_profile(profile_id)
+        request.app.state.profiles.remove(profile)
+        return {
+            "ok": True,
+            "profile_id": profile_id,
+            "cache_removed": False,
+        }
 
     @app.get("/api/workers")
     async def list_workers(request: Request):

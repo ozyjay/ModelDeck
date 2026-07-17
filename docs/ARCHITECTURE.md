@@ -66,7 +66,12 @@ decisions. Parameter count alone will not.
 The scanner resolves `HF_HUB_CACHE`, `${HF_HOME}/hub`, the normal user cache, then
 `/mnt/work/models/huggingface/hub`. It reads snapshots, config hints, incomplete markers,
 revision refs, and physical size. It never calls the Hub and never treats files as proof
-that a model is runnable.
+that a model is runnable. For recognised complete autoregressive snapshots, the operator
+may create a constrained local profile. The server resolves the selected catalogue entry
+and derives its cache root; no filesystem path, runtime executable, command argument,
+environment variable, remote model identifier, or remote-code flag is accepted from the
+browser. Local profiles are persisted in SQLite, loaded by management at startup, and
+discovered dynamically by the gateway.
 
 ## Data and security
 

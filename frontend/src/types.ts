@@ -58,6 +58,17 @@ export interface Profile {
   dtype: string;
   capabilities: Capabilities;
   settings: Record<string, string | number | boolean>;
+  source: "built-in" | "local";
+}
+
+export interface LocalProfileRequest {
+  model_id: string;
+  revision: string;
+  alias: string;
+  dtype: "float16" | "bfloat16";
+  lifecycle: "resident" | "on-demand" | "exclusive";
+  context_length: number;
+  maximum_new_tokens: number;
 }
 
 export interface ModelEntry {

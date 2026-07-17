@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.profiles import (
+    LocalAutoregressiveProfileRequest,
+    ModelProfile,
+    create_local_autoregressive_profile,
+    default_model_profiles,
+)
 from modeldeck.workers.scenechat_worker import EngineConfig
 from pydantic import ValidationError
 
@@ -117,3 +122,41 @@ def test_profile_rejects_diffusion_capability_on_ar_model() -> None:
     document["capabilities"]["iterative_refinement"] = True
     with pytest.raises(ValidationError, match="cannot advertise"):
         ModelProfile.model_validate(document)
+
+
+def test_local_autoregressive_profile_has_a_fixed_safe_manifest(tmp_path) -> None:
+    request = LocalAutoregressiveProfileRequest(
+        model_id="Example/LocalModel",
+        revision="revision-1",
+        alias="local-example",
+        dtype="bfloat16",
+        lifecycle="on-demand",
+        context_length=4096,
+        maximum_new_tokens=96,
+    )
+
+    profile = create_local_autoregressive_profile(request, cache_root=tmp_path, port=8630)
+
+    assert profile.id == "local-local-example"
+    assert profile.preferred_runtime == "transformers-rocm"
+    assert profile.local_files_only is True
+    assert profile.trust_remote_code is False
+    assert profile.settings["cache_root"] == str(tmp_path)
+    assert profile.settings["context_length"] == 4096
+    assert profile.capabilities.top_k_trace is True
+
+
+def test_local_profile_request_rejects_unsafe_or_unbounded_fields() -> None:
+    with pytest.raises(ValidationError):
+        LocalAutoregressiveProfileRequest(
+            model_id="Example/LocalModel",
+            revision="revision-1",
+            alias="unsafe alias; echo",
+        )
+    with pytest.raises(ValidationError):
+        LocalAutoregressiveProfileRequest(
+            model_id="Example/LocalModel",
+            revision="revision-1",
+            alias="safe-alias",
+            context_length=100_000,
+        )

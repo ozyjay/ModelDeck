@@ -29,3 +29,15 @@ def test_records_compatibility_without_overwriting_negative_history(tmp_path) ->
     assert [record["result"] for record in records] == ["tested-working", "transient-failure"]
     assert updated["evidence"]["shutdown_result"] == "success"
     assert records[0]["evidence"]["memory_recovery_result"] == "not-measured-process-exit-confirmed"
+
+
+def test_compatibility_store_persists_and_removes_local_profiles(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
+    store.initialise()
+    profile = {"id": "local-example", "model_id": "example/model", "revision": "abc"}
+
+    store.save_model_profile(profile)
+
+    assert store.list_model_profiles() == [profile]
+    assert store.delete_model_profile("local-example") is True
+    assert store.list_model_profiles() == []

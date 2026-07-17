@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus } from "./types";
+import type { CompatibilityTest, GatewayStatus, Profile } from "./types";
 
 const capabilities = {
   chat: true,
@@ -49,6 +49,7 @@ const profile = {
   dtype: "float16",
   capabilities,
   settings: { cache_root: "/mnt/work/models/huggingface/hub" },
+  source: "built-in" as const,
 };
 
 const completeModel = {
@@ -112,6 +113,7 @@ let currentWorker = worker;
 let catalogueModels = [completeModel, partialModel];
 let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
+let localProfiles: Profile[] = [];
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -144,8 +146,32 @@ function mockFetch() {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     if (managementFailure && path === "/api/hardware") return json({ detail: "Probe unavailable" }, 503);
+    if (init?.method === "DELETE") {
+      const id = decodeURIComponent(path.split("/").at(-1) ?? "");
+      localProfiles = localProfiles.filter((candidate) => candidate.id !== id);
+      return json({ ok: true, profile_id: id, cache_removed: false });
+    }
     if (init?.method === "POST") {
       if (postFailure) return json({ detail: "Pinned runtime is unavailable" }, 409);
+      if (path === "/api/profiles") {
+        const payload = JSON.parse(String(init.body));
+        const created = {
+          ...profile,
+          ...payload,
+          id: `local-${payload.alias}`,
+          alias: payload.alias,
+          preferred_runtime: "transformers-rocm",
+          runtime: "transformers-rocm",
+          port: 8630,
+          settings: {
+            context_length: payload.context_length,
+            maximum_new_tokens: payload.maximum_new_tokens,
+          },
+          source: "local" as const,
+        };
+        localProfiles.push(created);
+        return json(created, 201);
+      }
       if (path.endsWith("/start")) currentWorker = { ...currentWorker, state: "ready" };
       if (path.endsWith("/stop")) currentWorker = { ...currentWorker, state: "stopped" };
       if (path.endsWith("/smoke")) {
@@ -169,7 +195,7 @@ function mockFetch() {
     if (path === "/api/hardware") return json(hardware);
     if (path === "/api/telemetry") return json(telemetry);
     if (path === "/api/workers") return json([currentWorker]);
-    if (path === "/api/profiles") return json([profile]);
+    if (path === "/api/profiles") return json([profile, ...localProfiles]);
     if (path === "/api/catalogue") return json({ models: catalogueModels, downloads_started: false });
     if (path === "/api/compatibility") return json({ tests: compatibilityTests });
     if (path.endsWith("/logs")) return json({ logs: [{ timestamp: "2026-07-14T10:00:00Z", source: "stderr", level: "warning", message: "prompt=[redacted]" }] });
@@ -185,6 +211,7 @@ describe("ModelDeck operator console", () => {
     catalogueModels = [completeModel, partialModel];
     compatibilityTests = [];
     managementFailure = false;
+    localProfiles = [];
     MockEventSource.instances = [];
     window.history.replaceState({}, "", "/");
     vi.stubGlobal("EventSource", MockEventSource);
@@ -279,9 +306,24 @@ describe("ModelDeck operator console", () => {
   it("classifies complete and partial cache entries without download controls", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
-    expect(screen.getByText("Installed Untested")).toBeInTheDocument();
+    expect(screen.getByText("Runtime Configured")).toBeInTheDocument();
     expect(screen.getByText("Partial")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
+  });
+
+  it("configures and removes a constrained cache-backed runtime", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add runtime configuration" }));
+    expect(screen.getByText("Model and cache paths are fixed from the recognised snapshot.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Gateway alias"), { target: { value: "my-local-qwen" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save runtime configuration" }));
+
+    expect(await screen.findByText("Runtime my-local-qwen is configured and ready to start from Workers.")).toBeInTheDocument();
+    expect(screen.getByText("my-local-qwen")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove configuration" }));
+    expect(await screen.findByText("Runtime my-local-qwen was removed. Its cached model files were kept.")).toBeInTheDocument();
+    expect(window.confirm).toHaveBeenCalledWith("Remove runtime configuration my-local-qwen? Cached model files will be kept.");
   });
 
   it("renders an explicit empty model-library state", async () => {

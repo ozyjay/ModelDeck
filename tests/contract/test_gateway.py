@@ -4,6 +4,7 @@ import httpx
 import modeldeck.gateway.app as gateway_module
 import pytest
 from fastapi.responses import JSONResponse
+from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
@@ -14,7 +15,11 @@ from modeldeck.gateway.app import (
     upstream_headers,
     upstream_model,
 )
-from modeldeck.profiles import default_model_profiles
+from modeldeck.profiles import (
+    LocalAutoregressiveProfileRequest,
+    create_local_autoregressive_profile,
+    default_model_profiles,
+)
 
 
 @pytest.mark.asyncio
@@ -85,6 +90,34 @@ async def test_default_scenechat_alias_advertises_multimodal_provider(monkeypatc
     assert models["scenechat-vision"]["effective_provider"] == "scenechat-gemma4-e2b-rocm"
     assert capabilities["image_input"] is True
     assert capabilities["structured_output"] is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_discovers_persisted_local_aliases_without_restart(monkeypatch, tmp_path) -> None:
+    async def unavailable_provider(_client, _profile):
+        return None, False
+
+    monkeypatch.setattr(gateway_module, "provider_health", unavailable_provider)
+    settings = Settings(data_dir=tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    app = create_gateway_app(settings=settings)
+    profile = create_local_autoregressive_profile(
+        LocalAutoregressiveProfileRequest(
+            model_id="Example/LocalModel", revision="revision-1", alias="local-example"
+        ),
+        cache_root=tmp_path / "cache",
+        port=8630,
+    )
+    store.save_model_profile(profile.model_dump(mode="json"))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        models = await client.get("/v1/models")
+        capabilities = await client.get("/v1/capabilities")
+
+    aliases = {model["id"] for model in models.json()["data"]}
+    assert "local-example" in aliases
+    assert capabilities.json()["local-example"]["completions"] is True
 
 
 def test_scenechat_gateway_translation_uses_exact_model_and_internal_credential(monkeypatch) -> None:

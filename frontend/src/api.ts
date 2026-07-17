@@ -3,9 +3,21 @@ export async function getJson<T>(path: string): Promise<T> {
   return readResponse<T>(response);
 }
 
-export async function postJson<T>(path: string): Promise<T> {
+export async function postJson<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
+    headers: {
+      Accept: "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return readResponse<T>(response);
+}
+
+export async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    method: "DELETE",
     headers: { Accept: "application/json" },
   });
   return readResponse<T>(response);

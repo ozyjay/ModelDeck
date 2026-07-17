@@ -38,6 +38,19 @@ def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> No
         build_worker_launch(profile)
 
 
+@pytest.mark.asyncio
+async def test_supervisor_registers_and_removes_only_stopped_profiles() -> None:
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([])
+    supervisor.register_profile(base)
+
+    assert supervisor.get_worker(base.id)["state"] == "stopped"
+    await supervisor.remove_profile(base.id)
+
+    with pytest.raises(KeyError, match="Unknown worker"):
+        supervisor.get_worker(base.id)
+
+
 def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     runtime_python = tmp_path / "bin/python"

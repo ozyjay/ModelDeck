@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.config import Settings
+from modeldeck.profile_registry import load_local_profiles
 from modeldeck.profiles import ModelProfile, default_model_profiles
 
 
@@ -20,7 +21,7 @@ def create_gateway_app(
     configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
     defaults = {profile.id: profile for profile in default_model_profiles()}
-    routes = alias_routes or {
+    base_routes = alias_routes or {
         "fast-chat": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "token-explainer": [defaults["qwen-small-rocm"], defaults["mock-ar"]],
         "qwen-0-5b": [defaults["qwen-small-rocm"]],
@@ -33,11 +34,19 @@ def create_gateway_app(
         ],
         "text-diffusion-bf16": [defaults["diffusiongemma-rocm"]],
     }
-    profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
     job_routes: dict[str, ModelProfile] = {}
+
+    def active_routes() -> dict[str, list[ModelProfile]]:
+        routes = {alias: list(candidates) for alias, candidates in base_routes.items()}
+        if alias_routes is None:
+            for profile in load_local_profiles(configured.data_dir):
+                if profile.alias not in routes:
+                    routes[profile.alias] = [profile]
+        return routes
 
     async def providers() -> list[dict[str, Any]]:
         result = []
+        profiles = {profile.id: profile for candidates in active_routes().values() for profile in candidates}
         async with httpx.AsyncClient(timeout=0.3) as client:
             for profile in profiles.values():
                 health, ready = await provider_health(client, profile)
@@ -64,6 +73,7 @@ def create_gateway_app(
 
     @app.get("/v1/models")
     async def models():
+        routes = active_routes()
         states = {state["id"]: state for state in await providers()}
         return {
             "object": "list",
@@ -83,6 +93,7 @@ def create_gateway_app(
 
     @app.get("/v1/capabilities")
     async def capabilities():
+        routes = active_routes()
         return {alias: candidates[0].capabilities.model_dump() for alias, candidates in routes.items()}
 
     @app.get("/v1/providers")
@@ -93,7 +104,7 @@ def create_gateway_app(
     async def chat(request: Request):
         return await proxy_request(
             request,
-            routes,
+            active_routes(),
             "/v1/chat/completions",
             "fast-chat",
             timeout_seconds=configured.scenechat_timeout_seconds,
@@ -101,17 +112,19 @@ def create_gateway_app(
 
     @app.post("/v1/completions")
     async def completions(request: Request):
-        return await proxy_request(request, routes, "/v1/completions", "fast-chat")
+        return await proxy_request(request, active_routes(), "/v1/completions", "fast-chat")
 
     @app.post("/native/autoregressive/trace")
     async def trace(request: Request):
-        return await proxy_request(request, routes, "/native/autoregressive/trace", "token-explainer")
+        return await proxy_request(
+            request, active_routes(), "/native/autoregressive/trace", "token-explainer"
+        )
 
     @app.post("/v1/refine")
     async def refine(request: Request):
         return await proxy_request(
             request,
-            routes,
+            active_routes(),
             "/v1/refine",
             "text-diffusion",
             timeout_seconds=configured.diffusion_timeout_seconds,
@@ -119,31 +132,33 @@ def create_gateway_app(
 
     @app.post("/v1/diffuse")
     async def diffuse(request: Request):
+        routes = active_routes()
         response = await proxy_request(request, routes, "/v1/diffuse", "text-diffusion")
         if isinstance(response, JSONResponse) and response.status_code < 300:
             payload = json_loads(response.body)
             provider_id = response.headers.get("x-modeldeck-provider")
+            profiles = {profile.id: profile for candidates in routes.values() for profile in candidates}
             if payload.get("job_id") and provider_id in profiles:
                 job_routes[str(payload["job_id"])] = profiles[provider_id]
         return response
 
     @app.get("/v1/jobs/{job_id}")
     async def diffusion_job(job_id: str):
-        provider = await resolve_job_provider(job_id, job_routes, routes)
+        provider = await resolve_job_provider(job_id, job_routes, active_routes())
         if provider is None:
             raise HTTPException(404, "Unknown diffusion job")
         return await proxy_job_request(provider, f"/v1/jobs/{job_id}")
 
     @app.get("/v1/jobs/{job_id}/events")
     async def diffusion_job_events(job_id: str):
-        provider = await resolve_job_provider(job_id, job_routes, routes)
+        provider = await resolve_job_provider(job_id, job_routes, active_routes())
         if provider is None:
             raise HTTPException(404, "Unknown diffusion job")
         return await proxy_job_events(provider, f"/v1/jobs/{job_id}/events")
 
     @app.post("/v1/jobs/{job_id}/cancel")
     async def cancel_diffusion_job(job_id: str):
-        provider = await resolve_job_provider(job_id, job_routes, routes)
+        provider = await resolve_job_provider(job_id, job_routes, active_routes())
         if provider is None:
             raise HTTPException(404, "Unknown diffusion job")
         return await proxy_job_request(provider, f"/v1/jobs/{job_id}/cancel", method="POST")
@@ -151,6 +166,7 @@ def create_gateway_app(
     @app.post("/v1/requests/{request_id}/cancel")
     async def cancel(request_id: str):
         cancelled = []
+        profiles = {profile.id: profile for candidates in active_routes().values() for profile in candidates}
         async with httpx.AsyncClient(timeout=1.0) as client:
             for profile in profiles.values():
                 health_payload, ready = await provider_health(client, profile)
@@ -170,7 +186,7 @@ def create_gateway_app(
     async def vision(request: Request):
         return await proxy_request(
             request,
-            routes,
+            active_routes(),
             "/v1/chat/completions",
             "scenechat-vision",
             timeout_seconds=configured.scenechat_timeout_seconds,

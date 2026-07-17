@@ -22,6 +22,14 @@ loading, disabled remote code, and the fixed `/mnt/work/models/huggingface/hub` 
 Only the 0.5B profile currently has physical compatibility evidence; registering the
 larger cached workers does not claim that they have passed the target GPU acceptance run.
 
+The operator may create additional autoregressive profiles from exact, complete snapshots
+recognised by the local Hugging Face cache scanner. The browser supplies only a safe alias,
+FP16/BF16 selection, lifecycle, context length, and output ceiling. ModelDeck fixes the
+Transformers ROCm runtime, offline and remote-code policy, capability set, cache root, and
+the first free port from 8630 through 8699. These profiles use `local-<alias>` identifiers,
+are stored in `model_profiles`, and remain observationally untested until their worker is
+started and smoke tested. Removing one removes only the runtime configuration.
+
 The vision-language compatibility profile is `scenechat-gemma4-e2b-rocm`:
 
 - exact model `google/gemma-4-E2B-it` at revision

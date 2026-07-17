@@ -81,6 +81,25 @@ class WorkerSupervisor:
         self._refresh_exits()
         return self._require(worker_id).snapshot()
 
+    def register_profile(self, profile: ModelProfile) -> None:
+        if profile.id in self.workers:
+            raise ValueError(f"Worker profile already exists: {profile.id}")
+        if any(worker.profile.port == profile.port for worker in self.workers.values()):
+            raise ValueError(f"Worker port is already assigned: {profile.port}")
+        self.workers[profile.id] = ManagedWorker(profile=profile)
+
+    async def remove_profile(self, worker_id: str) -> None:
+        worker = self._require(worker_id)
+        async with self._worker_locks[worker_id]:
+            self._refresh_exits()
+            if worker.process and worker.process.returncode is None:
+                raise RuntimeError("Stop the worker before removing its runtime configuration")
+            if worker.state not in {WorkerState.STOPPED, WorkerState.FAILED}:
+                raise RuntimeError("Wait for the worker lifecycle transition to finish")
+            del self.workers[worker_id]
+            self._worker_locks.pop(worker_id, None)
+            self._logs.pop(worker_id, None)
+
     def logs(self, worker_id: str) -> list[dict[str, Any]]:
         worker = self._require(worker_id)
         records = list(self._logs[worker_id])

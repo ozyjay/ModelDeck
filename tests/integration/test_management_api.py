@@ -48,6 +48,108 @@ async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_cached_autoregressive_runtime_configuration_is_persistent_and_removable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    model_dir = tmp_path / "cache" / "models--Example--LocalModel"
+    model_dir.mkdir(parents=True)
+    cached = {
+        "model_id": "Example/LocalModel",
+        "revision": "revision-1",
+        "cache_location": str(model_dir),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "autoregressive",
+        "runnable": False,
+        "runnable_reason": "Compatibility has not been tested for the current stack.",
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    settings = Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs")
+
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "local-example",
+                    "dtype": "bfloat16",
+                    "lifecycle": "on-demand",
+                    "context_length": 4096,
+                    "maximum_new_tokens": 96,
+                },
+            )
+            workers = await client.get("/api/workers")
+
+    assert created.status_code == 201
+    assert created.json()["source"] == "local"
+    assert created.json()["settings"]["cache_root"] == str(model_dir.parent)
+    assert created.json()["trust_remote_code"] is False
+    assert any(worker["id"] == "local-local-example" for worker in workers.json())
+
+    restored = create_app(settings)
+    async with restored.router.lifespan_context(restored):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restored), base_url="http://test"
+        ) as client:
+            profiles = await client.get("/api/profiles")
+            removed = await client.delete("/api/profiles/local-local-example")
+
+    assert any(profile["source"] == "local" for profile in profiles.json())
+    assert removed.json() == {
+        "ok": True,
+        "profile_id": "local-local-example",
+        "cache_removed": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_configuration_rejects_unrecognised_and_reserved_inputs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cached = {
+        "model_id": "Example/LocalModel",
+        "revision": "revision-1",
+        "cache_location": str(tmp_path / "cache" / "models--Example--LocalModel"),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "autoregressive",
+        "runnable": False,
+        "runnable_reason": "Untested",
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            reserved = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "fast-chat",
+                },
+            )
+            arbitrary = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "safe-alias",
+                    "cache_root": "/tmp/not-allowed",
+                },
+            )
+
+    assert reserved.status_code == 409
+    assert arbitrary.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_gateway_status_is_same_origin_and_structured(monkeypatch, tmp_path: Path) -> None:
     original_client = httpx.AsyncClient
 

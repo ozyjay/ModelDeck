@@ -23,9 +23,9 @@
 * { box-sizing: border-box; }
 html { min-width: 320px; min-height: 100%; background: var(--bg); }
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 75% -10%, #173047 0, transparent 28rem), var(--bg); }
-button, select { font: inherit; }
-button, a, select, summary { outline: none; }
-button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible { box-shadow: 0 0 0 3px #68e0b866; }
+button, input, select { font: inherit; }
+button, a, input, select, summary { outline: none; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { box-shadow: 0 0 0 3px #68e0b866; }
 button { border: 1px solid transparent; border-radius: 0.65rem; padding: 0.68rem 0.9rem; background: var(--accent); color: #061610; font-weight: 750; cursor: pointer; transition: background 140ms ease, transform 140ms ease; }
 button:hover:not(:disabled) { background: #87eccb; transform: translateY(-1px); }
 button:disabled { cursor: not-allowed; opacity: 0.42; }
@@ -118,6 +118,7 @@ nav { display: grid; gap: 0.3rem; }
 .state-badge.state-failed, .state-badge.state-incompatible, .state-badge.state-partial, .state-badge.state-transient-failure { color: #ffc1c7; border-color: #633944; background: #2c171d; }
 .state-badge.state-loading, .state-badge.state-warming, .state-badge.state-starting, .state-badge.state-validating { color: #c8dcff; border-color: #365682; background: #14243b; }
 .state-badge.state-installed-untested { color: #ffe0ac; border-color: #6a5431; background: #2d2415; }
+.state-badge.state-recognised, .state-badge.state-runtime-configured { color: #ffe0ac; border-color: #6a5431; background: #2d2415; }
 .inline-error { padding: 0.65rem; border: 1px solid #5f3440; border-radius: 0.55rem; background: #28151b; color: #ffc2c8; font-size: 0.78rem; overflow-wrap: anywhere; }
 details { border-top: 1px solid var(--line-soft); margin-top: 0.65rem; padding-top: 0.65rem; }
 summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
@@ -136,6 +137,23 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .model-main { display: flex; justify-content: space-between; gap: 1rem; }
 .model-main h3 { margin: 0; overflow-wrap: anywhere; }
 .model-main p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
+.model-stage { margin: 0.65rem 0; color: #c5d0df; font-size: 0.82rem; line-height: 1.45; }
+.model-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
+.model-actions span { color: var(--muted); font-size: 0.77rem; }
+.configured-runtime-list { display: grid; gap: 0.5rem; margin-top: 0.8rem; }
+.configured-runtime-list > div { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; background: #121c29; }
+.configured-runtime-list strong, .configured-runtime-list small { display: block; }
+.configured-runtime-list small { margin-top: 0.15rem; color: var(--muted); }
+.runtime-form { margin-top: 1rem; padding: 0.9rem; border: 1px solid #315744; border-radius: 0.7rem; background: #101f1a; }
+.runtime-form-heading strong, .runtime-form-heading small { display: block; }
+.runtime-form-heading small { margin-top: 0.2rem; color: var(--muted); }
+.runtime-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-top: 0.9rem; }
+.runtime-fields label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; }
+.runtime-fields input, .runtime-fields select { width: 100%; min-width: 0; padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: 0.55rem; background: #0d1520; color: var(--text); }
+.runtime-form-actions { display: flex; gap: 0.55rem; margin-top: 0.8rem; }
+.configuration-feedback { padding: 0.8rem 0.9rem; border: 1px solid var(--line); border-radius: 0.7rem; }
+.configuration-feedback.good { color: #b7f7df; border-color: #285844; background: #10231c; }
+.configuration-feedback.bad { color: #ffc1c7; border-color: #653944; background: #2b171d; }
 .evidence-row { margin: 0; }
 .evidence-row summary { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0; list-style-position: inside; }
 .evidence-row summary > span { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem 0.7rem; }
