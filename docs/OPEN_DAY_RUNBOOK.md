@@ -16,8 +16,9 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
 
 For a booth session, `pwsh -NoProfile -File scripts/run_booth.ps1` combines steps 3 and 4
 and opens the operator console in a dedicated fullscreen browser profile. Use `-Windowed`
-for rehearsal. Closing that browser stops ModelDeck; it does not stop a separately
-launched downstream demo such as SceneChat.
+for rehearsal. The command returns after launching the booth. Closing that browser stops
+ModelDeck through a background watcher; `scripts/stop.ps1` can be used instead. Neither
+option stops a separately launched downstream demo such as SceneChat.
 
 ### SceneChat Gemma 4 preflight
 

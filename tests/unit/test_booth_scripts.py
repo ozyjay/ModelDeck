@@ -4,6 +4,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HELPERS = PROJECT_ROOT / "scripts" / "booth_helpers.psm1"
+RUN_BOOTH = PROJECT_ROOT / "scripts" / "run_booth.ps1"
+WATCH_BOOTH = PROJECT_ROOT / "scripts" / "watch_booth.ps1"
 
 
 def _run_pwsh(command: str) -> subprocess.CompletedProcess[str]:
@@ -50,3 +52,14 @@ def test_booth_browser_lookup_has_clear_missing_browser_error() -> None:
 
     assert result.returncode != 0
     assert "Configured booth browser was not found" in result.stderr
+
+
+def test_booth_launcher_hands_shutdown_to_background_watcher() -> None:
+    launcher = RUN_BOOTH.read_text(encoding="utf-8")
+    watcher = WATCH_BOOTH.read_text(encoding="utf-8")
+
+    assert "Start-Process" in launcher
+    assert "watch_booth.ps1" in launcher
+    assert "$BoothHandedOff = $true" in launcher
+    assert "$BrowserProcess.WaitForExit()" in watcher
+    assert "'stop.ps1'" in watcher

@@ -78,9 +78,11 @@ pwsh -NoProfile -File scripts/run_booth.ps1 -Windowed
 
 Booth mode stops an earlier ModelDeck session, starts the services with Open Day policy,
 waits for both management and gateway health, and opens the operator console in an
-isolated `.booth-browser-profile`. Closing the booth browser stops the ModelDeck workers
-and services. Set `BOOTH_BROWSER` to a Chromium, Chrome, or Edge executable name or path
-if automatic discovery does not find the intended browser.
+isolated `.booth-browser-profile`. The launch command then returns to the prompt. Closing
+the booth browser stops the ModelDeck workers and services through a background watcher;
+you can instead stop them explicitly with `pwsh -NoProfile -File scripts/stop.ps1`. Set
+`BOOTH_BROWSER` to a Chromium, Chrome, or Edge executable name or path if automatic
+discovery does not find the intended browser.
 
 ## Core ROCm model workers
 

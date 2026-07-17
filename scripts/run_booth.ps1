@@ -18,6 +18,7 @@ $ProfileDirectory = Join-Path (Get-Location) '.booth-browser-profile'
 $BrowserPath = Resolve-BoothBrowser -Browser $Browser
 $BrowserProcess = $null
 $ShouldStopServices = $false
+$BoothHandedOff = $false
 
 function Wait-ModelDeckBoothReady {
     $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -60,18 +61,32 @@ try {
         -Windowed:$Windowed
     Write-Host 'ModelDeck is ready. Opening the dedicated booth browser.'
     $BrowserProcess = Start-Process -FilePath $BrowserPath -ArgumentList $BrowserArguments -PassThru
-    $BrowserProcess.WaitForExit()
-    exit $BrowserProcess.ExitCode
+    $PowerShellPath = (Get-Process -Id $PID).Path
+    $WatcherArguments = @(
+        '-NoProfile',
+        '-File',
+        (Join-Path $PSScriptRoot 'watch_booth.ps1'),
+        '-BrowserProcessId',
+        $BrowserProcess.Id
+    )
+    Start-Process `
+        -FilePath $PowerShellPath `
+        -ArgumentList $WatcherArguments `
+        -RedirectStandardOutput 'var/log/booth-watcher.log' `
+        -RedirectStandardError 'var/log/booth-watcher-error.log' | Out-Null
+    $BoothHandedOff = $true
+    Write-Host 'Booth mode is running in the background. Close the booth or run scripts/stop.ps1 to stop ModelDeck.'
+    exit 0
 }
 catch {
     Write-Error "Could not start booth mode: $($_.Exception.Message)"
     exit 1
 }
 finally {
-    if ($BrowserProcess -and -not $BrowserProcess.HasExited) {
+    if (-not $BoothHandedOff -and $BrowserProcess -and -not $BrowserProcess.HasExited) {
         Stop-Process -Id $BrowserProcess.Id -ErrorAction SilentlyContinue
     }
-    if ($ShouldStopServices) {
+    if ($ShouldStopServices -and -not $BoothHandedOff) {
         & (Join-Path $PSScriptRoot 'stop.ps1')
     }
 }
