@@ -126,3 +126,31 @@ def test_q4_release_checksum_verification_rejects_tampering(tmp_path: Path) -> N
 
     with pytest.raises(Q4ReleaseError, match="size does not match|checksum does not match"):
         verify_modeldeck_q4_release(snapshot)
+
+
+def test_q4_release_accepts_hugging_face_repository_blob_links(tmp_path: Path) -> None:
+    repository = tmp_path / "models--ozyjay--q4"
+    snapshot = repository / "snapshots" / "commit"
+    make_q4_release(snapshot)
+    shard = snapshot / "experts-layer-00.safetensors"
+    blob = repository / "blobs" / "expert-00"
+    blob.parent.mkdir()
+    shard.replace(blob)
+    shard.symlink_to(Path("../../blobs") / blob.name)
+
+    verification = verify_modeldeck_q4_release(snapshot)
+
+    assert verification["files_verified"] == 35
+
+
+def test_q4_release_rejects_blob_link_outside_hugging_face_repository(tmp_path: Path) -> None:
+    repository = tmp_path / "models--ozyjay--q4"
+    snapshot = repository / "snapshots" / "commit"
+    make_q4_release(snapshot)
+    shard = snapshot / "experts-layer-00.safetensors"
+    outside = tmp_path / "outside.safetensors"
+    shard.replace(outside)
+    shard.symlink_to(outside)
+
+    with pytest.raises(Q4ReleaseError, match="Unsafe release file path"):
+        verify_modeldeck_q4_release(snapshot)

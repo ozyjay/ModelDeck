@@ -38,12 +38,16 @@ def _safe_path(root: Path, value: Any) -> Path:
     relative = PurePosixPath(value)
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise Q4ReleaseError(f"Unsafe release file path: {value!r}")
-    candidate = (root / Path(*relative.parts)).resolve()
+    candidate = root / Path(*relative.parts)
+    repository_root = root
+    if root.parent.name == "snapshots" and root.parent.parent.name.startswith("models--"):
+        repository_root = root.parent.parent
+    resolved = candidate.resolve()
     try:
-        candidate.relative_to(root.resolve())
+        resolved.relative_to(repository_root.resolve())
     except ValueError as error:
         raise Q4ReleaseError(f"Unsafe release file path: {value!r}") from error
-    return candidate
+    return resolved
 
 
 def inspect_modeldeck_q4_release(snapshot: Path) -> dict[str, str] | None:
