@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { GatewayStatus } from "./types";
+import type { CompatibilityTest, GatewayStatus } from "./types";
 
 const capabilities = {
   chat: true,
@@ -110,6 +110,7 @@ let gateway: GatewayStatus = defaultGateway;
 let postFailure = false;
 let currentWorker = worker;
 let catalogueModels = [completeModel, partialModel];
+let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 
 class MockEventSource {
@@ -147,6 +148,20 @@ function mockFetch() {
       if (postFailure) return json({ detail: "Pinned runtime is unavailable" }, 409);
       if (path.endsWith("/start")) currentWorker = { ...currentWorker, state: "ready" };
       if (path.endsWith("/stop")) currentWorker = { ...currentWorker, state: "stopped" };
+      if (path.endsWith("/smoke")) {
+        compatibilityTests = [{
+          id: 1,
+          fingerprint: "a".repeat(64),
+          result: "tested-working",
+          failure_class: null,
+          evidence: {
+            model_id: worker.model_id,
+            model_revision: profile.revision,
+            runtime: worker.runtime,
+          },
+          tested_at: "2026-07-17T10:00:00Z",
+        }];
+      }
       return json(currentWorker);
     }
     if (path === "/api/health") return json({ status: "ok", service: "modeldeck-management", open_day: false, downloads_allowed: false, gateway_url: "http://127.0.0.1:8600" });
@@ -156,7 +171,7 @@ function mockFetch() {
     if (path === "/api/workers") return json([currentWorker]);
     if (path === "/api/profiles") return json([profile]);
     if (path === "/api/catalogue") return json({ models: catalogueModels, downloads_started: false });
-    if (path === "/api/compatibility") return json({ tests: [] });
+    if (path === "/api/compatibility") return json({ tests: compatibilityTests });
     if (path.endsWith("/logs")) return json({ logs: [{ timestamp: "2026-07-14T10:00:00Z", source: "stderr", level: "warning", message: "prompt=[redacted]" }] });
     return json({ detail: `Unexpected request: ${path}` }, 404);
   });
@@ -168,6 +183,7 @@ describe("ModelDeck operator console", () => {
     currentWorker = worker;
     postFailure = false;
     catalogueModels = [completeModel, partialModel];
+    compatibilityTests = [];
     managementFailure = false;
     MockEventSource.instances = [];
     window.history.replaceState({}, "", "/");
@@ -243,6 +259,21 @@ describe("ModelDeck operator console", () => {
     fireEvent.click(within(actions).getByRole("button", { name: "Stop" }));
     expect(window.confirm).toHaveBeenCalledWith(`Stop ${worker.id} and release its runtime memory?`);
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it("updates compatibility after smoke without presenting cache acquisition as test state", async () => {
+    currentWorker = { ...worker, state: "ready" };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    const card = screen.getByText("Qwen2.5-0.5B-Instruct").closest("article")!;
+    expect(within(card).getByText("Installed, compatibility untested")).toBeInTheDocument();
+    expect(within(card).getByText("Cache snapshot").nextElementSibling).toHaveTextContent("Installed");
+
+    fireEvent.click(within(card).getByRole("button", { name: "Smoke test" }));
+
+    expect(await within(card).findByText("Tested working for recorded fingerprint")).toBeInTheDocument();
+    expect(within(card).getByText("Cache snapshot").nextElementSibling).toHaveTextContent("Installed");
+    expect(within(card).queryByText("Installed Untested")).not.toBeInTheDocument();
   });
 
   it("classifies complete and partial cache entries without download controls", async () => {

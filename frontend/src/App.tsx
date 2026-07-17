@@ -449,7 +449,7 @@ function WorkerCard({ worker, profile, model, tests, pending, operate }: {
       <div className="compatibility-line"><StatusDot state={compatibility.tone} /><span>{compatibility.label}</span></div>
       {worker.last_error && <p className="inline-error" role="alert">{worker.last_error}</p>}
       <DefinitionList rows={[
-        ["Alias", worker.alias], ["Revision", profile?.revision.slice(0, 12) ?? "Unknown"], ["Lifecycle", worker.lifecycle], ["Endpoint", `127.0.0.1:${worker.port}`], ["Dtype", profile?.dtype ?? "Unknown"], ["Cache", model?.download_state ?? "Not discovered"],
+        ["Alias", worker.alias], ["Revision", profile?.revision.slice(0, 12) ?? "Unknown"], ["Lifecycle", worker.lifecycle], ["Endpoint", `127.0.0.1:${worker.port}`], ["Dtype", profile?.dtype ?? "Unknown"], ["Cache snapshot", cacheSnapshotLabel(model)],
       ]} compact />
       <details><summary>Capabilities and manifest</summary><div className="tag-list">{capabilityLabels(worker.capabilities).map((label) => <span className="tag" key={label}>{label}</span>)}</div><p className="manifest-note">Local files only · remote code disabled · fixed argument-array launch</p></details>
       <div className="button-row" aria-label={`Actions for ${worker.id}`}>
@@ -576,6 +576,7 @@ function capabilityLabels(capabilities: Worker["capabilities"]): string[] {
 }
 
 function shortModelName(modelId: string): string { return modelId.split("/").at(-1) ?? modelId; }
+function cacheSnapshotLabel(model: ModelEntry | undefined): string { return model ? model.download_state === "partial" ? "Partial" : "Installed" : "Not discovered"; }
 function messageFrom(reason: unknown): string { return reason instanceof Error ? reason.message : "Unexpected local error."; }
 function humanise(value: string): string { return value.replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function formatBytes(bytes: number): string { if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** power).toFixed(power > 2 ? 1 : 0)} ${units[power]}`; }
