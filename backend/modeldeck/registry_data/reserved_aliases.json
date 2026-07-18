@@ -17,6 +17,22 @@
       "required_capabilities": ["image_input", "structured_output"]
     },
     {"id": "text-diffusion", "display_name": "Text diffusion", "providers": ["diffusiongemma-q4-rocm", "mock-diffusion"]},
-    {"id": "text-diffusion-bf16", "display_name": "Text diffusion BF16", "providers": ["diffusiongemma-rocm"]}
+    {"id": "text-diffusion-bf16", "display_name": "Text diffusion BF16", "providers": ["diffusiongemma-rocm"]},
+    {
+      "id": "repartee-strong",
+      "display_name": "Repartee strong model",
+      "providers": [],
+      "selection": "explicit",
+      "required_generation_family": "autoregressive",
+      "required_capabilities": ["chat", "streaming", "cancellation"]
+    },
+    {
+      "id": "repartee-speech",
+      "display_name": "Repartee speech model",
+      "providers": [],
+      "selection": "explicit",
+      "required_generation_family": "speech-conversation",
+      "required_capabilities": ["audio_input", "audio_output", "full_duplex"]
+    }
   ]
 }

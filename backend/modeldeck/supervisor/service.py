@@ -418,6 +418,49 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("generation_timeout_seconds", 60)),
         ]
         return WorkerLaunch(command=command, environment=environment)
+    if profile.preferred_runtime == "llama-vulkan":
+        artifact_path = profile.settings.get("artifact_path")
+        if not artifact_path:
+            raise ValueError("GPT-OSS Vulkan worker requires an allowlisted GGUF artefact")
+        command = [
+            sys.executable,
+            "-m",
+            "modeldeck.workers.llama_vulkan_worker",
+            *common,
+            "--artifact-path",
+            str(artifact_path),
+            "--context-length",
+            str(profile.settings.get("context_length", 8192)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 256)),
+            "--execution-preset",
+            str(profile.settings.get("execution_preset", "vulkan-full")),
+        ]
+        return WorkerLaunch(command=command, environment=environment)
+    if profile.preferred_runtime == "moshiko-rocm":
+        python = Path(
+            os.environ.get("MODELDECK_MOSHIKO_PYTHON", ".venv-moshi-rocm72/bin/python")
+        ).expanduser()
+        if not python.is_file():
+            raise ValueError(
+                "Moshiko ROCm runtime is missing; run "
+                "pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1"
+            )
+        cache_root = profile.settings.get("cache_root")
+        if not cache_root:
+            raise ValueError("Moshiko worker requires an allowlisted Hugging Face cache root")
+        environment["HF_HUB_CACHE"] = str(cache_root)
+        command = [
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.moshiko_worker",
+            *common,
+            "--alias",
+            profile.alias,
+            "--cache-root",
+            str(cache_root),
+        ]
+        return WorkerLaunch(command=command, environment=environment)
     if profile.preferred_runtime in {
         "text-diffusion-transformers-rocm",
         "text-diffusion-gptq-rocm",

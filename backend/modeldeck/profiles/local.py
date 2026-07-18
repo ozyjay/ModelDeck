@@ -19,11 +19,13 @@ class LocalProfileRequest(BaseModel):
     model_id: str = Field(min_length=3, max_length=256)
     revision: str = Field(min_length=1, max_length=128)
     alias: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    profile_name: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     dtype: Literal["float16", "bfloat16"] = "float16"
     lifecycle: Literal["resident", "on-demand", "exclusive"] = "on-demand"
     context_length: int = Field(default=2048, ge=256, le=32768)
     maximum_new_tokens: int = Field(default=128, ge=1, le=512)
     maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
+    artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
 def create_local_autoregressive_profile(
@@ -49,6 +51,7 @@ def create_local_profile(
     checkpoint_dir: Path | None = None,
     base_model_id: str | None = None,
     base_model_revision: str | None = None,
+    artifact_path: Path | None = None,
 ) -> ModelProfile:
     template = runtime_templates().get(configuration_support)
     if template is None:
@@ -58,18 +61,24 @@ def create_local_profile(
     ):
         raise ValueError("ModelDeck Q4 release identity is incomplete")
     settings = dict(template.settings)
-    settings["maximum_new_tokens"] = request.maximum_new_tokens
+    if template.generation_family.value != "speech-conversation":
+        settings["maximum_new_tokens"] = request.maximum_new_tokens
     if template.generation_family.value == "autoregressive":
         settings["context_length"] = request.context_length
     elif template.generation_family.value == "vision-language":
         settings["context_length"] = request.context_length
-    else:
+    elif template.generation_family.value == "text-diffusion":
         settings["maximum_denoising_steps"] = request.maximum_denoising_steps
-    settings[template.cache_setting] = str(checkpoint_dir or cache_root)
+    if template.cache_setting == "artifact_path" and artifact_path is None:
+        raise ValueError("This runtime requires a discovered allowlisted artefact")
+    selected_path = (
+        artifact_path if template.cache_setting == "artifact_path" else checkpoint_dir or cache_root
+    )
+    settings[template.cache_setting] = str(selected_path)
     if template.include_cache_root:
         settings["cache_root"] = str(cache_root)
     return ModelProfile(
-        id=f"local-{request.alias}",
+        id=f"local-{request.profile_name or request.alias}",
         model_id=base_model_id if template.uses_base_model_identity else request.model_id,
         revision=base_model_revision if template.uses_base_model_identity else request.revision,
         artifact_model_id=request.model_id if template.uses_base_model_identity else None,

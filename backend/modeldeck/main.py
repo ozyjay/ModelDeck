@@ -385,6 +385,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if configuration_support == "diffusiongemma-modeldeck-q4"
             else None
         )
+        artifact_path = None
+        if configuration_support == "gpt-oss-llama-vulkan":
+            artifact = next(
+                (
+                    candidate
+                    for candidate in cached.get("artifacts", [])
+                    if candidate["artifact_id"] == payload.artifact_id
+                ),
+                None,
+            )
+            if artifact is None:
+                raise HTTPException(409, "Select a discovered GPT-OSS MXFP4 artefact")
+            artifact_path = Path(cached["snapshot_location"]) / artifact["filenames"][0]
         if checkpoint_dir is not None:
             try:
                 await _run_blocking(verify_modeldeck_q4_release, checkpoint_dir)
@@ -392,8 +405,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(409, f"ModelDeck Q4 release verification failed: {error}") from error
 
         profiles = request.app.state.profiles
-        profile_id = f"local-{payload.alias}"
-        if payload.alias in RESERVED_GATEWAY_ALIASES or any(
+        profile_id = f"local-{payload.profile_name or payload.alias}"
+        reserved_contract = selectable_aliases().get(payload.alias)
+        dynamic_reserved_alias = reserved_contract is not None and not reserved_contract.providers
+        if (payload.alias in RESERVED_GATEWAY_ALIASES and not dynamic_reserved_alias) or any(
             profile.alias == payload.alias for profile in profiles
         ):
             raise HTTPException(409, "That gateway alias is already reserved or configured")
@@ -413,7 +428,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             checkpoint_dir=checkpoint_dir,
             base_model_id=cached.get("base_model_id"),
             base_model_revision=cached.get("base_model_revision"),
+            artifact_path=artifact_path,
         )
+        if reserved_contract is not None and not provider_compatible(reserved_contract, profile):
+            raise HTTPException(409, "The runtime does not satisfy that reserved gateway alias contract")
         store = request.app.state.compatibility_store
         store.save_model_profile(profile.model_dump(mode="json"))
         try:

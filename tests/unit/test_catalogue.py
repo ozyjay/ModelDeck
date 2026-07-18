@@ -50,9 +50,23 @@ def test_model_payload_without_transformers_config_is_complete_but_unsupported(
 
     assert model["download_state"] == "installed-untested"
     assert model["configuration_support"] is None
-    assert model["configuration_support_reason"] == (
-        "The snapshot has no readable Transformers configuration."
-    )
+    assert "Moshiko snapshot is incomplete" in model["configuration_support_reason"]
+
+
+def test_recognises_complete_moshiko_manifest(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--kyutai--moshiko-pytorch-bf16" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    for filename in (
+        "model.safetensors",
+        "tokenizer_spm_32k_3.model",
+        "tokenizer-e351c8d8-checkpoint125.safetensors",
+    ):
+        (snapshot / filename).write_bytes(b"local")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "speech-conversation"
+    assert model["configuration_support"] == "moshiko-speech"
 
 
 def test_transformers_config_without_model_payload_remains_partial(tmp_path: Path) -> None:
@@ -96,6 +110,50 @@ def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_pat
     assert model["generation_family_hint"] == "vision-language"
     assert model["configuration_support"] == "scenechat-gemma4"
     assert model["runnable"] is False
+
+
+def test_identifies_gemma4_unified_as_scenechat_compatible(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--google--gemma-4-12B-it" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Gemma4UnifiedForConditionalGeneration"],
+                "model_type": "gemma4_unified",
+                "text_config": {},
+                "vision_config": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "vision-language"
+    assert model["configuration_support"] == "scenechat-gemma4"
+
+
+def test_gpt_oss_source_points_to_companion_and_complete_gguf_is_configurable(tmp_path: Path) -> None:
+    source = tmp_path / "models--openai--gpt-oss-120b" / "snapshots" / "source"
+    source.mkdir(parents=True)
+    (source / "config.json").write_text(
+        json.dumps({"model_type": "gpt_oss", "quantization_config": {"quant_method": "mxfp4"}}),
+        encoding="utf-8",
+    )
+    (source / "model.safetensors").write_bytes(b"source")
+    companion = tmp_path / "models--ggml-org--gpt-oss-120b-GGUF" / "snapshots" / "pinned"
+    companion.mkdir(parents=True)
+    for shard in range(1, 4):
+        (companion / f"gpt-oss-120b-mxfp4-{shard:05d}-of-00003.gguf").write_bytes(b"gguf")
+
+    models = {model["model_id"]: model for model in discover_huggingface_models([tmp_path])}
+
+    assert models["openai/gpt-oss-120b"]["configuration_support"] is None
+    assert "companion snapshot" in models["openai/gpt-oss-120b"]["configuration_support_reason"]
+    runnable = models["ggml-org/gpt-oss-120b-GGUF"]
+    assert runnable["configuration_support"] == "gpt-oss-llama-vulkan"
+    assert runnable["artifacts"][0]["artifact_id"] == "gpt-oss-120b-mxfp4"
 
 
 def test_identifies_diffusiongemma_configuration_support(tmp_path: Path) -> None:

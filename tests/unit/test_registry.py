@@ -13,10 +13,53 @@ def test_packaged_registries_are_versioned_and_cross_referenced(tmp_path) -> Non
         "scenechat-gemma4",
         "diffusiongemma-transformers",
         "diffusiongemma-modeldeck-q4",
+        "gpt-oss-llama-vulkan",
+        "moshiko-speech",
     }
     assert aliases["scenechat-vision"].default_provider == "scenechat-gemma4-e2b-rocm"
     assert aliases["scenechat-vision"].accepts(profiles["scenechat-gemma4-e2b-rocm"])
     assert not aliases["scenechat-vision"].accepts(profiles["qwen-small-rocm"])
+    assert aliases["repartee-strong"].providers == []
+    assert aliases["repartee-speech"].required_generation_family == "speech-conversation"
+
+
+def test_repartee_profiles_are_created_from_allowlisted_templates(tmp_path) -> None:
+    gguf = tmp_path / "gpt-oss-120b-mxfp4-00001-of-00003.gguf"
+    gguf.write_bytes(b"gguf")
+    strong = create_local_profile(
+        LocalProfileRequest(
+            model_id="ggml-org/gpt-oss-120b-GGUF",
+            revision="a" * 40,
+            alias="repartee-strong",
+            profile_name="repartee-gpt-oss-120b",
+            artifact_id="gpt-oss-120b-mxfp4",
+            context_length=8192,
+            maximum_new_tokens=256,
+        ),
+        cache_root=tmp_path,
+        artifact_path=gguf,
+        port=8630,
+        configuration_support="gpt-oss-llama-vulkan",
+    )
+    speech = create_local_profile(
+        LocalProfileRequest(
+            model_id="kyutai/moshiko-pytorch-bf16",
+            revision="b" * 40,
+            alias="repartee-speech",
+            profile_name="repartee-moshiko",
+        ),
+        cache_root=tmp_path,
+        port=8631,
+        configuration_support="moshiko-speech",
+    )
+
+    assert strong.id == "local-repartee-gpt-oss-120b"
+    assert strong.preferred_runtime == "llama-vulkan"
+    assert strong.capabilities.top_k_trace is False
+    assert strong.settings["artifact_path"] == str(gguf)
+    assert speech.id == "local-repartee-moshiko"
+    assert speech.generation_family == "speech-conversation"
+    assert speech.capabilities.full_duplex is True
 
 
 def test_local_profile_is_instantiated_from_runtime_template(tmp_path) -> None:

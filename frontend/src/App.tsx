@@ -652,23 +652,28 @@ function ModelsView({
 function RuntimeConfigurationForm({ model, pending, cancel, submit }: { model: ModelEntry; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
   const support = model.configuration_support;
   const diffusion = support === "diffusiongemma-transformers" || support === "diffusiongemma-modeldeck-q4";
+  const speech = support === "moshiko-speech";
+  const [profileName, setProfileName] = useState(() => suggestedProfileName(model.model_id));
   const [alias, setAlias] = useState(() => suggestedAlias(model.model_id));
   const [dtype, setDtype] = useState<LocalProfileRequest["dtype"]>(support === "autoregressive-transformers" ? "float16" : "bfloat16");
-  const [lifecycle, setLifecycle] = useState<LocalProfileRequest["lifecycle"]>(diffusion ? "exclusive" : "on-demand");
-  const [contextLength, setContextLength] = useState(support === "scenechat-gemma4" ? 8192 : 2048);
+  const [lifecycle, setLifecycle] = useState<LocalProfileRequest["lifecycle"]>(diffusion || support === "gpt-oss-llama-vulkan" || speech ? "exclusive" : "on-demand");
+  const [contextLength, setContextLength] = useState(support === "scenechat-gemma4" || support === "gpt-oss-llama-vulkan" ? 8192 : 2048);
   const [maximumNewTokens, setMaximumNewTokens] = useState(support === "autoregressive-transformers" ? 128 : support === "scenechat-gemma4" ? 512 : 256);
   const [maximumDenoisingSteps, setMaximumDenoisingSteps] = useState(24);
-  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps }); }}>
+  const artifact = (model.artifacts ?? [])[0];
+  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, profile_name: profileName, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps, ...(artifact ? { artifact_id: artifact.artifact_id } : {}) }); }}>
     <div className="runtime-form-heading"><div><strong>Configure {runtimeLabel(support)}</strong><small>Model, revision, cache path, worker implementation and port are fixed from the recognised snapshot.</small></div></div>
     <div className="runtime-fields">
+      <label>Configuration name<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
       <label>Gateway alias<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={alias} onChange={(event) => setAlias(event.target.value)} /></label>
       <label>Data type<select disabled={support === "diffusiongemma-modeldeck-q4"} value={dtype} onChange={(event) => setDtype(event.target.value as LocalProfileRequest["dtype"])}><option value="float16">float16</option><option value="bfloat16">bfloat16</option></select></label>
       <label>Lifecycle<select disabled={diffusion} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as LocalProfileRequest["lifecycle"])}><option value="on-demand">On demand</option><option value="resident">Resident</option><option value="exclusive">Exclusive</option></select></label>
-      {!diffusion && <label>Context length<input type="number" min={256} max={32768} step={256} value={contextLength} onChange={(event) => setContextLength(event.currentTarget.valueAsNumber)} /></label>}
-      <label>Maximum new tokens<input type="number" min={1} max={512} value={maximumNewTokens} onChange={(event) => setMaximumNewTokens(event.currentTarget.valueAsNumber)} /></label>
+      {!diffusion && !speech && <label>Context length<input type="number" min={256} max={32768} step={256} value={contextLength} onChange={(event) => setContextLength(event.currentTarget.valueAsNumber)} /></label>}
+      {!speech && <label>Maximum new tokens<input type="number" min={1} max={512} value={maximumNewTokens} onChange={(event) => setMaximumNewTokens(event.currentTarget.valueAsNumber)} /></label>}
       {diffusion && <label>Maximum denoising steps<input type="number" min={1} max={48} value={maximumDenoisingSteps} onChange={(event) => setMaximumDenoisingSteps(event.currentTarget.valueAsNumber)} /></label>}
     </div>
-    <p className="manifest-note">Local files only · remote code disabled · fixed {support === "diffusiongemma-modeldeck-q4" ? "ModelDeck Q4" : "Transformers ROCm"} worker · no download</p>
+    {artifact && <p className="manifest-note">Artefact: {artifact.format.toUpperCase()} · {artifact.filenames.length} pinned shards</p>}
+    <p className="manifest-note">Local files only · remote code disabled · fixed allowlisted worker · no download · hardware verification required before demo selection</p>
     <div className="runtime-form-actions"><button type="submit" disabled={pending}>{pending ? "Configuring…" : "Save runtime configuration"}</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
   </form>;
 }
@@ -767,18 +772,31 @@ function capabilityLabels(capabilities: Worker["capabilities"]): string[] {
   if (capabilities.seeded_generation) labels.push("Seeded generation");
   if (capabilities.image_input) labels.push("Image input");
   if (capabilities.structured_output) labels.push("Structured output");
+  if (capabilities.audio_input) labels.push("Audio input");
+  if (capabilities.audio_output) labels.push("Audio output");
+  if (capabilities.full_duplex) labels.push("Full duplex");
   return labels;
 }
 
 function shortModelName(modelId: string): string { return modelId.split("/").at(-1) ?? modelId; }
 function suggestedAlias(modelId: string): string {
+  if (modelId === "ggml-org/gpt-oss-120b-GGUF") return "repartee-strong";
+  if (modelId === "kyutai/moshiko-pytorch-bf16") return "repartee-speech";
   const candidate = shortModelName(modelId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
   return /^[a-z][a-z0-9-]+$/.test(candidate) ? candidate : "local-model";
+}
+function suggestedProfileName(modelId: string): string {
+  if (modelId === "google/gemma-4-12B-it") return "scenechat-gemma-4-12b";
+  if (modelId === "ggml-org/gpt-oss-120b-GGUF") return "repartee-gpt-oss-120b";
+  if (modelId === "kyutai/moshiko-pytorch-bf16") return "repartee-moshiko";
+  return suggestedAlias(modelId);
 }
 function runtimeLabel(support: ModelEntry["configuration_support"]): string {
   if (support === "scenechat-gemma4") return "SceneChat Gemma 4 runtime";
   if (support === "diffusiongemma-transformers") return "DiffusionGemma runtime";
   if (support === "diffusiongemma-modeldeck-q4") return "ModelDeck DiffusionGemma Q4 runtime";
+  if (support === "gpt-oss-llama-vulkan") return "Repartee GPT-OSS Vulkan runtime";
+  if (support === "moshiko-speech") return "Repartee Moshiko speech runtime";
   return "autoregressive ROCm runtime";
 }
 function modelStageDescription(state: string): string {

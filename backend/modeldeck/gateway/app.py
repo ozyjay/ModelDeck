@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.profile_registry import load_local_profiles, profile_allowed
 from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.protocol import CapabilitySet
 from modeldeck.provider_selection import SCENECHAT_ALIAS
 from modeldeck.registry import ReservedAlias, reserved_aliases
 
@@ -120,11 +122,7 @@ def create_gateway_app(
     async def capabilities():
         routes = active_routes()
         return {
-            alias: (
-                candidates[0].capabilities
-                if candidates
-                else defaults[alias_contracts[alias].default_provider].capabilities
-            ).model_dump()
+            alias: alias_capabilities(alias, candidates, alias_contracts, defaults)
             for alias, candidates in routes.items()
         }
 
@@ -224,7 +222,84 @@ def create_gateway_app(
             timeout_seconds=configured.scenechat_timeout_seconds,
         )
 
+    @app.websocket("/v1/speech/conversations")
+    async def speech_conversation(client_socket: WebSocket):
+        await client_socket.accept()
+        try:
+            first = await asyncio.wait_for(client_socket.receive_text(), timeout=5)
+            start = json_loads(first.encode())
+            alias = str(start.get("model") or "repartee-speech")
+            candidates = route_candidates(active_routes(), alias)
+            if not candidates:
+                await client_socket.send_json({"type": "error", "code": "local_provider_unavailable"})
+                await client_socket.close(code=1013)
+                return
+            selected = None
+            async with httpx.AsyncClient(timeout=0.5) as health_client:
+                for candidate in candidates:
+                    if candidate.generation_family.value != "speech-conversation":
+                        continue
+                    _, ready = await provider_health(health_client, candidate)
+                    if ready:
+                        selected = candidate
+                        break
+            if selected is None:
+                await client_socket.send_json({"type": "error", "code": "local_provider_unavailable"})
+                await client_socket.close(code=1013)
+                return
+            from websockets.asyncio.client import connect
+
+            async with connect(
+                f"ws://127.0.0.1:{selected.port}/v1/speech/conversations",
+                max_size=96_000,
+            ) as upstream:
+                await upstream.send(first)
+
+                async def client_to_worker() -> None:
+                    while True:
+                        message = await client_socket.receive()
+                        if message["type"] == "websocket.disconnect":
+                            return
+                        if message.get("bytes") is not None:
+                            await upstream.send(message["bytes"])
+                        elif message.get("text") is not None:
+                            await upstream.send(message["text"])
+
+                async def worker_to_client() -> None:
+                    async for message in upstream:
+                        if isinstance(message, bytes):
+                            await client_socket.send_bytes(message)
+                        else:
+                            await client_socket.send_text(message)
+
+                tasks = {asyncio.create_task(client_to_worker()), asyncio.create_task(worker_to_client())}
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    task.result()
+        except (ValueError, TimeoutError, WebSocketDisconnect):
+            if client_socket.client_state.name != "DISCONNECTED":
+                await client_socket.close(code=1008)
+
     return app
+
+
+def alias_capabilities(
+    alias: str,
+    candidates: list[ModelProfile],
+    contracts: dict[str, ReservedAlias],
+    defaults: dict[str, ModelProfile],
+) -> dict[str, Any]:
+    if candidates:
+        return candidates[0].capabilities.model_dump()
+    contract = contracts[alias]
+    if contract.default_provider:
+        return defaults[contract.default_provider].capabilities.model_dump()
+    capabilities = CapabilitySet()
+    return capabilities.model_copy(
+        update={name: True for name in contract.required_capabilities}
+    ).model_dump()
 
 
 async def proxy_request(

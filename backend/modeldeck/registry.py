@@ -19,7 +19,7 @@ class RuntimeTemplate(BaseModel):
     generation_family: GenerationFamily
     capabilities: CapabilitySet
     settings: dict[str, int | float | str | bool] = Field(default_factory=dict)
-    cache_setting: Literal["cache_root", "q4_checkpoint_dir"]
+    cache_setting: Literal["cache_root", "q4_checkpoint_dir", "artifact_path"]
     include_cache_root: bool = False
     lifecycle: LifecycleClass | None = None
     dtype: Literal["float16", "bfloat16"] | None = None
@@ -37,7 +37,7 @@ class ReservedAlias(BaseModel):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
     display_name: str = Field(min_length=1, max_length=80)
-    providers: list[str] = Field(min_length=1)
+    providers: list[str] = Field(default_factory=list)
     selection: Literal["ordered", "explicit"] = "ordered"
     default_provider: str | None = None
     required_generation_family: GenerationFamily | None = None
@@ -45,8 +45,8 @@ class ReservedAlias(BaseModel):
 
     @model_validator(mode="after")
     def selection_contract(self) -> ReservedAlias:
-        if self.selection == "explicit" and self.default_provider is None:
-            raise ValueError("explicit aliases require a default provider")
+        if self.selection == "ordered" and not self.providers:
+            raise ValueError("ordered aliases require at least one packaged provider")
         if self.default_provider is not None and self.default_provider not in self.providers:
             raise ValueError("default provider must be in the packaged provider list")
         unknown = set(self.required_capabilities) - set(CapabilitySet.model_fields)

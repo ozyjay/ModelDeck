@@ -13,6 +13,8 @@ ALLOWED_RUNTIMES = {
     "text-diffusion-transformers-rocm",
     "text-diffusion-gptq-rocm",
     "vision-language-transformers-rocm",
+    "llama-vulkan",
+    "moshiko-rocm",
 }
 
 
@@ -69,6 +71,12 @@ class ModelProfile(BaseModel):
             raise ValueError(
                 "Scene-compatible vision-language profiles must advertise image input and structured output"
             )
+        if self.generation_family == GenerationFamily.SPEECH_CONVERSATION and not (
+            self.capabilities.audio_input
+            and self.capabilities.audio_output
+            and self.capabilities.full_duplex
+        ):
+            raise ValueError("speech-conversation profiles must advertise full-duplex audio")
         return self
 
 

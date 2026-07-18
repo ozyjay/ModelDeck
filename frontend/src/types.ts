@@ -26,6 +26,9 @@ export interface Capabilities {
   seeded_generation: boolean;
   image_input: boolean;
   structured_output: boolean;
+  audio_input: boolean;
+  audio_output: boolean;
+  full_duplex: boolean;
 }
 
 export interface Worker {
@@ -68,11 +71,20 @@ export interface LocalProfileRequest {
   model_id: string;
   revision: string;
   alias: string;
+  profile_name?: string;
   dtype: "float16" | "bfloat16";
   lifecycle: "resident" | "on-demand" | "exclusive";
   context_length: number;
   maximum_new_tokens: number;
   maximum_denoising_steps: number;
+  artifact_id?: string;
+}
+
+export interface ModelArtifact {
+  artifact_id: string;
+  kind: "gguf";
+  format: string;
+  filenames: string[];
 }
 
 export interface ModelEntry {
@@ -87,6 +99,8 @@ export interface ModelEntry {
     | "scenechat-gemma4"
     | "diffusiongemma-transformers"
     | "diffusiongemma-modeldeck-q4"
+    | "gpt-oss-llama-vulkan"
+    | "moshiko-speech"
     | null;
   configuration_support_reason: string;
   modeldeck_allowed: boolean;
@@ -95,6 +109,7 @@ export interface ModelEntry {
   base_model_revision: string | null;
   runnable: boolean;
   runnable_reason: string;
+  artifacts?: ModelArtifact[];
 }
 
 export interface HardwareProbe {
