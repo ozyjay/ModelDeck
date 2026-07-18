@@ -22,7 +22,7 @@ if (-not (Test-Path "$Root/.git")) {
 
 git -C $Root checkout --detach $Revision
 if ($LASTEXITCODE -ne 0) { throw 'Could not check out the pinned llama.cpp revision.' }
-cmake -S $Root -B "$Root/build" -G Ninja -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+cmake -S $Root -B "$Root/build" -G Ninja -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
 if ($LASTEXITCODE -ne 0) { throw 'Could not configure the llama.cpp Vulkan build.' }
 cmake --build "$Root/build" --target llama-server llama-bench
 if ($LASTEXITCODE -ne 0) { throw 'Could not build the llama.cpp Vulkan tools.' }

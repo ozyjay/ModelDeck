@@ -57,7 +57,6 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
         "--n-gpu-layers",
         "999",
         "--flash-attn",
-        "on",
         "--jinja",
     ]
     if preset == "vulkan-cpu-moe":
@@ -83,7 +82,9 @@ class LlamaProcess:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.internal_port = args.port + 1000
-        self.artifact_path = Path(args.artifact_path).resolve()
+        # Keep the catalogue-approved snapshot filename for the strict GGUF allowlist.
+        # Hugging Face snapshots are symlinks whose resolved blob names are opaque hashes.
+        self.artifact_path = Path(args.artifact_path).absolute()
         self.process: asyncio.subprocess.Process | None = None
         self.started = time.monotonic()
 

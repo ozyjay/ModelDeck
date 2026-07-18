@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+
 import pytest
 from modeldeck.workers import llama_vulkan_worker
 from modeldeck.workers.llama_vulkan_worker import llama_command, remove_reasoning
@@ -18,6 +20,8 @@ def test_llama_command_uses_only_fixed_vulkan_presets(monkeypatch, tmp_path) -> 
 
     assert full[0] == str(executable)
     assert full[full.index("--host") + 1] == "127.0.0.1"
+    assert full.count("--flash-attn") == 1
+    assert "on" not in full
     assert "--n-cpu-moe" not in full
     assert cpu_moe[-2:] == ["--n-cpu-moe", "20"]
     with pytest.raises(ValueError, match="allowlisted"):
@@ -39,6 +43,21 @@ def test_llama_command_accepts_official_consolidated_mxfp4(monkeypatch, tmp_path
     )
 
     assert command[command.index("--model") + 1] == str(model)
+
+
+def test_llama_process_preserves_hugging_face_snapshot_filename(tmp_path) -> None:
+    blob = tmp_path / "blobs" / "opaque-hash"
+    blob.parent.mkdir()
+    blob.write_bytes(b"gguf")
+    snapshot = tmp_path / "snapshot" / "gpt-oss-120b-MXFP4.gguf"
+    snapshot.parent.mkdir()
+    snapshot.symlink_to(blob)
+    args = argparse.Namespace(port=9630, artifact_path=str(snapshot))
+
+    runtime = llama_vulkan_worker.LlamaProcess(args)
+
+    assert runtime.artifact_path.name == "gpt-oss-120b-MXFP4.gguf"
+    assert runtime.artifact_path.is_file()
 
 
 def test_llama_response_filter_removes_reasoning_channels() -> None:
