@@ -63,16 +63,19 @@ served by FastAPI; Node.js remains a build-time dependency only.
    compatibility evidence. The 30-minute stability run completed 343 requests with zero
    failures; real in-flight gateway cancellation, repeated lifecycle, graceful shutdown,
    and process exit passed.
-4. **Text diffusion — implementation ready for hardware evidence:** pinned local
-   DiffusionGemma load behind the native job/frame API, draft frames, seeded generation,
-   cancellation, mock fallback, and evidence-gated HSA preload. Physical smoke, repeated
-   lifecycle, and stability evidence remain required before this phase is a go.
+4. **Text diffusion — implemented and hardware-gated:** pinned local DiffusionGemma load
+   behind the native job/frame API, draft frames, seeded generation, cancellation, mock
+   fallback, and evidence-gated HSA preload. The default self-contained Q4 worker passed
+   its physical smoke and comparative release gate; the BF16 worker remains the explicit
+   compatibility and quality baseline. Long-running selected-preset acceptance remains a
+   separate Open Day gate rather than an implementation blocker.
 5. **Scheduler and compatibility execution:** measured memory/reserve/conflicts, lifecycle
    classes, preset transition approval, append-only tests.
 6. **Gateway completion:** streaming proxy, cancellation, aliases and explicit local
    alternates, demo adapters.
-7. **Additional providers:** optional adapters added one evidence-backed runtime at a time;
-   these do not replace the core ROCm workers.
+7. **Additional providers — in progress:** optional adapters are added one evidence-backed
+   runtime at a time. SceneChat, Moshiko ROCm, and GPT-OSS llama.cpp Vulkan integrations
+   now have physical smoke evidence; these do not replace the core ROCm workers.
 8. **Read-only HuggingFacePull integration:** API or metadata contract, including transport
    evidence; no second downloader.
 9. **Fedora/Open Day hardening:** launcher/service, frozen revisions, presets, runbook,
@@ -110,8 +113,8 @@ structured no-cloud gateway failure.
 ## Unresolved assumptions
 
 - The approved project-local PyTorch/ROCm 7.2 wheel set and exact Transformers version.
-- Physical DiffusionGemma compatibility, lifecycle, memory, and stability evidence for the
-  pinned complete work-SSD snapshot.
+- Long-running DiffusionGemma selected-preset stability and whole-system memory-recovery
+  evidence beyond the completed Q4 physical and comparative release gates.
 - Whether HuggingFacePull will expose transport-requested/used evidence through its API or
   a read-only marker.
 - Final shared Open Day port registry and compatibility path for existing `8600` clients.

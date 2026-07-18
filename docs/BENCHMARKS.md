@@ -130,7 +130,17 @@ attention as experimental, so the baseline did not enable the experimental AOTri
 
 ### GPT-OSS 120B
 
-No model benchmark was recorded. The cache contains only the OpenAI Transformers source
-snapshot; the pinned `ggml-org/gpt-oss-120b-GGUF` MXFP4 companion is absent. The local
-llama.cpp Vulkan build also preflighted the missing Fedora Vulkan development headers and
-`glslc`. ModelDeck did not download or convert weights and did not report a substitute result.
+No full model benchmark has been recorded. A physical compatibility run used the
+consolidated 63.4 GB `ggml-org/gpt-oss-120b-GGUF` MXFP4 artefact at revision
+`8d158cefb5f175c6f8842bbd8f68eca54d951ab4` with llama.cpp revision `f08c4c0d` and full
+Vulkan offload on the Radeon 8060S:
+
+- the first managed cold load reached ready in 33.4651 seconds;
+- a second clean load reached ready in 10.8419 seconds with the filesystem cache warm;
+- both generation smokes passed and both worker processes stopped cleanly;
+- the stable gateway selected the verified `repartee-strong` provider and returned the
+  exact requested visible response without exposing reasoning-only fields.
+
+These are compatibility and lifecycle observations, not benchmark or sustained-load
+claims. Peak unified memory, throughput, long-running stability, and direct whole-system
+memory recovery remain to be measured.

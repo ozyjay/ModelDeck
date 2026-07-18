@@ -6,10 +6,12 @@ profile or cloud fallback.
 ## Strong model
 
 `repartee-strong` accepts an autoregressive profile created from the
-`gpt-oss-llama-vulkan` template. The supported artefact is the three-shard MXFP4 release
-from `ggml-org/gpt-oss-120b-GGUF`, pinned by HuggingFacePull at revision
-`a48e247410f0cc543e586c661ce63d82e79f2ad6`. The OpenAI Transformers snapshot is shown as
-the source model but is not offered as an AMD runtime.
+`gpt-oss-llama-vulkan` template. The supported artefact is the official consolidated
+MXFP4 GGUF or the complete legacy three-shard MXFP4 release from
+`ggml-org/gpt-oss-120b-GGUF`. The consolidated artefact at revision
+`8d158cefb5f175c6f8842bbd8f68eca54d951ab4` passed physical smoke and repeated lifecycle
+checks on the target Framework Desktop. The OpenAI Transformers snapshot is shown as the
+source model but is not offered as an AMD runtime.
 
 Provision the allowlisted executable with:
 
@@ -20,7 +22,8 @@ pwsh -NoProfile -File scripts/setup_llama_vulkan.ps1
 The default preset uses full Vulkan offload. Compatibility testing may instead select the
 fixed `vulkan-cpu-moe` preset; arbitrary llama.cpp arguments are never accepted through the
 management API. The runtime does not advertise Token Trail traces and strips reasoning-only
-fields before returning responses.
+fields before returning responses. The tested full-offload fingerprint used llama.cpp
+revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon 8060S.
 
 ## Speech model
 
