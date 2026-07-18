@@ -74,8 +74,10 @@ served by FastAPI; Node.js remains a build-time dependency only.
 6. **Gateway completion:** streaming proxy, cancellation, aliases and explicit local
    alternates, demo adapters.
 7. **Additional providers — in progress:** optional adapters are added one evidence-backed
-   runtime at a time. SceneChat, Moshiko ROCm, and GPT-OSS llama.cpp Vulkan integrations
-   now have physical smoke evidence; these do not replace the core ROCm workers.
+   runtime at a time. SceneChat and Moshiko ROCm have physical smoke evidence. GPT-OSS
+   llama.cpp Vulkan additionally passed a standard benchmark and a 30-minute sustained
+   run with clean process exit and measured whole-device GTT recovery. These providers do
+   not replace the core ROCm workers.
 8. **Read-only HuggingFacePull integration:** API or metadata contract, including transport
    evidence; no second downloader.
 9. **Fedora/Open Day hardening:** launcher/service, frozen revisions, presets, runbook,

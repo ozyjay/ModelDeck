@@ -33,9 +33,22 @@ The corresponding GPT-OSS Vulkan acceptance run is
 verified `repartee-strong` provider, records latency and failures without retaining prompts
 or output, samples peak whole-device GTT use, and checks GTT recovery after process exit.
 
+The corresponding default Q4 DiffusionGemma acceptance run is
+`pwsh -NoProfile -File scripts/stability_rocm_text_diffusion.ps1 -DurationMinutes 30`.
+It exercises fixed seeded refinement jobs through the stable gateway, rejects fallback to
+another provider, records latency and failures without retaining prompts or generated
+content, samples whole-device GTT and worker Torch memory, and checks GTT recovery after
+process exit. It is a long hardware gate and is not run by normal verification.
+Use `-ValidateOnly` to validate its fixed profile, workload parameters, and output paths
+without starting services or the worker.
+
 The recorded Qwen run lasted 1,808.851 seconds and completed 343 gateway requests with
 zero failures. The in-flight cancellation and repeated start/stop checks also passed on
 the physical Framework Desktop.
+
+The recorded GPT-OSS run lasted 1,806.042 seconds and completed 285 gateway requests with
+zero failures. Peak whole-device GTT use was 60.4423 GiB, post-stop GTT recovered to within
+0.4562 GiB of baseline, and process exit was confirmed.
 
 The cross-profile physical performance suite is
 `pwsh -NoProfile -File scripts/benchmark_models.ps1`. It runs one excluded benchmark

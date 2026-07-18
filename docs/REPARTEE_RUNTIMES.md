@@ -9,9 +9,11 @@ profile or cloud fallback.
 `gpt-oss-llama-vulkan` template. The supported artefact is the official consolidated
 MXFP4 GGUF or the complete legacy three-shard MXFP4 release from
 `ggml-org/gpt-oss-120b-GGUF`. The consolidated artefact at revision
-`8d158cefb5f175c6f8842bbd8f68eca54d951ab4` passed physical smoke and repeated lifecycle
-checks on the target Framework Desktop. The OpenAI Transformers snapshot is shown as the
-source model but is not offered as an AMD runtime.
+`8d158cefb5f175c6f8842bbd8f68eca54d951ab4` passed physical smoke, repeated lifecycle, a
+standard five-request benchmark, and a 30-minute sustained run with 285 successful requests,
+clean process exit, and measured whole-device GTT recovery on the target Framework Desktop.
+The OpenAI Transformers snapshot is shown as the source model but is not offered as an AMD
+runtime.
 
 Provision the allowlisted executable with:
 
