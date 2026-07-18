@@ -58,10 +58,12 @@ def test_presets_and_model_selection_are_stable() -> None:
     assert benchmark.PRESETS["standard"].diffusion_tokens == 128
     assert benchmark.PRESETS["standard"].diffusion_steps == 24
     assert benchmark.PRESETS["standard"].vision_tokens == 256
+    assert benchmark.PRESETS["standard"].llama_tokens == 256
     assert benchmark.validate_models(["qwen-small-rocm", "qwen-small-rocm"]) == ["qwen-small-rocm"]
 
     with pytest.raises(benchmark.BenchmarkError, match="Unknown or non-physical"):
         benchmark.validate_models(["mock-ar"])
+    assert benchmark.validate_models(["local-repartee-gpt-oss-120b"]) == ["local-repartee-gpt-oss-120b"]
 
 
 def test_summary_uses_nearest_rank_p95_and_tracks_determinism() -> None:
@@ -148,6 +150,44 @@ def test_diffusion_workload_uses_fixed_request_and_provider() -> None:
     assert captured["seed"] == 11
     assert result["worker_seconds"] == 2.5
     assert "benchmark output" not in json.dumps(result)
+
+
+def test_llama_vulkan_workload_uses_chat_route_and_timing_metrics() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        assert request.url.path == "/v1/chat/completions"
+        return response(
+            {
+                "choices": [{"message": {"content": "private benchmark output"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 32},
+                "timings": {"predicted_ms": 2000, "predicted_per_second": 16.0},
+            },
+            provider="local-repartee-gpt-oss-120b",
+        )
+
+    runner, client = runner_for(handler)
+    try:
+        result = runner.run_workload(
+            {
+                **profile(
+                    "autoregressive",
+                    profile_id="local-repartee-gpt-oss-120b",
+                    alias="repartee-strong",
+                ),
+                "preferred_runtime": "llama-vulkan",
+            }
+        )
+    finally:
+        client.close()
+
+    assert captured["max_tokens"] == 256
+    assert captured["temperature"] == 0
+    assert result["worker_seconds"] == 2.0
+    assert result["throughput_tokens_per_second"] == 16.0
+    assert result["generated_tokens"] == 32
+    assert "private benchmark output" not in json.dumps(result)
 
 
 def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:

@@ -7,7 +7,7 @@ import os
 import re
 import signal
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from modeldeck.protocol import GenerationFamily
 REASONING_MARKERS = re.compile(
     r"<\|(?:analysis|reasoning|channel)[^>]*\>.*?<\|(?:end|final)[^>]*\>", re.DOTALL
 )
+AMD_VENDOR_ID = "0x1002"
 
 
 def fixed_llama_server() -> Path:
@@ -78,6 +79,26 @@ def remove_reasoning(value: Any) -> Any:
     return value
 
 
+def amd_gpu_memory_metrics() -> dict[str, int]:
+    """Read whole-device AMD memory counters from the fixed Linux DRM sysfs interface."""
+    for device in sorted(Path("/sys/class/drm").glob("card[0-9]*/device")):
+        try:
+            if (device / "vendor").read_text(encoding="utf-8").strip().lower() != AMD_VENDOR_ID:
+                continue
+            values = {}
+            for source, key in (
+                ("mem_info_gtt_used", "system_gtt_used_bytes"),
+                ("mem_info_gtt_total", "system_gtt_total_bytes"),
+                ("mem_info_vram_used", "system_vram_used_bytes"),
+                ("mem_info_vram_total", "system_vram_total_bytes"),
+            ):
+                values[key] = int((device / source).read_text(encoding="utf-8").strip())
+            return values
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
 class LlamaProcess:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -86,7 +107,10 @@ class LlamaProcess:
         # Hugging Face snapshots are symlinks whose resolved blob names are opaque hashes.
         self.artifact_path = Path(args.artifact_path).absolute()
         self.process: asyncio.subprocess.Process | None = None
+        self.memory_task: asyncio.Task[None] | None = None
+        self.peak_gtt_used_bytes: int | None = None
         self.started = time.monotonic()
+        self.load_seconds: float | None = None
 
     async def start(self) -> None:
         command = llama_command(
@@ -98,16 +122,38 @@ class LlamaProcess:
         environment = dict(os.environ)
         environment["GGML_VK_VISIBLE_DEVICES"] = "0"
         self.process = await asyncio.create_subprocess_exec(*command, env=environment)
+        self.memory_task = asyncio.create_task(self._sample_gpu_memory())
 
     async def stop(self) -> None:
-        if self.process is None or self.process.returncode is not None:
-            return
-        self.process.send_signal(signal.SIGTERM)
         try:
-            await asyncio.wait_for(self.process.wait(), timeout=8)
-        except TimeoutError:
-            self.process.kill()
-            await self.process.wait()
+            if self.process is None or self.process.returncode is not None:
+                return
+            self.process.send_signal(signal.SIGTERM)
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=8)
+            except TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        finally:
+            if self.memory_task is not None:
+                self.memory_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.memory_task
+                self.memory_task = None
+
+    def memory_metrics(self) -> dict[str, int]:
+        metrics = amd_gpu_memory_metrics()
+        current = metrics.get("system_gtt_used_bytes")
+        if current is not None:
+            self.peak_gtt_used_bytes = max(self.peak_gtt_used_bytes or current, current)
+        if self.peak_gtt_used_bytes is not None:
+            metrics["system_gtt_peak_used_bytes"] = self.peak_gtt_used_bytes
+        return metrics
+
+    async def _sample_gpu_memory(self) -> None:
+        while True:
+            self.memory_metrics()
+            await asyncio.sleep(0.1)
 
     async def ready(self) -> bool:
         if self.process is None or self.process.returncode is not None:
@@ -115,6 +161,8 @@ class LlamaProcess:
         try:
             async with httpx.AsyncClient(timeout=0.5) as client:
                 response = await client.get(f"http://127.0.0.1:{self.internal_port}/health")
+            if response.is_success and self.load_seconds is None:
+                self.load_seconds = round(time.monotonic() - self.started, 4)
             return response.is_success
         except httpx.HTTPError:
             return False
@@ -178,7 +226,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         return {
             "runtime": "llama-vulkan",
             "execution_preset": args.execution_preset,
-            "load_seconds": round(time.monotonic() - runtime.started, 4),
+            "load_seconds": runtime.load_seconds,
+            **runtime.memory_metrics(),
         }
 
     async def proxy(request: Request, path: str):

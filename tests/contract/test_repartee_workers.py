@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import argparse
+from types import SimpleNamespace
 
 import pytest
 from modeldeck.workers import llama_vulkan_worker
-from modeldeck.workers.llama_vulkan_worker import llama_command, remove_reasoning
+from modeldeck.workers.llama_vulkan_worker import (
+    amd_gpu_memory_metrics,
+    llama_command,
+    remove_reasoning,
+)
 from modeldeck.workers.moshiko_worker import speech_control_type, validate_start
 
 
@@ -60,6 +65,35 @@ def test_llama_process_preserves_hugging_face_snapshot_filename(tmp_path) -> Non
     assert runtime.artifact_path.is_file()
 
 
+@pytest.mark.asyncio
+async def test_llama_process_records_first_ready_time(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
+    model.write_bytes(b"gguf")
+    args = argparse.Namespace(port=9630, artifact_path=str(model))
+    runtime = llama_vulkan_worker.LlamaProcess(args)
+    runtime.process = SimpleNamespace(returncode=None)
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return SimpleNamespace(is_success=True)
+
+    monkeypatch.setattr(llama_vulkan_worker.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    times = iter((100.0, 112.5, 120.0))
+    runtime.started = next(times)
+    monkeypatch.setattr(llama_vulkan_worker.time, "monotonic", lambda: next(times, 120.0))
+
+    assert await runtime.ready() is True
+    assert runtime.load_seconds == 12.5
+    assert await runtime.ready() is True
+    assert runtime.load_seconds == 12.5
+
+
 def test_llama_response_filter_removes_reasoning_channels() -> None:
     payload = {
         "choices": [
@@ -76,6 +110,34 @@ def test_llama_response_filter_removes_reasoning_channels() -> None:
 
     assert "reasoning_content" not in filtered["choices"][0]["message"]
     assert filtered["choices"][0]["message"]["content"] == "Public answer"
+
+
+def test_amd_gpu_memory_metrics_reads_fixed_card_sysfs(monkeypatch, tmp_path) -> None:
+    drm = tmp_path / "drm"
+    device = drm / "card1" / "device"
+    device.mkdir(parents=True)
+    values = {
+        "vendor": "0x1002",
+        "mem_info_gtt_used": "100",
+        "mem_info_gtt_total": "200",
+        "mem_info_vram_used": "10",
+        "mem_info_vram_total": "20",
+    }
+    for name, value in values.items():
+        (device / name).write_text(value, encoding="utf-8")
+    original_path = llama_vulkan_worker.Path
+
+    def fake_path(value):
+        return original_path(drm) if value == "/sys/class/drm" else original_path(value)
+
+    monkeypatch.setattr(llama_vulkan_worker, "Path", fake_path)
+
+    assert amd_gpu_memory_metrics() == {
+        "system_gtt_used_bytes": 100,
+        "system_gtt_total_bytes": 200,
+        "system_vram_used_bytes": 10,
+        "system_vram_total_bytes": 20,
+    }
 
 
 def test_moshiko_session_start_is_strict() -> None:

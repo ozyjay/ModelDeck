@@ -21,7 +21,7 @@ from PIL import Image
 
 REPORT_FORMAT = "modeldeck-benchmark"
 REPORT_VERSION = 1
-PHYSICAL_PROFILES = (
+DEFAULT_PHYSICAL_PROFILES = (
     "qwen-small-rocm",
     "qwen-1-5b-rocm",
     "qwen-3b-rocm",
@@ -29,6 +29,8 @@ PHYSICAL_PROFILES = (
     "diffusiongemma-rocm",
     "scenechat-gemma4-e2b-rocm",
 )
+OPTIONAL_PHYSICAL_PROFILES = ("local-repartee-gpt-oss-120b",)
+PHYSICAL_PROFILES = DEFAULT_PHYSICAL_PROFILES + OPTIONAL_PHYSICAL_PROFILES
 ALLOWED_INITIAL_STATES = {"ready", "stopped"}
 SYSTEM_PROMPT_PATH = (
     Path(__file__).resolve().parents[1] / "backend/modeldeck/contracts/scenechat/scene_analysis_system.txt"
@@ -42,6 +44,7 @@ class BenchmarkPreset:
     diffusion_tokens: int = 128
     diffusion_steps: int = 24
     vision_tokens: int = 256
+    llama_tokens: int = 256
 
 
 PRESETS = {
@@ -59,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--management-url", default="http://127.0.0.1:3600")
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8600")
     parser.add_argument("--preset", choices=tuple(PRESETS), default="standard")
-    parser.add_argument("--models", nargs="+", default=list(PHYSICAL_PROFILES))
+    parser.add_argument("--models", nargs="+", default=list(DEFAULT_PHYSICAL_PROFILES))
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--markdown-output", type=Path)
     return parser.parse_args()
@@ -131,6 +134,11 @@ def safe_runtime_metrics(payload: dict[str, Any]) -> dict[str, Any]:
         "quantization",
         "q4_gate_calls",
         "q4_down_calls",
+        "system_gtt_used_bytes",
+        "system_gtt_total_bytes",
+        "system_gtt_peak_used_bytes",
+        "system_vram_used_bytes",
+        "system_vram_total_bytes",
     }
     return {key: payload[key] for key in allowed if key in payload}
 
@@ -261,6 +269,43 @@ class BenchmarkRunner:
             "output_sha256": output_hash(text),
         }
 
+    def run_llama_vulkan(self, profile: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "model": profile["alias"],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Summarise the role of local inference in one concise paragraph.",
+                }
+            ],
+            "seed": 7,
+            "max_tokens": self.preset.llama_tokens,
+            "temperature": 0,
+            "stream": False,
+        }
+        started = time.perf_counter()
+        body, headers = request_json(
+            self.client, "POST", self.gateway_url + "/v1/chat/completions", payload=payload
+        )
+        wall = time.perf_counter() - started
+        assert_provider(headers, profile["id"])
+        choices = body.get("choices") or []
+        content = choices[0].get("message", {}).get("content") if choices else None
+        if not str(content or "").strip():
+            raise BenchmarkError("GPT-OSS benchmark returned no visible generated output")
+        timings = body.get("timings") or {}
+        usage = body.get("usage") or {}
+        worker_ms = timings.get("predicted_ms")
+        return {
+            "wall_seconds": wall,
+            "worker_seconds": float(worker_ms) / 1000 if worker_ms is not None else None,
+            "first_output_seconds": None,
+            "throughput_tokens_per_second": timings.get("predicted_per_second"),
+            "prompt_tokens": usage.get("prompt_tokens") or timings.get("prompt_n"),
+            "generated_tokens": usage.get("completion_tokens") or timings.get("predicted_n"),
+            "output_sha256": output_hash(content),
+        }
+
     def run_diffusion(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
             "model": profile["alias"],
@@ -337,6 +382,8 @@ class BenchmarkRunner:
         }
 
     def run_workload(self, profile: dict[str, Any]) -> dict[str, Any]:
+        if profile.get("preferred_runtime") == "llama-vulkan":
+            return self.run_llama_vulkan(profile)
         family = profile["generation_family"]
         if family == "autoregressive":
             return self.run_autoregressive(profile)
@@ -481,7 +528,7 @@ def markdown_report(report: dict[str, Any]) -> str:
                 f"## {family}",
                 "",
                 "| Profile | Status | Cold start (s) | Median request (s) | p95 request (s) "
-                "| Median throughput (tok/s) | Peak allocated (GiB) |",
+                "| Median throughput (tok/s) | Peak device/GTT (GiB) |",
                 "|---|---:|---:|---:|---:|---:|---:|",
             ]
         )
@@ -491,6 +538,8 @@ def markdown_report(report: dict[str, Any]) -> str:
             throughput = summary.get("throughput_tokens_per_second") or {}
             metrics = item.get("metrics_after") or {}
             peak = metrics.get("peak_memory_allocated_bytes")
+            if peak is None:
+                peak = metrics.get("system_gtt_peak_used_bytes")
             lines.append(
                 "| {profile} | {status} | {cold} | {wall} | {p95} | {throughput} | {peak} |".format(
                     profile=item.get("profile_id", "unknown"),
@@ -582,6 +631,7 @@ def run_benchmark(
             "diffusion_tokens": runner.preset.diffusion_tokens,
             "diffusion_steps": runner.preset.diffusion_steps,
             "vision_tokens": runner.preset.vision_tokens,
+            "llama_tokens": runner.preset.llama_tokens,
         },
         "results": results,
         "restoration": restoration,

@@ -32,6 +32,18 @@ The allowlisted physical profiles are:
 - `diffusiongemma-q4-rocm` and `diffusiongemma-rocm`;
 - `scenechat-gemma4-e2b-rocm`.
 
+The configured `local-repartee-gpt-oss-120b` profile is also accepted when the pinned
+llama.cpp Vulkan runtime and complete MXFP4 artefact are present. It is deliberately not
+part of the default model list because Repartee profiles are user-configured rather than
+built in. Its workload allows up to 256 generated tokens so GPT-OSS can complete its
+internal reasoning and still return visible output; throughput includes every generated
+token reported by llama.cpp. Run it explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/benchmark_models.ps1 `
+    -Models local-repartee-gpt-oss-120b
+```
+
 The benchmark suite selects its fixed physical profile IDs directly; it does not follow
 the current `scenechat-vision` provider selection. In this phase its vision workload still
 measures `scenechat-gemma4-e2b-rocm`. A configured 26B profile requires a separate physical
@@ -91,6 +103,16 @@ SHA-256 digest for deterministic-run comparison.
 
 Physical benchmark runs require the target GPU, pinned local snapshots, the relevant
 ROCm environments, substantial memory, and time. They are not part of normal CI.
+
+Run the separate sustained GPT-OSS gate after its standard benchmark:
+
+```powershell
+pwsh -NoProfile -File scripts/stability_gpt_oss.ps1 -DurationMinutes 30
+```
+
+This records request latency and reliability, samples the fixed AMD DRM sysfs GTT counters,
+confirms process exit, checks whole-device GTT recovery within a 1 GiB tolerance, and writes
+privacy-safe JSON and Markdown reports under `var/benchmarks/`.
 
 ## Framework Desktop observations — 18 July 2026
 

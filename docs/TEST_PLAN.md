@@ -28,6 +28,11 @@ The 30-minute acceptance run is
 request count, failures, shutdown and process-exit evidence against the compatibility
 fingerprint.
 
+The corresponding GPT-OSS Vulkan acceptance run is
+`pwsh -NoProfile -File scripts/stability_gpt_oss.ps1 -DurationMinutes 30`. It uses the
+verified `repartee-strong` provider, records latency and failures without retaining prompts
+or output, samples peak whole-device GTT use, and checks GTT recovery after process exit.
+
 The recorded Qwen run lasted 1,808.851 seconds and completed 343 gateway requests with
 zero failures. The in-flight cancellation and repeated start/stop checks also passed on
 the physical Framework Desktop.
