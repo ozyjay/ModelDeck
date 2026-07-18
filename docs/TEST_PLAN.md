@@ -50,6 +50,16 @@ The recorded GPT-OSS run lasted 1,806.042 seconds and completed 285 gateway requ
 zero failures. Peak whole-device GTT use was 60.4423 GiB, post-stop GTT recovered to within
 0.4562 GiB of baseline, and process exit was confirmed.
 
+The recorded Q4 DiffusionGemma run lasted 1,802.171 seconds and completed 111 gateway
+requests with zero failures. Peak whole-device GTT use was 21.8561 GiB, post-stop GTT
+recovered below its baseline within 1.003 seconds, and process exit was confirmed.
+
+The fixed selected-preset burn-in is prepared as
+`pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1`. It runs the
+same accepted Q4 workload for two hours and writes distinct privacy-safe reports. Use
+`-ValidateOnly` to check the fixed profile, duration, and output paths without starting
+services or the worker. This gate does not use the mock-only `open-day-minimum` API preset.
+
 The cross-profile physical performance suite is
 `pwsh -NoProfile -File scripts/benchmark_models.ps1`. It runs one excluded benchmark
 warm-up and five measured representative requests per selected physical worker, records

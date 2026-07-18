@@ -178,6 +178,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         await runtime.stop()
 
     app = FastAPI(title="ModelDeck GPT-OSS Vulkan worker", lifespan=lifespan)
+    app.state.shutdown_callback = None
 
     @app.get("/health")
     async def health():
@@ -276,6 +277,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     async def cancel():
         return {"ok": False, "reason": "Cancellation is driven by closing the streaming request"}
 
+    @app.post("/shutdown")
+    async def shutdown():
+        if app.state.shutdown_callback:
+            asyncio.get_running_loop().call_later(0.05, app.state.shutdown_callback)
+        return {"ok": True}
+
     return app
 
 
@@ -298,7 +305,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    uvicorn.run(create_app(args), host="127.0.0.1", port=args.port)
+    app = create_app(args)
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning", access_log=False)
+    )
+    app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
+    server.run()
 
 
 if __name__ == "__main__":

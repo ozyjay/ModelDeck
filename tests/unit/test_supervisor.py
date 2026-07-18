@@ -234,4 +234,5 @@ def test_worker_logs_are_scoped_to_the_current_session_and_classified(tmp_path) 
     assert logs[0]["session_id"] == "second"
     assert logs[0]["level"] == "warning"
     assert classify_log_level("Traceback (most recent call last)") == "error"
+    assert classify_log_level('{{- raise_exception("Invalid chat-template message") }}') == "info"
     assert classify_log_level("Application startup complete") == "info"

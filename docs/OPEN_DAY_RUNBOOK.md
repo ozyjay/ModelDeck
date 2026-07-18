@@ -62,5 +62,7 @@ mode. Never change precision, attention implementation, model, or provider autom
   service is absent; it never terminates an unknown process merely because it owns a port.
 
 Logs are under `var/log`. They must not contain visitor prompts or generated content.
-Before final readiness, pin every dependency/model revision, complete the selected
-two-hour burn-in, rehearse with another operator, and document real preset transitions.
+Before final readiness, pin every dependency/model revision, run
+`pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1`, rehearse with
+another operator, and document real preset transitions. Validate the fixed two-hour gate
+without starting hardware first by adding `-ValidateOnly`.

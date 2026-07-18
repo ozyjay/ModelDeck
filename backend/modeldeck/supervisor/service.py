@@ -521,6 +521,8 @@ def build_mock_worker_command(profile: ModelProfile) -> list[str]:
 
 def classify_log_level(message: str) -> str:
     lowered = message.casefold()
+    if "{{- raise_exception(" in lowered:
+        return "info"
     if any(
         marker in lowered
         for marker in ("error", "exception", "traceback", "critical", "out of memory", "oom")

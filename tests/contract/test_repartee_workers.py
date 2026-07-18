@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from modeldeck.workers import llama_vulkan_worker
 from modeldeck.workers.llama_vulkan_worker import (
@@ -110,6 +112,29 @@ def test_llama_response_filter_removes_reasoning_channels() -> None:
 
     assert "reasoning_content" not in filtered["choices"][0]["message"]
     assert filtered["choices"][0]["message"]["content"] == "Public answer"
+
+
+@pytest.mark.asyncio
+async def test_llama_shutdown_requests_server_exit(tmp_path) -> None:
+    model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
+    model.write_bytes(b"gguf")
+    args = argparse.Namespace(
+        worker_id="gpt-oss-test",
+        model_id="ggml-org/gpt-oss-120b-GGUF",
+        revision="pinned",
+        port=9630,
+        artifact_path=str(model),
+    )
+    app = llama_vulkan_worker.create_app(args)
+    shutdown_requested = asyncio.Event()
+    app.state.shutdown_callback = shutdown_requested.set
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/shutdown")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    await asyncio.wait_for(shutdown_requested.wait(), timeout=0.5)
 
 
 def test_amd_gpu_memory_metrics_reads_fixed_card_sysfs(monkeypatch, tmp_path) -> None:
