@@ -152,17 +152,23 @@ attention as experimental, so the baseline did not enable the experimental AOTri
 
 ### GPT-OSS 120B
 
-No full model benchmark has been recorded. A physical compatibility run used the
-consolidated 63.4 GB `ggml-org/gpt-oss-120b-GGUF` MXFP4 artefact at revision
+The configured profile used the consolidated 63.4 GB
+`ggml-org/gpt-oss-120b-GGUF` MXFP4 artefact at revision
 `8d158cefb5f175c6f8842bbd8f68eca54d951ab4` with llama.cpp revision `f08c4c0d` and full
-Vulkan offload on the Radeon 8060S:
+Vulkan offload on the Radeon 8060S. A standard benchmark recorded:
 
-- the first managed cold load reached ready in 33.4651 seconds;
-- a second clean load reached ready in 10.8419 seconds with the filesystem cache warm;
-- both generation smokes passed and both worker processes stopped cleanly;
-- the stable gateway selected the verified `repartee-strong` provider and returned the
-  exact requested visible response without exposing reasoning-only fields.
+- a warm-filesystem cold start of 9.8876 seconds;
+- five successful deterministic 256-token requests with median latency of 5.3365 seconds,
+  p95 latency of 5.3644 seconds, and median throughput of 48.4302 tokens per second;
+- peak whole-device GTT use of 59.9581 GiB; and
+- successful lifecycle restoration.
 
-These are compatibility and lifecycle observations, not benchmark or sustained-load
-claims. Peak unified memory, throughput, long-running stability, and direct whole-system
-memory recovery remain to be measured.
+A separate 30-minute sustained run completed 285 requests without failure. Median request
+latency was 1.3310 seconds, p95 latency was 1.3496 seconds, and peak whole-device GTT use
+was 60.4423 GiB. After the worker stopped, GTT use recovered to within 0.4562 GiB of its
+baseline, inside the 1 GiB tolerance, and process exit was confirmed. The sustained and
+standard request latencies are not directly comparable because the sustained workload
+generates fewer tokens per request.
+
+These measurements are observational results from one physical run, not release
+performance thresholds or general hardware claims.
