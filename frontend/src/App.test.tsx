@@ -419,6 +419,22 @@ describe("ModelDeck operator console", () => {
     expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
   });
 
+  it("sorts the model library by name or cache size", async () => {
+    catalogueModels = [
+      { ...completeModel, model_id: "Zeta/Medium", physical_size_bytes: 20 },
+      { ...completeModel, model_id: "Alpha/Small", physical_size_bytes: 10 },
+      { ...completeModel, model_id: "Middle/Large", physical_size_bytes: 30 },
+    ];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
+
+    const modelNames = () => screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent);
+    expect(modelNames()).toEqual(["Alpha/Small", "Middle/Large", "Zeta/Medium"]);
+
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "size-desc" } });
+    expect(modelNames()).toEqual(["Middle/Large", "Zeta/Medium", "Alpha/Small"]);
+  });
+
   it("configures and removes a constrained cache-backed runtime", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
@@ -464,19 +480,21 @@ describe("ModelDeck operator console", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
 
-    const cards = screen.getAllByRole("article");
-    fireEvent.click(within(cards[0]).getByRole("button", { name: "Configure runtime" }));
-    expect(within(cards[0]).getByText("Configure SceneChat Gemma 4 runtime")).toBeInTheDocument();
-    fireEvent.click(within(cards[0]).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(within(cards[1]).getByRole("button", { name: "Configure runtime" }));
-    expect(within(cards[1]).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
-    expect(within(cards[1]).getByLabelText("Lifecycle")).toBeDisabled();
-    expect(within(cards[1]).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
-    fireEvent.click(within(cards[1]).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(within(cards[2]).getByRole("button", { name: "Configure runtime" }));
-    expect(within(cards[2]).getByText("Configure ModelDeck DiffusionGemma Q4 runtime")).toBeInTheDocument();
-    expect(within(cards[2]).getByLabelText("Lifecycle")).toBeDisabled();
-    expect(within(cards[2]).getByLabelText("Data type")).toBeDisabled();
+    const scenechatCard = screen.getByRole("heading", { name: "google/gemma-4-E2B-it" }).closest("article")!;
+    const diffusionCard = screen.getByRole("heading", { name: "google/diffusiongemma-26B-A4B-it" }).closest("article")!;
+    const q4Card = screen.getByRole("heading", { name: "ozyjay/diffusiongemma-modeldeck-q4" }).closest("article")!;
+    fireEvent.click(within(scenechatCard).getByRole("button", { name: "Configure runtime" }));
+    expect(within(scenechatCard).getByText("Configure SceneChat Gemma 4 runtime")).toBeInTheDocument();
+    fireEvent.click(within(scenechatCard).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(diffusionCard).getByRole("button", { name: "Configure runtime" }));
+    expect(within(diffusionCard).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
+    expect(within(diffusionCard).getByLabelText("Lifecycle")).toBeDisabled();
+    expect(within(diffusionCard).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
+    fireEvent.click(within(diffusionCard).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(q4Card).getByRole("button", { name: "Configure runtime" }));
+    expect(within(q4Card).getByText("Configure ModelDeck DiffusionGemma Q4 runtime")).toBeInTheDocument();
+    expect(within(q4Card).getByLabelText("Lifecycle")).toBeDisabled();
+    expect(within(q4Card).getByLabelText("Data type")).toBeDisabled();
   });
 
   it("disallows and re-allows a cached model without deleting it", async () => {

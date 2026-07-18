@@ -18,6 +18,7 @@ import type {
 
 type View = "overview" | "workers" | "models" | "compatibility" | "logs";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
+type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc";
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
   { view: "overview", label: "Overview", path: "/" },
@@ -548,6 +549,18 @@ function ModelsView({
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [pendingProfile, setPendingProfile] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "good" | "bad"; message: string } | null>(null);
+  const [sort, setSort] = useState<ModelSort>("name-asc");
+  const sortedModels = useMemo(() => {
+    const nameOrder = (left: ModelEntry, right: ModelEntry) =>
+      left.model_id.localeCompare(right.model_id, "en-AU", { sensitivity: "base" }) ||
+      String(left.revision ?? "").localeCompare(String(right.revision ?? ""), "en-AU");
+    return [...models].sort((left, right) => {
+      if (sort === "name-desc") return -nameOrder(left, right);
+      if (sort === "size-desc") return right.physical_size_bytes - left.physical_size_bytes || nameOrder(left, right);
+      if (sort === "size-asc") return left.physical_size_bytes - right.physical_size_bytes || nameOrder(left, right);
+      return nameOrder(left, right);
+    });
+  }, [models, sort]);
 
   const configure = async (payload: LocalProfileRequest) => {
     setPendingProfile(`create:${payload.alias}`);
@@ -606,7 +619,17 @@ function ModelsView({
       {feedback && <div className={`configuration-feedback ${feedback.tone}`} role="status">{feedback.message}</div>}
       <section className="panel table-panel">
         <PanelHeading title="Model library" detail={`${models.length} cached repositories`} />
-        {models.length ? <div className="model-list">{models.map((model) => {
+        {models.length ? <>
+          <div className="model-library-toolbar">
+            <label htmlFor="model-library-sort">Sort models</label>
+            <select id="model-library-sort" value={sort} onChange={(event) => setSort(event.target.value as ModelSort)}>
+              <option value="name-asc">Name (A–Z)</option>
+              <option value="name-desc">Name (Z–A)</option>
+              <option value="size-desc">Cache size (largest first)</option>
+              <option value="size-asc">Cache size (smallest first)</option>
+            </select>
+          </div>
+          <div className="model-list">{sortedModels.map((model) => {
           const matchingProfiles = profiles.filter((profile) => (profile.artifact_model_id ?? profile.model_id) === model.model_id && (profile.artifact_revision ?? profile.revision) === model.revision);
           const latest = compatibility.find((test) => matchingProfiles.some((profile) => test.evidence.model_id === profile.model_id && test.evidence.model_revision === profile.revision && profile.preferred_runtime === test.evidence.runtime));
           const state = !model.modeldeck_allowed ? "disallowed" : model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
@@ -619,7 +642,8 @@ function ModelsView({
             {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => <div key={profile.id}><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" disabled={pendingProfile !== null} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div>)}</div>}
             {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
           </article>;
-        })}</div> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
+          })}</div>
+        </> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
       </section>
     </div>
   );
