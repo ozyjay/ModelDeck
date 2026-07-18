@@ -61,6 +61,8 @@ def create_local_profile(
     ):
         raise ValueError("ModelDeck Q4 release identity is incomplete")
     settings = dict(template.settings)
+    if request.model_id == "google/gemma-4-12B-it":
+        settings["hardware_verification_required"] = True
     if template.generation_family.value != "speech-conversation":
         settings["maximum_new_tokens"] = request.maximum_new_tokens
     if template.generation_family.value == "autoregressive":

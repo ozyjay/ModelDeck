@@ -139,12 +139,8 @@ def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | Non
         "is_decoder"
     ):
         return "autoregressive-transformers", "Supported by the local Transformers ROCm worker."
-    if (
-        model_type == "gemma4"
-        and "Gemma4ForConditionalGeneration" in architectures
-    ) or (
-        model_type == "gemma4_unified"
-        and "Gemma4UnifiedForConditionalGeneration" in architectures
+    if (model_type == "gemma4" and "Gemma4ForConditionalGeneration" in architectures) or (
+        model_type == "gemma4_unified" and "Gemma4UnifiedForConditionalGeneration" in architectures
     ):
         return "scenechat-gemma4", "Supported by the dedicated SceneChat Gemma 4 worker."
     if model_type == "diffusiongemma" or "DiffusionGemmaForBlockDiffusion" in architectures:

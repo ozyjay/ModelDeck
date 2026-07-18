@@ -32,3 +32,15 @@ def profile_allowed(profile: ModelProfile, policy: dict[tuple[str, str], bool]) 
     if not profile_uses_huggingface_cache(profile):
         return True
     return policy.get(profile_cache_identity(profile), True)
+
+
+def profile_verified(profile: ModelProfile, tests: list[dict]) -> bool:
+    if profile.settings.get("hardware_verification_required") is not True:
+        return True
+    return any(
+        test.get("result") == "tested-working"
+        and test.get("evidence", {}).get("model_id") == profile.model_id
+        and test.get("evidence", {}).get("model_revision") == profile.revision
+        and test.get("evidence", {}).get("runtime") == profile.preferred_runtime
+        for test in tests
+    )

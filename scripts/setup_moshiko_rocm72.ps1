@@ -3,7 +3,13 @@ param()
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
-$Python = if ($Env:MODELDECK_PYTHON) { $Env:MODELDECK_PYTHON } else { 'python3.12' }
+$Python = if ($Env:MODELDECK_PYTHON) {
+    $Env:MODELDECK_PYTHON
+} elseif (Test-Path '.venv/bin/python') {
+    '.venv/bin/python'
+} else {
+    'python3.12'
+}
 $Runtime = '.venv-moshi-rocm72'
 
 if (-not (Test-Path "$Runtime/bin/python")) {

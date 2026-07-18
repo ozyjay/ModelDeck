@@ -190,9 +190,7 @@ class TransformersSceneChatEngine:
             "Gemma4UnifiedProcessor": "Gemma4UnifiedForConditionalGeneration",
         }
         if processor_class not in allowed_pairs:
-            raise RuntimeError(
-                "Expected an allowlisted Gemma 4 processor, received " + processor_class
-            )
+            raise RuntimeError("Expected an allowlisted Gemma 4 processor, received " + processor_class)
         model = AutoModelForMultimodalLM.from_pretrained(
             snapshot,
             local_files_only=True,
@@ -201,9 +199,7 @@ class TransformersSceneChatEngine:
             attn_implementation="sdpa",
         )
         if type(model).__name__ != allowed_pairs[processor_class]:
-            raise RuntimeError(
-                f"Expected {allowed_pairs[processor_class]}, received {type(model).__name__}"
-            )
+            raise RuntimeError(f"Expected {allowed_pairs[processor_class]}, received {type(model).__name__}")
         model.to(device)
         model.eval()
         placement_details = self._validate_placement(model, device, dtype)

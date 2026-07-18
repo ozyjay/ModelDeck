@@ -72,9 +72,7 @@ class ModelProfile(BaseModel):
                 "Scene-compatible vision-language profiles must advertise image input and structured output"
             )
         if self.generation_family == GenerationFamily.SPEECH_CONVERSATION and not (
-            self.capabilities.audio_input
-            and self.capabilities.audio_output
-            and self.capabilities.full_duplex
+            self.capabilities.audio_input and self.capabilities.audio_output and self.capabilities.full_duplex
         ):
             raise ValueError("speech-conversation profiles must advertise full-duplex audio")
         return self

@@ -41,6 +41,18 @@ profiles use `local-<alias>` identifiers,
 are stored in `model_profiles`, and remain observationally untested until their worker is
 started and smoke tested. Removing one removes only the runtime configuration.
 
+Local profile requests may include a separate `profile_name` and an opaque `artifact_id` from
+the catalogue. `profile_name` names the persisted configuration while `alias` identifies its
+gateway role. ModelDeck resolves `artifact_id` to a discovered file internally and never accepts
+an artefact path from the browser.
+
+The additional templates are:
+
+- `gpt-oss-llama-vulkan`: exclusive autoregressive MXFP4 GGUF runtime for `repartee-strong`;
+- `moshiko-speech`: exclusive BF16 full-duplex runtime for `repartee-speech`.
+
+Both templates require successful hardware compatibility evidence before gateway selection.
+
 A Hugging Face Q4 profile records two exact identities. `artifact_model_id` and
 `artifact_revision` identify the downloaded derivative release for library matching and
 allow/disallow policy. `model_id` and `revision` retain the pinned upstream Google base

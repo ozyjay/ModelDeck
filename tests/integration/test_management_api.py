@@ -324,6 +324,7 @@ async def test_management_selects_and_persists_compatible_scenechat_provider(
             "selected": False,
             "worker_state": "stopped",
             "gateway_ready": False,
+            "verified": True,
         },
         {
             "profile_id": profile_id,
@@ -332,6 +333,7 @@ async def test_management_selects_and_persists_compatible_scenechat_provider(
             "selected": True,
             "worker_state": "stopped",
             "gateway_ready": False,
+            "verified": True,
         },
     ]
     serialised = json.dumps(document)

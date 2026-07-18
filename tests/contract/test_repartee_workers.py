@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import pytest
-
 from modeldeck.workers import llama_vulkan_worker
 from modeldeck.workers.llama_vulkan_worker import llama_command, remove_reasoning
-from modeldeck.workers.moshiko_worker import validate_start
+from modeldeck.workers.moshiko_worker import speech_control_type, validate_start
 
 
 def test_llama_command_uses_only_fixed_vulkan_presets(monkeypatch, tmp_path) -> None:
@@ -58,3 +57,7 @@ def test_moshiko_session_start_is_strict() -> None:
         )
     with pytest.raises(ValueError, match="match"):
         validate_start({**valid, "model": "another-model"}, "repartee-speech")
+    assert speech_control_type('{"type":"session.close"}') == "session.close"
+    assert speech_control_type('{"type":"response.cancel"}') == "response.cancel"
+    with pytest.raises(ValueError, match="Unknown"):
+        speech_control_type('{"type":"voice.change"}')

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import signal
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -29,27 +31,33 @@ class MoshiProcess:
         environment.update({"HF_HUB_OFFLINE": "1", "HF_HUB_CACHE": str(self.args.cache_root)})
         self.process = await asyncio.create_subprocess_exec(
             os.sys.executable,
-            "-m", "moshi.server",
-            "--host", "127.0.0.1",
-            "--port", str(self.internal_port),
-            "--static", "none",
-            "--hf-repo", self.args.model_id,
-            "--moshi-weight", str(snapshot / "model.safetensors"),
-            "--tokenizer", str(snapshot / "tokenizer_spm_32k_3.model"),
-            "--device", "cuda",
+            "-m",
+            "moshi.server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.internal_port),
+            "--static",
+            "none",
+            "--hf-repo",
+            self.args.model_id,
+            "--moshi-weight",
+            str(snapshot / "model.safetensors"),
+            "--tokenizer",
+            str(snapshot / "tokenizer_spm_32k_3.model"),
+            "--device",
+            "cuda",
             env=environment,
         )
 
     def _snapshot(self) -> Path:
         organisation, model = self.args.model_id.split("/", maxsplit=1)
         snapshot = (
-            Path(self.args.cache_root)
-            / f"models--{organisation}--{model}"
-            / "snapshots"
-            / self.args.revision
+            Path(self.args.cache_root) / f"models--{organisation}--{model}" / "snapshots" / self.args.revision
         ).resolve()
         required = {
-            "model.safetensors", "tokenizer_spm_32k_3.model",
+            "model.safetensors",
+            "tokenizer_spm_32k_3.model",
             "tokenizer-e351c8d8-checkpoint125.safetensors",
         }
         missing = sorted(name for name in required if not (snapshot / name).is_file())
@@ -91,6 +99,17 @@ def validate_start(message: object, model_alias: str) -> None:
         raise ValueError("Moshiko requires PCM16 mono audio at 24 kHz")
 
 
+def speech_control_type(message: str) -> str:
+    try:
+        event = json.loads(message)
+    except json.JSONDecodeError as error:
+        raise ValueError("Speech session controls must be JSON objects") from error
+    event_type = event.get("type") if isinstance(event, dict) else None
+    if event_type not in {"session.close", "response.cancel"}:
+        raise ValueError("Unknown speech session control message")
+    return str(event_type)
+
+
 def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = MoshiProcess(args)
 
@@ -106,11 +125,17 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     async def health():
         ready = await runtime.ready()
         return {
-            "protocol_version": "1", "worker_id": args.worker_id, "runtime": "moshiko-rocm",
+            "protocol_version": "1",
+            "worker_id": args.worker_id,
+            "runtime": "moshiko-rocm",
             "generation_family": GenerationFamily.SPEECH_CONVERSATION,
-            "state": "warming" if ready else "loading", "model_id": args.model_id,
-            "model_revision": args.revision, "device": "cuda:0", "device_name": "ROCm GPU",
-            "rocm_version": None, "ready": ready,
+            "state": "warming" if ready else "loading",
+            "model_id": args.model_id,
+            "model_revision": args.revision,
+            "device": "cuda:0",
+            "device_name": "ROCm GPU",
+            "rocm_version": None,
+            "ready": ready,
         }
 
     @app.post("/warmup")
@@ -121,9 +146,68 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     async def models():
         return {"object": "list", "data": [{"id": args.model_id, "object": "model"}]}
 
+    @app.get("/model")
+    async def model():
+        return {
+            "model_id": args.model_id,
+            "revision": args.revision,
+            "generation_family": GenerationFamily.SPEECH_CONVERSATION,
+            "local_files_only": True,
+            "trust_remote_code": False,
+            "dtype": "bfloat16",
+            "quantization": "none",
+        }
+
     @app.get("/metrics")
     async def metrics():
-        return {"runtime": "moshiko-rocm", "sample_rate_hz": SAMPLE_RATE_HZ, "maximum_sessions": 1}
+        import importlib.metadata
+
+        import torch
+
+        return {
+            "runtime": "moshiko-rocm",
+            "sample_rate_hz": SAMPLE_RATE_HZ,
+            "maximum_sessions": 1,
+            "torch_version": str(torch.__version__),
+            "moshi_version": importlib.metadata.version("moshi"),
+        }
+
+    @app.post("/smoke")
+    async def smoke():
+        import aiohttp
+        import numpy as np
+        import sphn
+
+        started = time.perf_counter()
+        frame = np.zeros(int(SAMPLE_RATE_HZ * 0.08), dtype=np.float32)
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(f"http://127.0.0.1:{runtime.internal_port}/api/chat") as upstream:
+                writer = sphn.OpusStreamWriter(SAMPLE_RATE_HZ)
+
+                async def send_silence() -> None:
+                    for _ in range(50):
+                        encoded = writer.append_pcm(frame)
+                        if encoded:
+                            await upstream.send_bytes(b"\x01" + encoded)
+                        await asyncio.sleep(0.08)
+
+                async def wait_for_output() -> str:
+                    async for message in upstream:
+                        if message.type == aiohttp.WSMsgType.BINARY and message.data:
+                            if message.data[0] in {1, 2}:
+                                return "audio" if message.data[0] == 1 else "text"
+                    raise RuntimeError("Moshiko closed without output")
+
+                sender = asyncio.create_task(send_silence())
+                try:
+                    output_kind = await asyncio.wait_for(wait_for_output(), timeout=10)
+                finally:
+                    sender.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await sender
+                    await upstream.close()
+        first_output = round(time.perf_counter() - started, 4)
+        return {"ok": True, "output_kind": output_kind, "metrics": {"first_output_seconds": first_output}}
 
     @app.websocket("/v1/speech/conversations")
     async def conversation(client: WebSocket):
@@ -147,17 +231,21 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             async with session.ws_connect(f"http://127.0.0.1:{runtime.internal_port}/api/chat") as upstream:
                 opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE_HZ)
                 opus_reader = sphn.OpusStreamReader(SAMPLE_RATE_HZ)
-                await client.send_json({
-                    "type": "session.ready", "model": args.alias,
-                    "audio": {"encoding": "pcm_s16le", "sample_rate_hz": SAMPLE_RATE_HZ, "channels": 1},
-                    "voice": "moshiko", "language": "en",
-                })
+                await client.send_json(
+                    {
+                        "type": "session.ready",
+                        "model": args.alias,
+                        "audio": {"encoding": "pcm_s16le", "sample_rate_hz": SAMPLE_RATE_HZ, "channels": 1},
+                        "voice": "moshiko",
+                        "language": "en",
+                    }
+                )
 
-                async def client_input() -> None:
+                async def client_input() -> str:
                     while True:
                         message = await client.receive()
                         if message["type"] == "websocket.disconnect":
-                            return
+                            return "disconnect"
                         payload = message.get("bytes")
                         if payload is not None:
                             if not payload or len(payload) > MAX_PCM_FRAME_BYTES or len(payload) % 2:
@@ -170,10 +258,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                                 await upstream.send_bytes(b"\x01" + encoded)
                             continue
                         control = message.get("text")
-                        if control and '"type":"session.close"' in control.replace(" ", ""):
-                            return
-                        if control and '"type":"response.cancel"' in control.replace(" ", ""):
-                            return
+                        if control:
+                            event_type = speech_control_type(control)
+                            if event_type == "session.close":
+                                return "closed"
+                            if event_type == "response.cancel":
+                                return "cancelled"
 
                 async def model_output() -> None:
                     nonlocal response_started
@@ -202,18 +292,27 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 done, pending = await asyncio.wait(
                     {input_task, output_task}, return_when=asyncio.FIRST_COMPLETED
                 )
+                completion_reason = "upstream_closed"
                 for task in pending:
                     task.cancel()
                 for task in done:
                     error = task.exception()
                     if error is not None:
+                        completion_reason = "stream_error"
                         await client.send_json(
                             {"type": "error", "code": "stream_error", "message": str(error)}
                         )
+                    elif task is input_task:
+                        completion_reason = task.result()
                 await upstream.close()
         with suppress(WebSocketDisconnect, RuntimeError):
             await client.send_json({"type": "transcript.final", "text": "".join(transcript).strip()})
-            await client.send_json({"type": "response.completed", "cancelled": True})
+            await client.send_json(
+                {
+                    "type": "response.completed",
+                    "cancelled": completion_reason in {"cancelled", "disconnect", "stream_error"},
+                }
+            )
             await client.close()
 
     return app

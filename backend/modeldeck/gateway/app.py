@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
-from modeldeck.profile_registry import load_local_profiles, profile_allowed
+from modeldeck.profile_registry import load_local_profiles, profile_allowed, profile_verified
 from modeldeck.profiles import ModelProfile, default_model_profiles
 from modeldeck.protocol import CapabilitySet
 from modeldeck.provider_selection import SCENECHAT_ALIAS
@@ -54,9 +54,14 @@ def create_gateway_app(
                 selected = all_profiles.get(selected_provider_id(alias, contract) or "")
                 routes[alias] = [selected] if selected is not None and contract.accepts(selected) else []
         policy = store.list_model_cache_policy()
+        compatibility_tests = store.list_tests()
         filtered = {}
         for alias, candidates in routes.items():
-            allowed_candidates = [profile for profile in candidates if profile_allowed(profile, policy)]
+            allowed_candidates = [
+                profile
+                for profile in candidates
+                if profile_allowed(profile, policy) and profile_verified(profile, compatibility_tests)
+            ]
             contract = alias_contracts.get(alias)
             if allowed_candidates or (contract is not None and contract.selection == "explicit"):
                 filtered[alias] = allowed_candidates

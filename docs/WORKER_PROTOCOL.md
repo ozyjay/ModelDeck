@@ -87,14 +87,22 @@ compatibility routes are authenticated
 `GET /v1/models`, `POST /v1/chat/completions`, and
 `POST /native/vision-language/smoke`.
 
+Gemma 4 unified snapshots use the same SceneChat contract through the explicitly paired
+`Gemma4UnifiedProcessor` and `Gemma4UnifiedForConditionalGeneration` loader adapter. Audio and
+video inputs remain outside the SceneChat contract.
+
+The Repartee speech protocol and its fixed PCM framing are documented in
+`docs/REPARTEE_RUNTIMES.md`. Autoregressive GPT-OSS requests continue to use the existing
+OpenAI-compatible chat and completion routes.
 The gateway accepts either the stable `scenechat-vision` alias or the exact pinned model
 identifier, translates it to the exact worker model identifier, and injects the private
 loopback worker credential. It never forwards a caller-supplied credential to the worker.
 
-The worker accepts only `google/gemma-4-E2B-it` revision
-`9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`. It uses its own `Gemma4Processor`, pinned chat
-template, and image processing; neither the gateway nor SceneChat loads a tokenizer or
-processor. Generation uses deterministic greedy decoding so the strict JSON contract does
+The built-in profile accepts `google/gemma-4-E2B-it` revision
+`9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf`; recognised local profiles may instead use an
+allowlisted Gemma 4 unified snapshot. Each profile uses its pinned processor, chat template,
+and image processing; neither the gateway nor SceneChat loads a tokenizer or processor.
+Generation uses deterministic greedy decoding so the strict JSON contract does
 not depend on a stochastic sampling path, and the profile caps output at 512 tokens with a
 60-second deadline. Disconnect polling is bounded to avoid starving the generation thread.
 Readiness remains false until local processor/model loading and a one-token synthetic-image

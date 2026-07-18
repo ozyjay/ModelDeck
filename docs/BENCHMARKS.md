@@ -91,3 +91,46 @@ SHA-256 digest for deterministic-run comparison.
 
 Physical benchmark runs require the target GPU, pinned local snapshots, the relevant
 ROCm environments, substantial memory, and time. They are not part of normal CI.
+
+## Framework Desktop observations — 18 July 2026
+
+These smoke-sized observations were recorded on the configured Framework Desktop with an
+AMD Radeon 8060S (`gfx1151`), ROCm 7.2. They establish feasibility, not long-running
+acceptance.
+
+### Gemma 4 12B SceneChat
+
+`google/gemma-4-12B-it@12ace6d648d72bd41519e140f1185f34d38c7e3d` loaded through
+`Gemma4UnifiedProcessor` and `Gemma4UnifiedForConditionalGeneration` using Transformers
+5.13.0 and Torch 2.9.1 ROCm 7.2.1.
+
+- model load: 10.5256 seconds; synthetic warm-up: 1.4566 seconds;
+- three identical 256-by-256 structured SceneChat requests: 15.6804, 15.6471 and
+  15.6957 seconds, averaging 15.6744 seconds;
+- each request used 566 prompt tokens and generated 82 completion tokens;
+- steady allocated device memory: 24,109,280,768 bytes; peak: 24,473,772,032 bytes.
+
+Run the focused workload with `scripts/benchmark_scenechat_profile.ps1` while the selected
+12B worker is ready.
+
+### Moshiko speech
+
+`kyutai/moshiko-pytorch-bf16@2bfc9ae6e89079a5cc7ed2a68436010d91a3d289` loaded with
+Moshi 0.2.13 and the same ROCm Torch build. A five-second real-time synthetic-silence stream
+produced the fixed Moshiko greeting without microphone capture:
+
+- WebSocket session ready: 0.1229 seconds;
+- first response audio: 0.5494 seconds; first text token: 1.3910 seconds;
+- 88,320 bytes of PCM16 output and the transcript `Hey, how are you doing?`;
+- the management compatibility-smoke path independently returned audio in 1.2748 seconds;
+- GTT use while loaded: 18,614,816,768 of 125,829,120,000 bytes.
+
+Run this workload with `scripts/benchmark_moshiko_stream.py`. ROCm reported memory-efficient
+attention as experimental, so the baseline did not enable the experimental AOTriton switch.
+
+### GPT-OSS 120B
+
+No model benchmark was recorded. The cache contains only the OpenAI Transformers source
+snapshot; the pinned `ggml-org/gpt-oss-120b-GGUF` MXFP4 companion is absent. The local
+llama.cpp Vulkan build also preflighted the missing Fedora Vulkan development headers and
+`glslc`. ModelDeck did not download or convert weights and did not report a substitute result.

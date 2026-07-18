@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from modeldeck.profile_registry import profile_verified
 from modeldeck.profiles import (
     LocalAutoregressiveProfileRequest,
     LocalProfileRequest,
@@ -235,3 +236,51 @@ def test_local_q4_profile_separates_release_and_base_model_identity(tmp_path) ->
     assert profile.lifecycle == "exclusive"
     assert profile.dtype == "bfloat16"
     assert profile.settings["q4_checkpoint_dir"] == str(checkpoint_dir)
+
+
+def test_hardware_gated_local_profile_requires_matching_passing_evidence(tmp_path) -> None:
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="kyutai/moshiko-pytorch-bf16",
+            revision="revision-1",
+            alias="repartee-speech",
+            profile_name="repartee-moshiko",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="moshiko-speech",
+    )
+
+    assert profile_verified(profile, []) is False
+    assert (
+        profile_verified(
+            profile,
+            [
+                {
+                    "result": "tested-working",
+                    "evidence": {
+                        "model_id": profile.model_id,
+                        "model_revision": profile.revision,
+                        "runtime": profile.preferred_runtime,
+                    },
+                }
+            ],
+        )
+        is True
+    )
+    assert (
+        profile_verified(
+            profile,
+            [
+                {
+                    "result": "transient-failure",
+                    "evidence": {
+                        "model_id": profile.model_id,
+                        "model_revision": profile.revision,
+                        "runtime": profile.preferred_runtime,
+                    },
+                }
+            ],
+        )
+        is False
+    )

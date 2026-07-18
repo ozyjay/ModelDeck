@@ -443,8 +443,7 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
         ).expanduser()
         if not python.is_file():
             raise ValueError(
-                "Moshiko ROCm runtime is missing; run "
-                "pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1"
+                "Moshiko ROCm runtime is missing; run pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1"
             )
         cache_root = profile.settings.get("cache_root")
         if not cache_root:

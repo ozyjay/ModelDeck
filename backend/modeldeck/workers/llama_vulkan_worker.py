@@ -39,9 +39,22 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
     if not model.is_file() or not model.name.endswith("-00001-of-00003.gguf"):
         raise ValueError("The allowlisted first GPT-OSS MXFP4 GGUF shard is missing")
     command = [
-        str(executable), "--host", "127.0.0.1", "--port", str(port), "--model", str(model),
-        "--ctx-size", str(context_length), "--parallel", "1", "--n-gpu-layers", "999",
-        "--flash-attn", "on", "--jinja",
+        str(executable),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--model",
+        str(model),
+        "--ctx-size",
+        str(context_length),
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "999",
+        "--flash-attn",
+        "on",
+        "--jinja",
     ]
     if preset == "vulkan-cpu-moe":
         command.extend(["--n-cpu-moe", "20"])
@@ -117,10 +130,17 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     async def health():
         ready = await runtime.ready()
         return {
-            "protocol_version": "1", "worker_id": args.worker_id, "runtime": "llama-vulkan",
-            "generation_family": GenerationFamily.AUTOREGRESSIVE, "state": "warming" if ready else "loading",
-            "model_id": args.model_id, "model_revision": args.revision, "device": "vulkan:0",
-            "device_name": "AMD Vulkan", "rocm_version": None, "ready": ready,
+            "protocol_version": "1",
+            "worker_id": args.worker_id,
+            "runtime": "llama-vulkan",
+            "generation_family": GenerationFamily.AUTOREGRESSIVE,
+            "state": "warming" if ready else "loading",
+            "model_id": args.model_id,
+            "model_revision": args.revision,
+            "device": "vulkan:0",
+            "device_name": "AMD Vulkan",
+            "rocm_version": None,
+            "ready": ready,
         }
 
     @app.post("/warmup")
@@ -129,19 +149,30 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             return JSONResponse({"ready": False}, status_code=503)
         payload = {"prompt": "Hello", "n_predict": 1, "temperature": 0}
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                f"http://127.0.0.1:{runtime.internal_port}/completion", json=payload
-            )
+            response = await client.post(f"http://127.0.0.1:{runtime.internal_port}/completion", json=payload)
         return JSONResponse({"ready": response.is_success}, status_code=200 if response.is_success else 503)
 
     @app.get("/v1/models")
     async def models():
         return {"object": "list", "data": [{"id": args.model_id, "object": "model"}]}
 
+    @app.get("/model")
+    async def model():
+        return {
+            "model_id": args.model_id,
+            "revision": args.revision,
+            "generation_family": GenerationFamily.AUTOREGRESSIVE,
+            "local_files_only": True,
+            "trust_remote_code": False,
+            "dtype": "mxfp4",
+            "quantization": "mxfp4",
+        }
+
     @app.get("/metrics")
     async def metrics():
         return {
-            "runtime": "llama-vulkan", "execution_preset": args.execution_preset,
+            "runtime": "llama-vulkan",
+            "execution_preset": args.execution_preset,
             "load_seconds": round(time.monotonic() - runtime.started, 4),
         }
 
@@ -151,15 +182,14 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=1))
         try:
             response = await client.send(
-                client.build_request(
-                    "POST", f"http://127.0.0.1:{runtime.internal_port}{path}", json=body
-                ),
+                client.build_request("POST", f"http://127.0.0.1:{runtime.internal_port}{path}", json=body),
                 stream=bool(body.get("stream")),
             )
         except httpx.HTTPError:
             await client.aclose()
             return JSONResponse({"error": {"code": "llama_runtime_unavailable"}}, status_code=503)
         if body.get("stream"):
+
             async def filtered_stream():
                 try:
                     async for line in response.aiter_lines():
@@ -172,6 +202,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 finally:
                     await response.aclose()
                     await client.aclose()
+
             return StreamingResponse(filtered_stream(), media_type="text/event-stream")
         try:
             return JSONResponse(remove_reasoning(response.json()), status_code=response.status_code)

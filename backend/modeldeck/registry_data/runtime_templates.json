@@ -44,7 +44,7 @@
       "runtime": "llama-vulkan",
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
-      "settings": {"context_length": 8192, "maximum_new_tokens": 256, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "execution_preset": "vulkan-full"},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 256, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "execution_preset": "vulkan-full", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
       "lifecycle": "exclusive"
     },
@@ -53,7 +53,7 @@
       "runtime": "moshiko-rocm",
       "generation_family": "speech-conversation",
       "capabilities": {"chat": false, "completions": false, "streaming": true, "cancellation": true, "audio_input": true, "audio_output": true, "full_duplex": true},
-      "settings": {"sample_rate_hz": 24000, "channels": 1, "maximum_sessions": 1, "maximum_buffer_ms": 500, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180},
+      "settings": {"sample_rate_hz": 24000, "channels": 1, "maximum_sessions": 1, "maximum_buffer_ms": 500, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180, "hardware_verification_required": true},
       "cache_setting": "cache_root",
       "lifecycle": "exclusive",
       "dtype": "bfloat16"

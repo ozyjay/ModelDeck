@@ -1,6 +1,8 @@
 # Isolated Moshiko runtime for the Framework Desktop ROCm 7.2 stack.
+triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/triton-3.5.1%2Brocm7.2.1.gita272dfa8-cp312-cp312-linux_x86_64.whl#sha256=07787af1d28c273852f897bfeaa7bca29f2fa4a13ca0f28f535832b240ce7016
 torch @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1.lw.gitff65f5bc-cp312-cp312-linux_x86_64.whl#sha256=fb45ace0a27e9f0d0e3c4c6efd8932162743f8376f2aa4752a4d31ef5a1bd3d7
 moshi @ git+https://github.com/kyutai-labs/moshi.git@e6a55d2#subdirectory=moshi
 fastapi==0.139.0
 uvicorn==0.51.0
+websockets>=14,<17
 numpy>=2.0,<3

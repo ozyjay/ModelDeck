@@ -24,6 +24,7 @@ from modeldeck.profile_registry import (
     profile_allowed,
     profile_cache_identity,
     profile_uses_huggingface_cache,
+    profile_verified,
 )
 from modeldeck.profiles import (
     LOCAL_PORT_RANGE,
@@ -162,6 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         effective_provider = gateway_model.get("effective_provider")
         candidates = []
+        compatibility_tests = store.list_tests()
         for profile in request.app.state.profiles:
             if (
                 profile.id not in supervisor.workers
@@ -178,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "selected": profile.id == selected_provider,
                     "worker_state": worker["state"],
                     "gateway_ready": profile.id == effective_provider,
+                    "verified": profile_verified(profile, compatibility_tests),
                 }
             )
         candidates.sort(
@@ -233,6 +236,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 409,
                 "The selected profile does not satisfy this reserved alias contract",
             )
+        if not profile_verified(profile, request.app.state.compatibility_store.list_tests()):
+            raise HTTPException(409, "Record successful hardware compatibility evidence first")
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         if not profile_allowed(profile, policy):
             raise HTTPException(409, "Allow the selected cached model in ModelDeck first")
@@ -519,7 +524,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     client.get(f"{endpoint}/model"),
                     client.get(f"{endpoint}/metrics"),
                 )
-                if worker["generation_family"] == "autoregressive":
+                if worker["runtime"] == "llama-vulkan":
+                    trace_response = await client.post(
+                        f"{endpoint}/v1/chat/completions",
+                        json={
+                            "model": worker["alias"],
+                            "messages": [{"role": "user", "content": "Reply with the word ready."}],
+                            "max_tokens": 4,
+                            "temperature": 0,
+                            "stream": False,
+                        },
+                    )
+                elif worker["generation_family"] == "autoregressive":
                     trace_response = await client.post(
                         f"{endpoint}/native/autoregressive/trace",
                         json={
@@ -540,6 +556,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                         },
                     )
+                elif worker["generation_family"] == "speech-conversation":
+                    trace_response = await client.post(f"{endpoint}/smoke")
                 else:
                     trace_response = await client.post(
                         f"{endpoint}/v1/refine",
@@ -557,7 +575,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             metrics_payload = metrics_response.json()
             trace_payload = trace_response.json()
             smoke_evidence = (
-                trace_payload.get("events") or trace_payload.get("frames") or trace_payload.get("ok")
+                trace_payload.get("events")
+                or trace_payload.get("frames")
+                or trace_payload.get("ok")
+                or trace_payload.get("choices")
             )
             if not smoke_evidence:
                 raise RuntimeError("Smoke request returned no generation evidence")
@@ -598,7 +619,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "warmup_result": "success" if health_payload.get("ready") else "not-confirmed",
             "smoke_result": "success" if result == "tested-working" else "failed",
             "cold_load_seconds": metrics_payload.get("load_seconds"),
-            "first_output_seconds": trace_payload.get("metrics", {}).get("first_token_seconds"),
+            "first_output_seconds": (
+                trace_payload.get("metrics", {}).get("first_token_seconds")
+                or trace_payload.get("metrics", {}).get("first_output_seconds")
+            ),
             "throughput_tokens_per_second": trace_payload.get("metrics", {}).get("tokens_per_second"),
             "peak_memory_bytes": metrics_payload.get("peak_memory_allocated_bytes"),
             "steady_memory_bytes": metrics_payload.get("memory_allocated_bytes"),
