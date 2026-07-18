@@ -24,6 +24,23 @@ def test_llama_command_uses_only_fixed_vulkan_presets(monkeypatch, tmp_path) -> 
         llama_command(model=model, port=9630, context_length=8192, preset="shell")
 
 
+def test_llama_command_accepts_official_consolidated_mxfp4(monkeypatch, tmp_path) -> None:
+    executable = tmp_path / "llama-server"
+    executable.write_bytes(b"binary")
+    model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
+    model.write_bytes(b"gguf")
+    monkeypatch.setattr(llama_vulkan_worker, "fixed_llama_server", lambda: executable)
+
+    command = llama_command(
+        model=model,
+        port=9630,
+        context_length=8192,
+        preset="vulkan-full",
+    )
+
+    assert command[command.index("--model") + 1] == str(model)
+
+
 def test_llama_response_filter_removes_reasoning_channels() -> None:
     payload = {
         "choices": [

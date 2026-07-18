@@ -42,6 +42,16 @@ def _snapshot_complete(snapshot: Path) -> bool:
 def _artifacts(snapshot: Path, repo_id: str) -> list[dict[str, Any]]:
     if repo_id != "ggml-org/gpt-oss-120b-GGUF":
         return []
+    consolidated = snapshot / "gpt-oss-120b-MXFP4.gguf"
+    if consolidated.is_file():
+        return [
+            {
+                "artifact_id": "gpt-oss-120b-mxfp4",
+                "kind": "gguf",
+                "format": "mxfp4",
+                "filenames": [consolidated.name],
+            }
+        ]
     shards = sorted(snapshot.glob("gpt-oss-120b-mxfp4-*-of-*.gguf"))
     if len(shards) != 3:
         return []
@@ -112,7 +122,10 @@ def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | Non
                 "Supported by the pinned Repartee llama.cpp Vulkan runtime; "
                 "hardware verification is required."
             )
-        return None, "The GPT-OSS MXFP4 GGUF snapshot must contain all three shards."
+        return None, (
+            "The GPT-OSS MXFP4 GGUF snapshot must contain the official consolidated "
+            "artefact or all three legacy shards."
+        )
     try:
         q4_release = inspect_modeldeck_q4_release(snapshot)
     except Q4ReleaseError as error:

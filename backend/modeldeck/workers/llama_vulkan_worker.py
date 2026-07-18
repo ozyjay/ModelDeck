@@ -36,8 +36,12 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
             "Pinned llama.cpp Vulkan runtime is missing; run "
             "pwsh -NoProfile -File scripts/setup_llama_vulkan.ps1"
         )
-    if not model.is_file() or not model.name.endswith("-00001-of-00003.gguf"):
-        raise ValueError("The allowlisted first GPT-OSS MXFP4 GGUF shard is missing")
+    allowed_names = {
+        "gpt-oss-120b-MXFP4.gguf",
+        "gpt-oss-120b-mxfp4-00001-of-00003.gguf",
+    }
+    if not model.is_file() or model.name not in allowed_names:
+        raise ValueError("The allowlisted GPT-OSS MXFP4 GGUF artefact is missing")
     command = [
         str(executable),
         "--host",

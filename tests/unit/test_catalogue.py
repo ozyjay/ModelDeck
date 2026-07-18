@@ -156,6 +156,24 @@ def test_gpt_oss_source_points_to_companion_and_complete_gguf_is_configurable(tm
     assert runnable["artifacts"][0]["artifact_id"] == "gpt-oss-120b-mxfp4"
 
 
+def test_gpt_oss_consolidated_gguf_is_configurable(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--ggml-org--gpt-oss-120b-GGUF" / "snapshots" / "consolidated"
+    snapshot.mkdir(parents=True)
+    (snapshot / "gpt-oss-120b-MXFP4.gguf").write_bytes(b"gguf")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] == "gpt-oss-llama-vulkan"
+    assert model["artifacts"] == [
+        {
+            "artifact_id": "gpt-oss-120b-mxfp4",
+            "kind": "gguf",
+            "format": "mxfp4",
+            "filenames": ["gpt-oss-120b-MXFP4.gguf"],
+        }
+    ]
+
+
 def test_identifies_diffusiongemma_configuration_support(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--google--diffusiongemma" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)
