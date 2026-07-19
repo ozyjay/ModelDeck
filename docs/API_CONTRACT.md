@@ -60,7 +60,10 @@ an activated revision cannot be deleted.
 .../revisions/{revision}` retrieves one revision. `POST .../revisions/{revision}/restore`
 copies historical content into a new draft revision; it never rewrites history. `POST
 .../revisions/{revision}/activate` validates and atomically reactivates that exact revision,
-providing a direct routing rollback.
+providing a direct routing rollback. `DELETE .../revisions/{revision}` discards only the
+latest inactive draft and reveals the preceding revision; discarded revision numbers are
+not reused. Deleting the demo-set endpoint removes the entire set and its revision history,
+and remains blocked while any revision is active.
 
 `POST /api/demo-sets/{demo_set_id}/validate` checks deployment, capability, policy, and
 compatibility-evidence requirements. `POST .../plan` adds an advisory worker transition

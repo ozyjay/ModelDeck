@@ -84,6 +84,7 @@ class CompatibilityStore:
                     revision INTEGER NOT NULL,
                     document_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    discarded_at TEXT,
                     PRIMARY KEY (demo_set_id, revision)
                 );
                 CREATE TABLE IF NOT EXISTS active_demo_set (
@@ -95,6 +96,11 @@ class CompatibilityStore:
                 );
                 """
             )
+            revision_columns = {
+                row[1] for row in database.execute("PRAGMA table_info(demo_set_revisions)").fetchall()
+            }
+            if "discarded_at" not in revision_columns:
+                database.execute("ALTER TABLE demo_set_revisions ADD COLUMN discarded_at TEXT")
 
     def list_demo_sets(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -105,7 +111,7 @@ class CompatibilityStore:
                 "revisions.created_at, active.demo_set_id IS NOT NULL, active.revision "
                 "FROM demo_set_revisions AS revisions "
                 "JOIN (SELECT demo_set_id, MAX(revision) AS revision FROM demo_set_revisions "
-                "GROUP BY demo_set_id) AS latest "
+                "WHERE discarded_at IS NULL GROUP BY demo_set_id) AS latest "
                 "ON latest.demo_set_id = revisions.demo_set_id AND latest.revision = revisions.revision "
                 "LEFT JOIN active_demo_set AS active ON active.singleton_id = 1 "
                 "AND active.demo_set_id = revisions.demo_set_id "
@@ -129,13 +135,13 @@ class CompatibilityStore:
             if revision is None:
                 row = database.execute(
                     "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                    "WHERE demo_set_id = ? ORDER BY revision DESC LIMIT 1",
+                    "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC LIMIT 1",
                     (demo_set_id,),
                 ).fetchone()
             else:
                 row = database.execute(
                     "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                    "WHERE demo_set_id = ? AND revision = ?",
+                    "WHERE demo_set_id = ? AND revision = ? AND discarded_at IS NULL",
                     (demo_set_id, revision),
                 ).fetchone()
             active = database.execute(
@@ -158,7 +164,7 @@ class CompatibilityStore:
         with sqlite3.connect(self.path) as database:
             rows = database.execute(
                 "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                "WHERE demo_set_id = ? ORDER BY revision DESC",
+                "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC",
                 (demo_set_id,),
             ).fetchall()
             active = database.execute(
@@ -192,6 +198,35 @@ class CompatibilityStore:
                 (demo_set_id, revision, json.dumps(dict(document), sort_keys=True), created_at),
             )
         return self.get_demo_set(demo_set_id, revision)  # type: ignore[return-value]
+
+    def discard_latest_demo_set_revision(self, demo_set_id: str, revision: int) -> dict[str, Any]:
+        discarded_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT revision FROM demo_set_revisions "
+                "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC",
+                (demo_set_id,),
+            ).fetchall()
+            if not rows or revision not in {int(row[0]) for row in rows}:
+                raise KeyError("Unknown demo set revision")
+            if int(rows[0][0]) != revision:
+                raise RuntimeError("Only the latest draft revision can be discarded")
+            active = database.execute(
+                "SELECT revision FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
+                (demo_set_id,),
+            ).fetchone()
+            if active is not None and int(active[0]) == revision:
+                raise RuntimeError("The active demo set revision cannot be discarded")
+            if len(rows) == 1:
+                raise RuntimeError("Delete the demo set instead of discarding its only revision")
+            database.execute(
+                "UPDATE demo_set_revisions SET discarded_at = ? WHERE demo_set_id = ? AND revision = ?",
+                (discarded_at, demo_set_id, revision),
+            )
+        restored = self.get_demo_set(demo_set_id)
+        if restored is None:  # pragma: no cover - protected by the remaining-revision check
+            raise RuntimeError("The preceding demo set revision could not be restored")
+        return restored
 
     def delete_demo_set(self, demo_set_id: str) -> bool:
         with sqlite3.connect(self.path) as database:

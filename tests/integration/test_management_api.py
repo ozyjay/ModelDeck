@@ -151,6 +151,44 @@ async def test_demo_sets_are_versioned_validated_planned_and_activated(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_latest_inactive_demo_set_revision_can_be_discarded(tmp_path: Path) -> None:
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    definition = {
+        "id": "draft-discard",
+        "display_name": "Draft discard",
+        "description": "First revision.",
+        "demos": [],
+        "routes": [],
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post("/api/demo-sets", json=definition)
+            activated = await client.post("/api/demo-sets/draft-discard/activate")
+            definition["description"] = "Disposable draft."
+            revised = await client.put("/api/demo-sets/draft-discard", json=definition)
+            discarded = await client.delete("/api/demo-sets/draft-discard/revisions/2")
+            history = await client.get("/api/demo-sets/draft-discard/revisions")
+            active_discard = await client.delete("/api/demo-sets/draft-discard/revisions/1")
+            definition["description"] = "Replacement draft."
+            replacement = await client.put("/api/demo-sets/draft-discard", json=definition)
+            discarded_lookup = await client.get("/api/demo-sets/draft-discard/revisions/2")
+
+    assert created.status_code == 201
+    assert activated.status_code == 200
+    assert revised.json()["revision"] == 2
+    assert discarded.status_code == 200
+    assert discarded.json()["discarded_revision"] == 2
+    assert discarded.json()["current"]["revision"] == 1
+    assert discarded.json()["current"]["active"] is True
+    assert [item["revision"] for item in history.json()["revisions"]] == [1]
+    assert active_discard.status_code == 409
+    assert replacement.json()["revision"] == 3
+    assert discarded_lookup.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_active_demo_routing_supersedes_legacy_selection_and_allows_safe_removal(
     tmp_path: Path,
 ) -> None:

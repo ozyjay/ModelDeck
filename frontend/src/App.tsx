@@ -626,13 +626,26 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
   };
 
   const removeSet = async () => {
-    if (!selected || !window.confirm(`Delete draft demo set ${selected.display_name}?`)) return;
+    if (!selected || !window.confirm(`Delete demo set ${selected.display_name} and all of its revision history?`)) return;
     await runAction("delete", async () => {
       await deleteJson(`/api/demo-sets/${encodeURIComponent(selected.id)}`);
       setSelectedId("");
       setDraft(null);
       await configurationChanged();
-      setFeedback({ tone: "good", message: `Deleted ${selected.display_name}.` });
+      setFeedback({ tone: "good", message: `Deleted demo set ${selected.display_name}.` });
+    });
+  };
+
+  const discardLatestDraft = async () => {
+    const precedingRevision = revisions.find((revision) => revision.revision < (selected?.revision ?? 0));
+    if (!selected || !precedingRevision || !window.confirm(`Discard revision ${selected.revision}? Revision ${precedingRevision.revision} will become the latest configuration.`)) return;
+    await runAction("discard", async () => {
+      const result = await deleteJson<{ current: DemoSet }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${selected.revision}`);
+      await configurationChanged();
+      setDraft(null);
+      setValidation(null);
+      setPlan(null);
+      setFeedback({ tone: "good", message: `Discarded draft revision ${selected.revision}. Revision ${result.current.revision} is now current.` });
     });
   };
 
@@ -700,7 +713,8 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
             <button className="secondary" disabled={pendingAction !== null} onClick={() => void validateSet()}>{pendingAction === "validate" ? "Validating…" : "Validate"}</button>
             <button className="secondary" disabled={pendingAction !== null} onClick={() => void planSet()}>{pendingAction === "plan" ? "Planning…" : "Plan activation"}</button>
             <button disabled={openDay || pendingAction !== null} onClick={() => void activateSet()}>{pendingAction === "activate" ? "Activating…" : "Activate routing"}</button>
-            <button className="secondary danger" disabled={openDay || selected.active || pendingAction !== null} onClick={() => void removeSet()}>Delete draft</button>
+            <button className="secondary danger" disabled={openDay || pendingAction !== null || selected.active_revision === selected.revision || revisions.length < 2} onClick={() => void discardLatestDraft()}>{pendingAction === "discard" ? "Discarding…" : "Discard latest draft"}</button>
+            <button className="secondary danger" disabled={openDay || selected.active || pendingAction !== null} onClick={() => void removeSet()}>Delete demo set</button>
           </div>
           {validation && <ValidationSummary validation={validation} />}
           {plan && <PlanSummary plan={plan} />}

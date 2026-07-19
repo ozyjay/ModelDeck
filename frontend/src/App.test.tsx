@@ -248,6 +248,16 @@ function mockFetch() {
     const path = String(input);
     if (managementFailure && path === "/api/hardware") return json({ detail: "Probe unavailable" }, 503);
     if (init?.method === "DELETE") {
+      if (path.includes("/revisions/")) {
+        const parts = path.split("/");
+        const id = decodeURIComponent(parts[3] ?? "");
+        const discardedRevision = Number(parts.at(-1));
+        const current = demoSets.find((candidate) => candidate.id === id)!;
+        const restoredRevision = current.active_revision ?? discardedRevision - 1;
+        const restored = { ...current, revision: restoredRevision, active: current.active_revision === restoredRevision };
+        demoSets = demoSets.map((candidate) => candidate.id === id ? restored : candidate);
+        return json({ ok: true, discarded_revision: discardedRevision, current: restored });
+      }
       if (path.startsWith("/api/demo-sets/")) {
         const id = decodeURIComponent(path.split("/").at(-1) ?? "");
         demoSets = demoSets.filter((candidate) => candidate.id !== id);
@@ -368,7 +378,9 @@ function mockFetch() {
     if (path === "/api/demo-sets") return json({ demo_sets: demoSets });
     if (path.startsWith("/api/demo-sets/") && path.endsWith("/revisions")) {
       const id = decodeURIComponent(path.split("/").at(-2) ?? "");
-      return json({ revisions: demoSets.filter((candidate) => candidate.id === id) });
+      const current = demoSets.find((candidate) => candidate.id === id);
+      const revisions = current ? [current, ...(current.active_revision !== null && current.active_revision !== current.revision ? [{ ...current, revision: current.active_revision, active: true }] : [])] : [];
+      return json({ revisions });
     }
     if (path.includes("/routes/") && path.endsWith("/status")) {
       const parts = path.split("/");
@@ -471,6 +483,14 @@ describe("ModelDeck operator console", () => {
     expect(await screen.findByText("Gateway ready")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Smoke route" }));
     expect(await screen.findByText(/passed through qwen-small-rocm/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Public model alias"), { target: { value: "draft-chat" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save new revision" }));
+    expect(await screen.findByText("Saved Open Day demos revision 3.")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Discard latest draft" }));
+    expect(window.confirm).toHaveBeenCalledWith("Discard revision 3? Revision 2 will become the latest configuration.");
+    expect(await screen.findByText("Discarded draft revision 3. Revision 2 is now current.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("link", { name: "Workers" }));
     expect(await screen.findByText("Managed by Demo routes")).toBeInTheDocument();

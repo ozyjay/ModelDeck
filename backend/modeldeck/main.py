@@ -462,6 +462,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Unknown demo set revision")
         return _demo_set_response(record)
 
+    @app.delete("/api/demo-sets/{demo_set_id}/revisions/{revision}")
+    async def discard_demo_set_revision(demo_set_id: str, revision: int, request: Request):
+        _require_configuration_mutable(request)
+        try:
+            restored = request.app.state.compatibility_store.discard_latest_demo_set_revision(
+                demo_set_id, revision
+            )
+        except KeyError as error:
+            raise HTTPException(404, str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
+        return {
+            "ok": True,
+            "discarded_revision": revision,
+            "current": _demo_set_response(restored),
+        }
+
     @app.post("/api/demo-sets", status_code=201)
     async def create_demo_set(payload: DemoSetDefinition, request: Request):
         _require_configuration_mutable(request)
