@@ -85,6 +85,37 @@ export interface Deployment {
   worker: Worker | null;
 }
 
+export interface DeploymentUsage {
+  deployment_id: string;
+  source: "packaged" | "local";
+  worker_state: WorkerState | "unregistered";
+  route_bindings: Array<{
+    demo_set_id: string;
+    demo_set_display_name: string;
+    revision: number;
+    route_id: string;
+    route_display_name: string;
+    public_model: string;
+    state: "active" | "draft";
+    priority: number;
+  }>;
+  legacy_aliases: Array<{
+    alias: string;
+    display_name: string;
+    selected_provider: string;
+    explicit_selection: boolean;
+    effective: boolean;
+  }>;
+  blocking_dependencies: Array<{
+    kind: "demo-route" | "legacy-alias" | "worker";
+    id: string;
+    label: string;
+    authority: string;
+    remediation: string;
+  }>;
+  removable: boolean;
+}
+
 export interface DemoAdapter {
   id: string;
   display_name: string;
@@ -316,9 +347,13 @@ export interface ProviderSelection {
   display_name: string;
   default_provider: string | null;
   explicit_selection: boolean;
-  selected_provider: string;
+  selected_provider: string | null;
   effective_provider: string | null;
   gateway_ready: boolean;
+  routing_authority: "active-demo-set" | "legacy-selection";
+  superseded_by_active_demo_set: boolean;
+  active_demo_set_id: string | null;
+  active_demo_set_revision: number | null;
   candidates: ProviderCandidate[];
 }
 

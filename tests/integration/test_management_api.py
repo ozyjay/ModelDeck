@@ -107,6 +107,7 @@ async def test_demo_sets_are_versioned_validated_planned_and_activated(monkeypat
         ) as client:
             deployments = await client.get("/api/deployments")
             created = await client.post("/api/demo-sets", json=definition)
+            usage = await client.get("/api/deployments/qwen-small-rocm/usage")
             validated = await client.post("/api/demo-sets/my-open-day/validate")
             planned = await client.post("/api/demo-sets/my-open-day/plan")
             activated = await client.post("/api/demo-sets/my-open-day/activate")
@@ -124,6 +125,14 @@ async def test_demo_sets_are_versioned_validated_planned_and_activated(monkeypat
     assert any(item["id"] == "qwen-small-rocm" for item in deployments.json())
     assert created.status_code == 201
     assert created.json()["revision"] == 1
+    assert any(
+        binding["demo_set_id"] == "my-open-day" and binding["route_id"] == "chat-route"
+        for binding in usage.json()["route_bindings"]
+    )
+    assert any(
+        dependency["kind"] == "demo-route" and dependency["id"] == "my-open-day@1:chat-route"
+        for dependency in usage.json()["blocking_dependencies"]
+    )
     assert validated.json()["valid"] is True
     assert planned.json()["start_required"] == ["qwen-small-rocm"]
     assert activated.json()["routing"]["routes"][0]["public_model"] == "my-chat"
@@ -139,6 +148,68 @@ async def test_demo_sets_are_versioned_validated_planned_and_activated(monkeypat
     assert inactive_status.json()["active"] is False
     assert active_status.json()["ready"] is True
     assert route_smoke.json()["provider"] == "qwen-small-rocm"
+
+
+@pytest.mark.asyncio
+async def test_active_demo_routing_supersedes_legacy_selection_and_allows_safe_removal(
+    tmp_path: Path,
+) -> None:
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        packaged = next(
+            profile for profile in app.state.profiles if profile.id == "scenechat-gemma4-e2b-rocm"
+        )
+        local = packaged.model_copy(
+            update={
+                "id": "local-scenechat-removal-test",
+                "alias": "scenechat-removal-test",
+                "port": 8698,
+            }
+        )
+        app.state.profiles.append(local)
+        app.state.supervisor.register_profile(local)
+        store = app.state.compatibility_store
+        store.save_model_profile(local.model_dump(mode="json"))
+        store.set_gateway_provider_selection("scenechat-vision", local.id)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            usage_before = await client.get(f"/api/deployments/{local.id}/usage")
+            blocked = await client.delete(f"/api/profiles/{local.id}")
+
+            seeded = store.get_demo_set("open-day-demos")
+            assert seeded is not None
+            store.activate_demo_set(
+                "open-day-demos",
+                seeded["revision"],
+                {
+                    "demo_set_id": "open-day-demos",
+                    "revision": seeded["revision"],
+                    "routes": [],
+                },
+            )
+
+            selection = await client.get("/api/gateway/provider-selections/scenechat-vision")
+            rejected_legacy_change = await client.post(
+                "/api/gateway/provider-selections/scenechat-vision",
+                json={"profile_id": packaged.id},
+            )
+            usage_after = await client.get(f"/api/deployments/{local.id}/usage")
+            removed = await client.delete(f"/api/profiles/{local.id}")
+
+    assert usage_before.json()["removable"] is False
+    assert usage_before.json()["legacy_aliases"][0]["effective"] is True
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["dependencies"][0]["kind"] == "legacy-alias"
+    assert selection.json()["routing_authority"] == "active-demo-set"
+    assert selection.json()["superseded_by_active_demo_set"] is True
+    assert rejected_legacy_change.status_code == 409
+    assert usage_after.json()["legacy_aliases"][0]["effective"] is False
+    assert usage_after.json()["blocking_dependencies"] == []
+    assert usage_after.json()["removable"] is True
+    assert removed.status_code == 200
+    assert store.gateway_provider_selection("scenechat-vision") is None
 
 
 @pytest.mark.asyncio

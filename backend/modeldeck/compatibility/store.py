@@ -344,6 +344,18 @@ class CompatibilityStore:
                 (alias, profile_id, updated_at),
             )
 
+    def delete_gateway_provider_selections_for_profile(self, profile_id: str) -> list[str]:
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT alias FROM gateway_provider_selection WHERE profile_id = ? ORDER BY alias",
+                (profile_id,),
+            ).fetchall()
+            database.execute(
+                "DELETE FROM gateway_provider_selection WHERE profile_id = ?",
+                (profile_id,),
+            )
+        return [str(row[0]) for row in rows]
+
     def record_test(
         self,
         evidence: Mapping[str, Any],

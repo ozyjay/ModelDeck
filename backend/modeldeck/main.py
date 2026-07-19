@@ -164,6 +164,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = request.app.state.compatibility_store
         stored_selection = store.gateway_provider_selection(alias)
         selected_provider = stored_selection or contract.default_provider
+        active_snapshot = store.active_routing_snapshot()
+        superseded = active_snapshot is not None
         policy = store.list_model_cache_policy()
         supervisor = request.app.state.supervisor
         gateway = await _gateway_status(request.app.state.settings)
@@ -207,6 +209,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "selected_provider": selected_provider,
             "effective_provider": effective_provider,
             "gateway_ready": gateway_model.get("ready") is True,
+            "routing_authority": "active-demo-set" if superseded else "legacy-selection",
+            "superseded_by_active_demo_set": superseded,
+            "active_demo_set_id": active_snapshot.get("demo_set_id") if active_snapshot else None,
+            "active_demo_set_revision": active_snapshot.get("revision") if active_snapshot else None,
             "candidates": candidates,
         }
 
@@ -233,6 +239,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
     ):
         _require_configuration_mutable(request)
+        if request.app.state.compatibility_store.active_routing_snapshot() is not None:
+            raise HTTPException(
+                409,
+                "The active demo set is the routing authority; edit and activate its route bindings",
+            )
         contract = selectable_aliases().get(alias)
         if contract is None:
             raise HTTPException(404, "Unknown selectable reserved gateway alias")
@@ -305,15 +316,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if profile_cache_identity(profile) == (payload.model_id, payload.revision)
             and profile_uses_huggingface_cache(profile)
         ]
-        selected_providers = {
-            request.app.state.compatibility_store.gateway_provider_selection(alias)
-            or contract.default_provider
-            for alias, contract in selectable_aliases().items()
-        }
-        if not payload.allowed and any(profile.id in selected_providers for profile in matching_profiles):
+        usage = _deployment_usage_map(request)
+        dependencies = [
+            dependency
+            for profile in matching_profiles
+            for dependency in usage[profile.id]["blocking_dependencies"]
+            if dependency["kind"] == "legacy-alias"
+            or (dependency["kind"] == "demo-route" and dependency["authority"] == "active")
+        ]
+        if not payload.allowed and dependencies:
             raise HTTPException(
                 409,
-                "Select a different reserved-alias provider before disallowing this model",
+                {
+                    "message": "Reassign this model's deployment dependencies before disallowing it",
+                    "dependencies": dependencies,
+                },
             )
         supervisor = request.app.state.supervisor
         if not payload.allowed:
@@ -399,6 +416,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             for profile in request.app.state.profiles
         ]
+
+    @app.get("/api/deployments/usage")
+    async def list_deployment_usage(request: Request):
+        return {"deployments": list(_deployment_usage_map(request).values())}
+
+    @app.get("/api/deployments/{deployment_id}/usage")
+    async def get_deployment_usage(deployment_id: str, request: Request):
+        usage = _deployment_usage_map(request).get(deployment_id)
+        if usage is None:
+            raise HTTPException(404, "Unknown deployment")
+        return usage
 
     @app.get("/api/demo-adapters")
     async def list_demo_adapters():
@@ -668,24 +696,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if profile is None:
             raise HTTPException(404, "Unknown local runtime configuration")
-        selected_alias = next(
-            (
-                alias
-                for alias in selectable_aliases()
-                if request.app.state.compatibility_store.gateway_provider_selection(alias) == profile_id
-            ),
-            None,
-        )
-        if selected_alias is not None:
+        usage = _deployment_usage_map(request)[profile_id]
+        if usage["blocking_dependencies"]:
             raise HTTPException(
                 409,
-                f"Select a different {selected_alias} provider before removing this runtime configuration",
+                {
+                    "message": "Reassign this deployment's routing dependencies before removing it",
+                    "deployment_id": profile_id,
+                    "dependencies": usage["blocking_dependencies"],
+                },
             )
         if profile_id in request.app.state.supervisor.workers:
             try:
                 await request.app.state.supervisor.remove_profile(profile_id)
             except RuntimeError as error:
                 raise HTTPException(409, str(error)) from error
+        request.app.state.compatibility_store.delete_gateway_provider_selections_for_profile(profile_id)
         request.app.state.compatibility_store.delete_model_profile(profile_id)
         request.app.state.profiles.remove(profile)
         return {
@@ -1070,6 +1096,128 @@ async def _smoke_demo_route(route: DemoRouteContract, settings: Settings) -> dic
         "evidence": evidence_field,
         "duration_seconds": round(asyncio.get_running_loop().time() - started, 4),
     }
+
+
+def _deployment_usage_map(request: Request) -> dict[str, dict]:
+    store = request.app.state.compatibility_store
+    supervisor = request.app.state.supervisor
+    built_in_ids = request.app.state.built_in_profile_ids
+    active_snapshot = store.active_routing_snapshot()
+    active_key = (
+        (active_snapshot.get("demo_set_id"), active_snapshot.get("revision"))
+        if active_snapshot is not None
+        else None
+    )
+    usage = {
+        profile.id: {
+            "deployment_id": profile.id,
+            "source": "packaged" if profile.id in built_in_ids else "local",
+            "worker_state": (
+                supervisor.get_worker(profile.id)["state"]
+                if profile.id in supervisor.workers
+                else "unregistered"
+            ),
+            "route_bindings": [],
+            "legacy_aliases": [],
+            "blocking_dependencies": [],
+            "removable": False,
+        }
+        for profile in request.app.state.profiles
+    }
+    seen_revisions: set[tuple[str, int]] = set()
+
+    def add_route_bindings(record: dict, state: str) -> None:
+        definition = DemoSetDefinition.model_validate(record["definition"])
+        key = (definition.id, int(record["revision"]))
+        if key in seen_revisions:
+            return
+        seen_revisions.add(key)
+        for route in definition.routes:
+            for binding in route.providers:
+                if binding.deployment_id not in usage:
+                    continue
+                reference = {
+                    "demo_set_id": definition.id,
+                    "demo_set_display_name": definition.display_name,
+                    "revision": record["revision"],
+                    "route_id": route.id,
+                    "route_display_name": route.display_name,
+                    "public_model": route.public_model,
+                    "state": state,
+                    "priority": binding.priority,
+                }
+                usage[binding.deployment_id]["route_bindings"].append(reference)
+                usage[binding.deployment_id]["blocking_dependencies"].append(
+                    {
+                        "kind": "demo-route",
+                        "id": f"{definition.id}@{record['revision']}:{route.id}",
+                        "label": f"{definition.display_name} / {route.display_name}",
+                        "authority": state,
+                        "remediation": "Reassign or remove this provider in Demo routes",
+                    }
+                )
+
+    for record in store.list_demo_sets():
+        state = "active" if active_key == (record["definition"]["id"], record["revision"]) else "draft"
+        add_route_bindings(record, state)
+    if active_key is not None and active_key not in seen_revisions:
+        active_record = store.get_demo_set(str(active_key[0]), int(active_key[1]))
+        if active_record is not None:
+            add_route_bindings(active_record, "active")
+
+    legacy_effective = active_snapshot is None
+    for alias, contract in selectable_aliases().items():
+        stored = store.gateway_provider_selection(alias)
+        selected = stored or contract.default_provider
+        if selected not in usage:
+            continue
+        reference = {
+            "alias": alias,
+            "display_name": contract.display_name,
+            "selected_provider": selected,
+            "explicit_selection": stored is not None,
+            "effective": legacy_effective,
+        }
+        usage[selected]["legacy_aliases"].append(reference)
+        if legacy_effective:
+            usage[selected]["blocking_dependencies"].append(
+                {
+                    "kind": "legacy-alias",
+                    "id": alias,
+                    "label": contract.display_name,
+                    "authority": "legacy-selection",
+                    "remediation": "Select a different provider in Workers",
+                }
+            )
+
+    active_worker_states = {
+        "validating",
+        "starting",
+        "loading",
+        "warming",
+        "ready",
+        "busy",
+        "degraded",
+        "stopping",
+        "orphaned",
+    }
+    for deployment_id, record in usage.items():
+        if record["worker_state"] in active_worker_states:
+            record["blocking_dependencies"].append(
+                {
+                    "kind": "worker",
+                    "id": deployment_id,
+                    "label": f"Worker is {record['worker_state']}",
+                    "authority": "process",
+                    "remediation": "Stop the worker before removal",
+                }
+            )
+        record["removable"] = (
+            record["source"] == "local"
+            and not record["blocking_dependencies"]
+            and not request.app.state.settings.open_day
+        )
+    return usage
 
 
 def _validate_demo_definition(definition: DemoSetDefinition, request: Request) -> dict:

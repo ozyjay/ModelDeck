@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, DemoAdapter, DemoSet, Deployment, GatewayStatus, ModelEntry, Profile, ProviderSelection, Worker } from "./types";
+import type { CompatibilityTest, DemoAdapter, DemoSet, Deployment, DeploymentUsage, GatewayStatus, ModelEntry, Profile, ProviderSelection, Worker } from "./types";
 
 const capabilities: Worker["capabilities"] = {
   chat: true,
@@ -186,6 +186,10 @@ let scenechatSelection: ProviderSelection = {
   selected_provider: "scenechat-gemma4-e2b-rocm",
   effective_provider: null,
   gateway_ready: false,
+  routing_authority: "legacy-selection",
+  superseded_by_active_demo_set: false,
+  active_demo_set_id: null,
+  active_demo_set_revision: null,
   candidates: [
     {
       profile_id: "scenechat-gemma4-e2b-rocm",
@@ -223,6 +227,18 @@ class MockEventSource {
 
 function json(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function deploymentUsages(): DeploymentUsage[] {
+  return [deployment.id, ...localProfiles.map((profile) => profile.id)].map((deploymentId) => {
+    const routeBindings = demoSets.flatMap((demoSet) => demoSet.routes.flatMap((route) => route.providers.filter((provider) => provider.deployment_id === deploymentId).map((provider) => ({ demo_set_id: demoSet.id, demo_set_display_name: demoSet.display_name, revision: demoSet.revision, route_id: route.id, route_display_name: route.display_name, public_model: route.public_model, state: demoSet.active_revision === demoSet.revision ? "active" as const : "draft" as const, priority: provider.priority }))));
+    const legacyAliases = scenechatSelection.selected_provider === deploymentId ? [{ alias: scenechatSelection.alias, display_name: scenechatSelection.display_name, selected_provider: deploymentId, explicit_selection: scenechatSelection.explicit_selection, effective: !scenechatSelection.superseded_by_active_demo_set }] : [];
+    const blockingDependencies: DeploymentUsage["blocking_dependencies"] = [
+      ...routeBindings.map((route) => ({ kind: "demo-route" as const, id: `${route.demo_set_id}@${route.revision}:${route.route_id}`, label: `${route.demo_set_display_name} / ${route.route_display_name}`, authority: route.state, remediation: "Reassign or remove this provider in Demo routes" })),
+      ...legacyAliases.filter((alias) => alias.effective).map((alias) => ({ kind: "legacy-alias" as const, id: alias.alias, label: alias.display_name, authority: "legacy-selection", remediation: "Select a different provider in Workers" })),
+    ];
+    return { deployment_id: deploymentId, source: deploymentId.startsWith("local-") ? "local" as const : "packaged" as const, worker_state: "stopped" as const, route_bindings: routeBindings, legacy_aliases: legacyAliases, blocking_dependencies: blockingDependencies, removable: deploymentId.startsWith("local-") && blockingDependencies.length === 0 };
+  });
 }
 
 function mockFetch() {
@@ -266,6 +282,14 @@ function mockFetch() {
       if (path.endsWith("/activate") && path.startsWith("/api/demo-sets/")) {
         const id = path.split("/").at(-2);
         demoSets = demoSets.map((candidate) => ({ ...candidate, active: candidate.id === id, active_revision: candidate.id === id ? candidate.revision : null }));
+        const active = demoSets.find((candidate) => candidate.id === id);
+        scenechatSelection = {
+          ...scenechatSelection,
+          routing_authority: "active-demo-set",
+          superseded_by_active_demo_set: true,
+          active_demo_set_id: active?.id ?? null,
+          active_demo_set_revision: active?.revision ?? null,
+        };
         return json({ plan: { desired_primary_deployments: [worker.id], start_required: [worker.id], stop_required: [], warnings: [], applies_process_changes: false } });
       }
       if (path === "/api/profiles") {
@@ -338,6 +362,7 @@ function mockFetch() {
     if (path === "/api/workers") return json([currentWorker, ...additionalWorkers]);
     if (path === "/api/profiles") return json([profile, ...localProfiles]);
     if (path === "/api/deployments") return json([deployment]);
+    if (path === "/api/deployments/usage") return json({ deployments: deploymentUsages() });
     if (path === "/api/demo-sets") return json({ demo_sets: demoSets });
     if (path.startsWith("/api/demo-sets/") && path.endsWith("/revisions")) {
       const id = decodeURIComponent(path.split("/").at(-2) ?? "");
@@ -379,6 +404,10 @@ describe("ModelDeck operator console", () => {
       selected_provider: "scenechat-gemma4-e2b-rocm",
       effective_provider: null,
       gateway_ready: false,
+      routing_authority: "legacy-selection",
+      superseded_by_active_demo_set: false,
+      active_demo_set_id: null,
+      active_demo_set_revision: null,
       candidates: [
         {
           profile_id: "scenechat-gemma4-e2b-rocm",
@@ -433,6 +462,10 @@ describe("ModelDeck operator console", () => {
     expect(await screen.findByText("Gateway ready")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Smoke route" }));
     expect(await screen.findByText(/passed through qwen-small-rocm/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Workers" }));
+    expect(await screen.findByText("Managed by Demo routes")).toBeInTheDocument();
+    expect(screen.getByLabelText("Physical provider")).toBeDisabled();
   });
 
   it("shows a structured gateway unavailable state without breaking management", async () => {
@@ -454,7 +487,7 @@ describe("ModelDeck operator console", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
 
-    expect(screen.getByText("Reserved alias: scenechat-vision")).toBeInTheDocument();
+    expect(screen.getByText("Legacy alias: scenechat-vision")).toBeInTheDocument();
     expect(screen.getByText("None — no fallback")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Physical provider"), {
       target: { value: "local-gemma-4-26b" },

@@ -83,6 +83,14 @@ an unavailable provider still produces the structured local error. Until the fir
 set is activated, the legacy reserved-alias registry remains the effective routing source
 for backwards compatibility.
 
+The active demo-set snapshot is the sole routing authority once it exists. Stored legacy
+provider selections remain visible for compatibility diagnostics but are marked as
+superseded and cannot be edited. Management also derives a consolidated dependency view
+for each deployment from active and latest-draft route bindings, effective legacy aliases
+and worker state. The same view drives the operator console's **Used by** guidance and
+server-side removal checks, preventing configuration deletion from leaving dangling
+routes.
+
 Immutable history supports two distinct recovery operations: restoring old content creates
 a new editable draft revision, while activating an exact historical revision performs an
 atomic routing rollback. Route rehearsal queries the live gateway advertisement and can

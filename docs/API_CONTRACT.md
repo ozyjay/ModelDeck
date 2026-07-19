@@ -31,8 +31,10 @@ contains only an existing profile ID. Management accepts registered, policy-allo
 profiles satisfying the selected alias's packaged family and capability contract. The response
 reports selection, worker state, gateway readiness, and eligible profiles without
 settings, filesystem paths, endpoints, or credentials. Selection does not start or stop
-workers. A selected local profile must be replaced before its configuration can be
-removed or its cached revision disallowed.
+workers. When a demo set is active, its route snapshot is the routing authority: legacy
+selections are reported as superseded and cannot be changed until demo routing is
+inactive. An effective selected local profile must be replaced before its configuration
+can be removed or its cached revision disallowed.
 
 FastAPI also serves the committed operator-console assets and returns the SPA entry point
 for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
@@ -41,7 +43,12 @@ through to the frontend.
 ### Deployments and demo routes
 
 `GET /api/deployments` presents each registered deployment separately from its current
-worker process state. `GET /api/demo-adapters` lists the allowlisted protocol contracts.
+worker process state. `GET /api/deployments/usage` and `GET
+/api/deployments/{deployment_id}/usage` consolidate active and latest-draft route
+bindings, legacy alias selections and worker-state dependencies. Local deployment
+removal and cache disallow operations return structured blocking dependencies until
+those references are reassigned or the worker is stopped. `GET /api/demo-adapters`
+lists the allowlisted protocol contracts.
 Demo sets are managed through `GET` and `POST /api/demo-sets` and `GET`, `PUT`, and
 `DELETE /api/demo-sets/{demo_set_id}`. Creation and update append immutable revisions;
 an activated revision cannot be deleted.

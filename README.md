@@ -53,6 +53,10 @@ Each route card can check the live gateway alias and run a small contract smoke 
 its active provider is ready. Revision history supports restoring old content as a new
 draft or atomically reactivating an exact historical routing snapshot.
 
+See [Sharing model deployments across demos](docs/DEMO_ROUTE_HOWTO.md) for the complete
+operator workflow, including provider ordering, activation, route rehearsal, reassignment
+and safe runtime-configuration removal.
+
 For lightweight development or CI on a machine without the target GPU, run
 `pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
 fallbacks remain usable, but that mode is not a complete target deployment.

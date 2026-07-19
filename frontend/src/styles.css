@@ -194,9 +194,17 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .model-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
 .model-actions span { color: var(--muted); font-size: 0.77rem; }
 .configured-runtime-list { display: grid; gap: 0.5rem; margin-top: 0.8rem; }
-.configured-runtime-list > div { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; background: #121c29; }
+.configured-runtime-list > div { padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; background: #121c29; }
+.configured-runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .configured-runtime-list strong, .configured-runtime-list small { display: block; }
 .configured-runtime-list small { margin-top: 0.15rem; color: var(--muted); }
+.deployment-usage { margin-top: 0.65rem; padding-top: 0.65rem; border-top: 1px solid var(--line-soft); font-size: 0.76rem; }
+.deployment-usage > strong { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.deployment-usage ul { display: grid; gap: 0.35rem; margin: 0.5rem 0 0; padding: 0; list-style: none; }
+.deployment-usage li { display: flex; justify-content: space-between; gap: 0.75rem; }
+.deployment-usage p { margin: 0.5rem 0 0; color: var(--muted); }
+.deployment-usage .dependency-guidance { color: var(--warning); }
+.deployment-usage a, .section-description a { color: var(--accent); }
 .runtime-form { margin-top: 1rem; padding: 0.9rem; border: 1px solid #315744; border-radius: 0.7rem; background: #101f1a; }
 .runtime-form-heading strong, .runtime-form-heading small { display: block; }
 .runtime-form-heading small { margin-top: 0.2rem; color: var(--muted); }
@@ -270,6 +278,7 @@ select { min-width: 250px; padding: 0.62rem 2.4rem 0.62rem 0.7rem; border: 1px s
   .route-rehearsal, .revision-history article { align-items: stretch; flex-direction: column; }
   .demo-route-heading code { max-width: 100%; }
   .provider-editor-list > div, .demo-editor-list > div { align-items: stretch; flex-direction: column; }
+  .configured-runtime-heading, .deployment-usage li { align-items: stretch; flex-direction: column; }
   .provider-selection-controls { grid-template-columns: 1fr; }
   .evidence-grid { grid-template-columns: 1fr; }
   .log-toolbar { align-items: stretch; flex-direction: column; }

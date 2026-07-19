@@ -10,6 +10,7 @@ import type {
   DemoSetPlan,
   DemoSetValidation,
   Deployment,
+  DeploymentUsage,
   GatewayStatus,
   HardwareProbe,
   LocalProfileRequest,
@@ -54,6 +55,7 @@ export default function App() {
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [providerSelections, setProviderSelections] = useState<ProviderSelection[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [deploymentUsage, setDeploymentUsage] = useState<DeploymentUsage[]>([]);
   const [demoSets, setDemoSets] = useState<DemoSet[]>([]);
   const [demoAdapters, setDemoAdapters] = useState<DemoAdapter[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,6 +72,11 @@ export default function App() {
     setCompatibility(response.tests);
   }, []);
 
+  const refreshDeploymentUsage = useCallback(async () => {
+    const response = await getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage");
+    setDeploymentUsage(response.deployments);
+  }, []);
+
   const refreshGateway = useCallback(async () => {
     const [nextGateway, selections] = await Promise.all([
       getJson<GatewayStatus>("/api/gateway/status"),
@@ -80,16 +87,20 @@ export default function App() {
   }, []);
 
   const refreshDemoConfiguration = useCallback(async () => {
-    const [deploymentResponse, demoSetResponse] = await Promise.all([
+    const [deploymentResponse, demoSetResponse, usageResponse, selections] = await Promise.all([
       getJson<Deployment[]>("/api/deployments"),
       getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
+      getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
+      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
     ]);
     setDeployments(deploymentResponse);
     setDemoSets(demoSetResponse.demo_sets);
+    setDeploymentUsage(usageResponse.deployments);
+    setProviderSelections(selections.selections);
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse, usageResponse] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
@@ -97,6 +108,7 @@ export default function App() {
       getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
       getJson<Deployment[]>("/api/deployments"),
       getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
+      getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
@@ -105,13 +117,14 @@ export default function App() {
     setProviderSelections(selections.selections);
     setDeployments(deploymentResponse);
     setDemoSets(demoSetResponse.demo_sets);
+    setDeploymentUsage(usageResponse.deployments);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse] =
+      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse, usageResponse] =
         await Promise.all([
           getJson<ManagementHealth>("/api/health"),
           getJson<GatewayStatus>("/api/gateway/status"),
@@ -125,6 +138,7 @@ export default function App() {
           getJson<Deployment[]>("/api/deployments"),
           getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
           getJson<{ adapters: DemoAdapter[] }>("/api/demo-adapters"),
+          getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
         ]);
       setHealth(nextHealth);
       setGateway(nextGateway);
@@ -138,6 +152,7 @@ export default function App() {
       setDeployments(deploymentResponse);
       setDemoSets(demoSetResponse.demo_sets);
       setDemoAdapters(adapterResponse.adapters);
+      setDeploymentUsage(usageResponse.deployments);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -237,7 +252,7 @@ export default function App() {
         { profile_id: profileId },
       );
       setProviderSelections((current) => current.map((item) => item.alias === alias ? selection : item));
-      await refreshGateway();
+      await Promise.all([refreshGateway(), refreshDeploymentUsage()]);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -332,6 +347,7 @@ export default function App() {
             models={models}
             profiles={profiles}
             compatibility={compatibility}
+            deploymentUsage={deploymentUsage}
             configurationChanged={refreshConfiguration}
           />
         ) : view === "compatibility" ? (
@@ -817,13 +833,13 @@ function ProviderControl({ selection, workers, pending, selectProvider }: { sele
   const selected = selection.candidates.find((candidate) => candidate.profile_id === selection.selected_provider);
   const workerState = workers.find((worker) => worker.id === selection.selected_provider)?.state ?? selected?.worker_state ?? "stopped";
   return <section className="panel provider-selection-panel">
-    <PanelHeading title={selection.display_name} detail={`Reserved alias: ${selection.alias}`} />
-    <p className="section-description">Applications keep using <code>{selection.alias}</code>. Selecting a physical provider changes routing only; start, stop and smoke testing remain separate.</p>
+    <PanelHeading title={selection.display_name} detail={selection.superseded_by_active_demo_set ? "Managed by Demo routes" : `Legacy alias: ${selection.alias}`} />
+    <p className="section-description">Applications keep using <code>{selection.alias}</code>. {selection.superseded_by_active_demo_set ? <>The active demo set is authoritative; change this binding in <a href="/demo-routes">Demo routes</a>.</> : "This compatibility selection changes legacy routing only; start, stop and smoke testing remain separate."}</p>
     <div className="provider-selection-controls">
-      <label>Physical provider<select value={chosen} onChange={(event) => setChosen(event.target.value)}>{selection.candidates.map((candidate) => <option key={candidate.profile_id} value={candidate.profile_id}>{candidate.profile_alias} · {candidate.model_id}</option>)}</select></label>
-      <button disabled={pending || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => void selectProvider(selection.alias, chosen)}>{pending ? "Selecting…" : "Select provider"}</button>
+      <label>Physical provider<select disabled={selection.superseded_by_active_demo_set} value={chosen ?? ""} onChange={(event) => setChosen(event.target.value)}>{selection.candidates.map((candidate) => <option key={candidate.profile_id} value={candidate.profile_id}>{candidate.profile_alias} · {candidate.model_id}</option>)}</select></label>
+      <button disabled={selection.superseded_by_active_demo_set || pending || !chosen || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => { if (chosen) void selectProvider(selection.alias, chosen); }}>{pending ? "Selecting…" : "Select provider"}</button>
     </div>
-    <DefinitionList rows={[["Selected provider", selection.selected_provider], ["Worker state", humanise(workerState)], ["Gateway readiness", selection.gateway_ready ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
+    <DefinitionList rows={[["Stored compatibility selection", selection.selected_provider ?? "None"], ["Routing authority", selection.superseded_by_active_demo_set ? `${selection.active_demo_set_id} revision ${selection.active_demo_set_revision}` : "Legacy provider selection"], ["Worker state", humanise(workerState)], ["Gateway readiness", selection.gateway_ready ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
   </section>;
 }
 
@@ -866,11 +882,13 @@ function ModelsView({
   models,
   profiles,
   compatibility,
+  deploymentUsage,
   configurationChanged,
 }: {
   models: ModelEntry[];
   profiles: Profile[];
   compatibility: CompatibilityTest[];
+  deploymentUsage: DeploymentUsage[];
   configurationChanged: () => Promise<void>;
 }) {
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -966,7 +984,10 @@ function ModelsView({
             <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unknown generation family"} · {formatBytes(model.physical_size_bytes)}</p></div><StateBadge state={state} /></div>
             <p className="model-stage">{modelStageDescription(state)}</p>
             <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ...(model.base_model_id ? [["Base model", `${model.base_model_id} @ ${model.base_model_revision}`] as [string, string]] : []), ["ModelDeck use", model.modeldeck_allowed ? "Allowed" : "Disallowed"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
-            {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => <div key={profile.id}><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" disabled={pendingProfile !== null} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div>)}</div>}
+            {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => {
+              const usage = deploymentUsage.find((candidate) => candidate.deployment_id === profile.id);
+              return <div className="configured-runtime" key={profile.id}><div className="configured-runtime-heading"><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" title={usage?.blocking_dependencies.map((dependency) => dependency.remediation).join("; ") || undefined} disabled={pendingProfile !== null || !usage?.removable} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div><DeploymentUsageSummary usage={usage} /></div>;
+            })}</div>}
             {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
           </article>;
           })}</div>
@@ -974,6 +995,15 @@ function ModelsView({
       </section>
     </div>
   );
+}
+
+function DeploymentUsageSummary({ usage }: { usage?: DeploymentUsage }) {
+  if (!usage) return <p className="deployment-usage muted">Loading deployment usage…</p>;
+  const references = [
+    ...usage.route_bindings.map((route) => ({ key: `route:${route.demo_set_id}:${route.revision}:${route.route_id}`, label: `${route.demo_set_display_name} / ${route.route_display_name}`, detail: `${humanise(route.state)} route · ${route.public_model}` })),
+    ...usage.legacy_aliases.map((alias) => ({ key: `alias:${alias.alias}`, label: alias.display_name, detail: alias.effective ? "Legacy routing authority" : "Stored legacy selection · superseded" })),
+  ];
+  return <div className="deployment-usage"><strong>Used by</strong>{references.length ? <ul>{references.map((reference) => <li key={reference.key}><span>{reference.label}</span><small>{reference.detail}</small></li>)}</ul> : <p>No demo routes or compatibility aliases reference this deployment.</p>}{usage.blocking_dependencies.length > 0 && <p className="dependency-guidance">Reassign {usage.blocking_dependencies.length} blocking dependenc{usage.blocking_dependencies.length === 1 ? "y" : "ies"} before removal. <a href={usage.blocking_dependencies.some((dependency) => dependency.kind === "demo-route") ? "/demo-routes" : "/workers"}>Open configuration</a></p>}</div>;
 }
 
 function RuntimeConfigurationForm({ model, pending, cancel, submit }: { model: ModelEntry; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
