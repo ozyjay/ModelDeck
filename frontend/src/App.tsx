@@ -533,8 +533,10 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
   const [plan, setPlan] = useState<DemoSetPlan | null>(null);
   const [revisions, setRevisions] = useState<DemoSet[]>([]);
   const [routeStatuses, setRouteStatuses] = useState<Record<string, DemoRouteStatus>>({});
+  const [activeSnapshot, setActiveSnapshot] = useState<DemoSet | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "good" | "bad"; message: string } | null>(null);
   const selected = demoSets.find((item) => item.id === selectedId) ?? demoSets[0];
+  const activeReference = demoSets.find((item) => item.active_revision !== null);
 
   useEffect(() => {
     if (!selectedId && demoSets[0]) setSelectedId(demoSets[0].id);
@@ -542,6 +544,26 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
       setSelectedId(demoSets[0]?.id ?? "");
     }
   }, [demoSets, selectedId]);
+
+  useEffect(() => {
+    if (!activeReference || activeReference.active_revision === null) {
+      setActiveSnapshot(null);
+      return;
+    }
+    if (activeReference.active_revision === activeReference.revision) {
+      setActiveSnapshot(activeReference);
+      return;
+    }
+    let cancelled = false;
+    void getJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(activeReference.id)}/revisions/${activeReference.active_revision}`)
+      .then((snapshot) => {
+        if (!cancelled) setActiveSnapshot(snapshot);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveSnapshot(null);
+      });
+    return () => { cancelled = true; };
+  }, [activeReference?.active_revision, activeReference?.id, activeReference?.revision]);
 
   useEffect(() => {
     if (!selected) {
@@ -714,6 +736,7 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
     </section>
     {openDay && <div className="configuration-feedback bad" role="status">Open Day mode is locked. Review the active configuration here, but edit and activate revisions before entering booth mode.</div>}
     {feedback && <div className={`configuration-feedback ${feedback.tone}`} role="status">{feedback.message}</div>}
+    {activeSnapshot ? <ActiveGatewayRoutes demoSet={activeSnapshot} deployments={deployments} adapters={adapters} /> : <section className="notice-panel"><strong>No active gateway routes</strong><p>Activate a validated demo-set revision to publish stable model aliases to applications.</p></section>}
     <div className="demo-set-layout">
       <aside className="panel demo-set-list">
         <PanelHeading title="Demo sets" detail={`${demoSets.length} configured`} />
@@ -758,6 +781,33 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
       </section>
     </div>
   </div>;
+}
+
+function ActiveGatewayRoutes({ demoSet, deployments, adapters }: {
+  demoSet: DemoSet;
+  deployments: Deployment[];
+  adapters: DemoAdapter[];
+}) {
+  return <section className="panel active-gateway-routes" aria-label="Active gateway routes">
+    <PanelHeading title="Active gateway routes" detail={`${demoSet.display_name} · revision ${demoSet.revision}`} />
+    <p className="section-description">Applications use the public aliases below. ModelDeck resolves each alias to the first ready deployment in its ordered provider chain.</p>
+    {demoSet.routes.length ? <div className="active-route-table-wrap"><table className="active-route-table">
+      <thead><tr><th>Public alias</th><th>Demo and protocol</th><th>Deployment → worker state</th></tr></thead>
+      <tbody>{demoSet.routes.map((route) => {
+        const demo = demoSet.demos.find((item) => item.id === route.demo_id);
+        const adapter = adapters.find((item) => item.id === route.adapter_id);
+        return <tr key={route.id}>
+          <td><code>{route.public_model}</code><small>{route.display_name}</small></td>
+          <td><strong>{demo?.display_name ?? route.demo_id}</strong><small>{adapter?.display_name ?? route.adapter_id}</small></td>
+          <td>{route.providers.length ? <div className="active-provider-chain">{[...route.providers].sort((left, right) => left.priority - right.priority || left.deployment_id.localeCompare(right.deployment_id)).map((binding) => {
+            const deployment = deployments.find((item) => item.id === binding.deployment_id);
+            const state = deployment?.worker?.state ?? (deployment?.registered ? "stopped" : "unregistered");
+            return <div className="active-provider" key={binding.deployment_id}><span><strong>{deployment?.display_name ?? binding.deployment_id}</strong><small>{deployment ? deployment.id : "Missing deployment"}</small></span><StateBadge state={state} /></div>;
+          })}</div> : <span className="muted">No provider deployment</span>}</td>
+        </tr>;
+      })}</tbody>
+    </table></div> : <p className="muted">The active snapshot contains no gateway routes.</p>}
+  </section>;
 }
 
 function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, renameDeployment, save, cancel }: {

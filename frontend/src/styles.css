@@ -118,6 +118,17 @@ nav { display: grid; gap: 0.3rem; }
 .demo-set-heading h2, .demo-route-heading h3, .editor-section-heading h3, .editor-section-heading h4 { margin: 0.15rem 0; }
 .demo-set-heading p:last-child { color: var(--muted); }
 .demo-set-actions { margin-bottom: 1rem; }
+.active-gateway-routes { border-color: #315744; }
+.active-route-table-wrap { overflow-x: auto; }
+.active-route-table { width: 100%; min-width: 680px; border-collapse: collapse; }
+.active-route-table th { padding: 0.55rem 0.7rem; color: var(--muted); font-size: 0.72rem; text-align: left; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); }
+.active-route-table td { padding: 0.7rem; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+.active-route-table tbody tr:last-child td { border-bottom: 0; }
+.active-route-table td > code { color: var(--blue); font-size: 0.9rem; }
+.active-route-table td > strong, .active-route-table td > small, .active-provider strong, .active-provider small { display: block; }
+.active-route-table td > small, .active-provider small { margin-top: 0.15rem; color: var(--muted); overflow-wrap: anywhere; }
+.active-provider-chain { display: grid; gap: 0.4rem; }
+.active-provider { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 .demo-route-list, .route-editor-list { display: grid; gap: 0.8rem; }
 .demo-route-card, .route-editor { padding: 1rem; border: 1px solid var(--line-soft); border-radius: 0.75rem; background: #0e1621; }
 .demo-route-heading code { max-width: 45%; overflow-wrap: anywhere; color: var(--blue); }

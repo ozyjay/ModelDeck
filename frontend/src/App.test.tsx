@@ -390,6 +390,13 @@ function mockFetch() {
       const revisions = current ? [current, ...(current.active_revision !== null && current.active_revision !== current.revision ? [{ ...current, revision: current.active_revision, active: true }] : [])] : [];
       return json({ revisions });
     }
+    if (/^\/api\/demo-sets\/[^/]+\/revisions\/\d+$/.test(path)) {
+      const parts = path.split("/");
+      const id = decodeURIComponent(parts[3] ?? "");
+      const revision = Number(parts[5]);
+      const current = demoSets.find((candidate) => candidate.id === id);
+      return current ? json({ ...current, revision, active: current.active_revision === revision }) : json({ detail: "Unknown demo-set revision" }, 404);
+    }
     if (path.includes("/routes/") && path.endsWith("/status")) {
       const parts = path.split("/");
       const id = decodeURIComponent(parts[3] ?? "");
@@ -522,6 +529,22 @@ describe("ModelDeck operator console", () => {
     fireEvent.click(screen.getByRole("link", { name: "Workers" }));
     expect(await screen.findByText("Managed by Demo routes")).toBeInTheDocument();
     expect(screen.getByLabelText("Physical provider")).toBeDisabled();
+  });
+
+  it("shows active public aliases with deployment names and worker state", async () => {
+    demoSets = [{ ...structuredClone(defaultDemoSet), active: true, active_revision: 1 }];
+    deployment.display_name = "Visitor Qwen";
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Demo routes" }));
+
+    const summary = await screen.findByRole("region", { name: "Active gateway routes" });
+    expect(within(summary).getByRole("heading", { name: "Active gateway routes" })).toBeInTheDocument();
+    expect(within(summary).getByText("Open Day demos · revision 1")).toBeInTheDocument();
+    expect(within(summary).getByText("fast-chat")).toBeInTheDocument();
+    expect(within(summary).getByText("OpenAI-compatible chat")).toBeInTheDocument();
+    expect(within(summary).getByText("Visitor Qwen")).toBeInTheDocument();
+    expect(within(summary).getByText(worker.id)).toBeInTheDocument();
+    expect(within(summary).getByText("Stopped")).toBeInTheDocument();
   });
 
   it("shows a structured gateway unavailable state without breaking management", async () => {
