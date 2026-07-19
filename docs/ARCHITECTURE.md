@@ -12,6 +12,13 @@ Demo clients ---- Stable gateway :8600 ---- capability alias ---- ready local wo
                                                    `---- structured unavailable result
 ```
 
+The configuration model separates four concepts that used to be implicit in worker
+cards. A model artefact identifies cached or packaged weights; a deployment is a trusted
+model profile plus its runtime and launch policy; a worker is one deployment's current
+process state; and a demo route is an application-facing protocol contract bound to an
+ordered set of deployments. This keeps booth requirements stable while models and
+runtimes change independently.
+
 ## Runtime environments
 
 `.venv` is ModelDeck's control-plane runtime: API, operator-console assets, supervisor, gateway,
@@ -39,7 +46,7 @@ duplicate IDs, missing seed references, invalid capabilities, and runtime implem
 without a trusted launch builder.
 
 SQLite remains the home for operator-created profiles, cache policy, compatibility
-evidence, and explicit provider selections. Packaged seed data is read-only and versioned
+evidence, explicit provider selections, and immutable demo-set revisions. Packaged seed data is read-only and versioned
 with the application, so upgrades are deterministic and do not overwrite local choices.
 
 ## Process and failure model
@@ -59,6 +66,29 @@ States are `discovered`, `stopped`, `validating`, `starting`, `loading`, `warmin
 Process existence alone never means ready.
 
 ## Gateway and routing
+
+The operator console can CRUD versioned demo sets. Each set names the demos expected at
+an event and defines route contracts with a public model alias, an allowlisted protocol
+adapter, a qualification rule, an explicit fallback policy, and ordered deployment
+bindings. Validation checks registration, cache policy, generation family, capabilities,
+mock visibility, and—when selected—recorded tested-working evidence. Planning reports
+which primary deployments would need to start or stop but deliberately makes no process
+changes.
+
+Activation validates a specific immutable revision and atomically replaces the gateway's
+routing snapshot. The gateway rereads that snapshot on each route assembly, so activation
+does not require a restart. It only exposes a route on the endpoint surfaces declared by
+its adapter. Activation does not start or stop workers; readiness remains observable and
+an unavailable provider still produces the structured local error. Until the first demo
+set is activated, the legacy reserved-alias registry remains the effective routing source
+for backwards compatibility.
+
+Immutable history supports two distinct recovery operations: restoring old content creates
+a new editable draft revision, while activating an exact historical revision performs an
+atomic routing rollback. Route rehearsal queries the live gateway advertisement and can
+send a bounded adapter-specific request only for the active revision. It neither starts a
+worker nor exposes generated content through the management API. Full-duplex speech remains
+an explicitly interactive WebSocket rehearsal.
 
 Aliases route according to the reserved-alias registry and declared capability contract. `fast-chat` prefers the core
 Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
@@ -111,7 +141,8 @@ evidence retain the pinned base-model identity.
 
 ## Data and security
 
-SQLite stores model profiles, compatibility tests, worker events, and presets. Logs are
+SQLite stores model profiles, compatibility tests, worker events, presets, demo-set
+revisions, and the single activated routing snapshot. Logs are
 bounded in memory in this slice and redact prompt/output/credential-shaped fields.
 Services bind to loopback. The API has no shell, arbitrary environment, filesystem
 browser, token, Docker socket, upload, camera, or cloud inference surface.

@@ -67,6 +67,106 @@ export interface Profile {
   modeldeck_allowed: boolean;
 }
 
+export interface Deployment {
+  id: string;
+  source: "packaged" | "local";
+  model: {
+    model_id: string;
+    revision: string;
+    artifact_model_id: string | null;
+    artifact_revision: string | null;
+  };
+  runtime: string;
+  generation_family: string;
+  lifecycle: "resident" | "on-demand" | "exclusive";
+  capabilities: Capabilities;
+  allowed: boolean;
+  registered: boolean;
+  worker: Worker | null;
+}
+
+export interface DemoAdapter {
+  id: string;
+  display_name: string;
+  generation_family: string;
+  required_capabilities: string[];
+  surfaces: string[];
+}
+
+export interface DemoApplication {
+  id: string;
+  display_name: string;
+}
+
+export interface DeploymentBinding {
+  deployment_id: string;
+  priority: number;
+}
+
+export interface DemoRouteContract {
+  id: string;
+  demo_id: string;
+  display_name: string;
+  adapter_id: string;
+  public_model: string;
+  qualification_policy: "registered" | "tested-working-recorded";
+  fallback_policy: "none" | "ordered" | "mock-visible" | "structured-unavailable";
+  providers: DeploymentBinding[];
+}
+
+export interface DemoSet {
+  id: string;
+  display_name: string;
+  description: string;
+  demos: DemoApplication[];
+  routes: DemoRouteContract[];
+  revision: number;
+  updated_at: string;
+  active: boolean;
+  active_revision: number | null;
+}
+
+export interface DemoSetValidation {
+  valid: boolean;
+  errors: Array<{ route_id?: string; deployment_id?: string; message: string }>;
+  warnings: Array<{ route_id?: string; message: string }>;
+}
+
+export interface DemoSetPlan {
+  desired_primary_deployments: string[];
+  start_required: string[];
+  stop_required: string[];
+  warnings: string[];
+  applies_process_changes: boolean;
+}
+
+export interface DemoRouteStatus {
+  demo_set_id: string;
+  revision: number;
+  route_id: string;
+  public_model: string;
+  adapter_id: string;
+  active: boolean;
+  gateway_available: boolean;
+  advertised: boolean;
+  ready: boolean;
+  selected_provider: string | null;
+  effective_provider: string | null;
+  providers: Array<{ deployment_id: string; priority: number; worker_state: string }>;
+  smoke_supported: boolean;
+  smoke_unavailable_reason: string | null;
+}
+
+export interface DemoRouteSmokeResult {
+  ok: boolean;
+  route_id: string;
+  public_model: string;
+  adapter_id: string;
+  provider: string | null;
+  evidence: string;
+  duration_seconds: number;
+}
+
 export interface LocalProfileRequest {
   model_id: string;
   revision: string;

@@ -44,6 +44,15 @@ boundary.
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
+The **Demo routes** view defines the applications expected for an event, their stable
+gateway contracts, and the ordered deployments that may serve them. Drafts are saved as
+new revisions, then validated, planned, and explicitly activated. Activation updates
+routing atomically but does not start large workers; use the Workers view to control
+process lifecycle. Open Day mode locks configuration changes server-side.
+Each route card can check the live gateway alias and run a small contract smoke test once
+its active provider is ready. Revision history supports restoring old content as a new
+draft or atomically reactivating an exact historical routing snapshot.
+
 For lightweight development or CI on a machine without the target GPU, run
 `pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
 fallbacks remain usable, but that mode is not a complete target deployment.

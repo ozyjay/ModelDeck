@@ -15,6 +15,15 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
   return readResponse<T>(response);
 }
 
+export async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return readResponse<T>(response);
+}
+
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(path, {
     method: "DELETE",
@@ -31,10 +40,16 @@ async function readResponse<T>(response: Response): Promise<T> {
     payload = null;
   }
   if (!response.ok) {
-    const detail =
+    const rawDetail =
       typeof payload === "object" && payload !== null && "detail" in payload
-        ? String((payload as { detail: unknown }).detail)
-        : `Request failed with HTTP ${response.status}.`;
+        ? (payload as { detail: unknown }).detail
+        : null;
+    const detail =
+      typeof rawDetail === "string"
+        ? rawDetail
+        : rawDetail && typeof rawDetail === "object" && "message" in rawDetail
+          ? String((rawDetail as { message: unknown }).message)
+          : `Request failed with HTTP ${response.status}.`;
     throw new Error(detail);
   }
   return payload as T;

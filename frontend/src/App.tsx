@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { deleteJson, getJson, postJson } from "./api";
+import { deleteJson, getJson, postJson, putJson } from "./api";
 import type {
   CompatibilityTest,
+  DemoAdapter,
+  DemoRouteSmokeResult,
+  DemoRouteStatus,
+  DemoSet,
+  DemoSetPlan,
+  DemoSetValidation,
+  Deployment,
   GatewayStatus,
   HardwareProbe,
   LocalProfileRequest,
@@ -16,7 +23,7 @@ import type {
   WorkerLog,
 } from "./types";
 
-type View = "overview" | "workers" | "models" | "compatibility" | "logs";
+type View = "overview" | "demo-routes" | "workers" | "models" | "compatibility" | "logs";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
 type WorkerGrouping = "family" | "runtime" | "lifecycle" | "none";
@@ -24,6 +31,7 @@ type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc";
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
   { view: "overview", label: "Overview", path: "/" },
+  { view: "demo-routes", label: "Demo routes", path: "/demo-routes" },
   { view: "workers", label: "Workers", path: "/workers" },
   { view: "models", label: "Model library", path: "/models" },
   { view: "compatibility", label: "Compatibility", path: "/compatibility" },
@@ -45,6 +53,9 @@ export default function App() {
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [providerSelections, setProviderSelections] = useState<ProviderSelection[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [demoSets, setDemoSets] = useState<DemoSet[]>([]);
+  const [demoAdapters, setDemoAdapters] = useState<DemoAdapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [eventStreamConnected, setEventStreamConnected] = useState(false);
@@ -68,26 +79,39 @@ export default function App() {
     setProviderSelections(selections.selections);
   }, []);
 
+  const refreshDemoConfiguration = useCallback(async () => {
+    const [deploymentResponse, demoSetResponse] = await Promise.all([
+      getJson<Deployment[]>("/api/deployments"),
+      getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
+    ]);
+    setDeployments(deploymentResponse);
+    setDemoSets(demoSetResponse.demo_sets);
+  }, []);
+
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
       getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
+      getJson<Deployment[]>("/api/deployments"),
+      getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
     setGateway(nextGateway);
     setModels(catalogue.models);
     setProviderSelections(selections.selections);
+    setDeployments(deploymentResponse);
+    setDemoSets(demoSetResponse.demo_sets);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections] =
+      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse] =
         await Promise.all([
           getJson<ManagementHealth>("/api/health"),
           getJson<GatewayStatus>("/api/gateway/status"),
@@ -98,6 +122,9 @@ export default function App() {
           getJson<{ models: ModelEntry[] }>("/api/catalogue"),
           getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
           getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
+          getJson<Deployment[]>("/api/deployments"),
+          getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
+          getJson<{ adapters: DemoAdapter[] }>("/api/demo-adapters"),
         ]);
       setHealth(nextHealth);
       setGateway(nextGateway);
@@ -108,6 +135,9 @@ export default function App() {
       setModels(catalogue.models);
       setCompatibility(tests.tests);
       setProviderSelections(selections.selections);
+      setDeployments(deploymentResponse);
+      setDemoSets(demoSetResponse.demo_sets);
+      setDemoAdapters(adapterResponse.adapters);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -277,6 +307,14 @@ export default function App() {
             models={models}
             compatibility={compatibility}
           />
+        ) : view === "demo-routes" ? (
+          <DemoRoutesView
+            demoSets={demoSets}
+            deployments={deployments}
+            adapters={demoAdapters}
+            openDay={health.open_day}
+            configurationChanged={refreshDemoConfiguration}
+          />
         ) : view === "workers" ? (
           <WorkersView
             workers={workers}
@@ -444,6 +482,291 @@ function Overview({
       </section>
     </div>
   );
+}
+
+function DemoRoutesView({ demoSets, deployments, adapters, openDay, configurationChanged }: {
+  demoSets: DemoSet[];
+  deployments: Deployment[];
+  adapters: DemoAdapter[];
+  openDay: boolean;
+  configurationChanged: () => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState(demoSets[0]?.id ?? "");
+  const [draft, setDraft] = useState<DemoSet | null>(null);
+  const [newSet, setNewSet] = useState({ id: "", display_name: "" });
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [validation, setValidation] = useState<DemoSetValidation | null>(null);
+  const [plan, setPlan] = useState<DemoSetPlan | null>(null);
+  const [revisions, setRevisions] = useState<DemoSet[]>([]);
+  const [routeStatuses, setRouteStatuses] = useState<Record<string, DemoRouteStatus>>({});
+  const [feedback, setFeedback] = useState<{ tone: "good" | "bad"; message: string } | null>(null);
+  const selected = demoSets.find((item) => item.id === selectedId) ?? demoSets[0];
+
+  useEffect(() => {
+    if (!selectedId && demoSets[0]) setSelectedId(demoSets[0].id);
+    if (selectedId && !demoSets.some((item) => item.id === selectedId)) {
+      setSelectedId(demoSets[0]?.id ?? "");
+    }
+  }, [demoSets, selectedId]);
+
+  useEffect(() => {
+    if (!selected) {
+      setRevisions([]);
+      setRouteStatuses({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([
+      getJson<{ revisions: DemoSet[] }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions`),
+      Promise.all(selected.routes.map((route) => getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(route.id)}/status`))),
+    ]).then(([history, statuses]) => {
+      if (cancelled) return;
+      setRevisions(history.revisions);
+      setRouteStatuses(Object.fromEntries(statuses.map((status) => [status.route_id, status])));
+    }).catch(() => {
+      if (!cancelled) setRouteStatuses({});
+    });
+    return () => { cancelled = true; };
+  }, [selected?.active_revision, selected?.id, selected?.revision]);
+
+  const runAction = async (key: string, action: () => Promise<void>) => {
+    setPendingAction(key);
+    setFeedback(null);
+    try {
+      await action();
+    } catch (reason) {
+      setFeedback({ tone: "bad", message: messageFrom(reason) });
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const createSet = async () => {
+    await runAction("create", async () => {
+      const created = await postJson<DemoSet>("/api/demo-sets", {
+        id: newSet.id,
+        display_name: newSet.display_name,
+        description: "",
+        demos: [],
+        routes: [],
+      });
+      await configurationChanged();
+      setSelectedId(created.id);
+      setNewSet({ id: "", display_name: "" });
+      setFeedback({ tone: "good", message: `Created draft demo set ${created.display_name}.` });
+    });
+  };
+
+  const saveDraft = async () => {
+    if (!draft) return;
+    await runAction("save", async () => {
+      const saved = await putJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(draft.id)}`, demoSetPayload(draft));
+      await configurationChanged();
+      setDraft(null);
+      setValidation(null);
+      setPlan(null);
+      setFeedback({ tone: "good", message: `Saved ${saved.display_name} revision ${saved.revision}.` });
+    });
+  };
+
+  const validateSet = async () => {
+    if (!selected) return;
+    await runAction("validate", async () => {
+      const result = await postJson<DemoSetValidation>(`/api/demo-sets/${encodeURIComponent(selected.id)}/validate`);
+      setValidation(result);
+      setPlan(null);
+      setFeedback({ tone: result.valid ? "good" : "bad", message: result.valid ? "All route bindings are valid." : "Route validation found blocking issues." });
+    });
+  };
+
+  const planSet = async () => {
+    if (!selected) return;
+    await runAction("plan", async () => {
+      const result = await postJson<DemoSetPlan & { validation: DemoSetValidation }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/plan`);
+      setValidation(result.validation);
+      setPlan(result);
+      setFeedback({ tone: result.validation.valid ? "good" : "bad", message: result.validation.valid ? "Activation plan is ready for review." : "Fix validation errors before activation." });
+    });
+  };
+
+  const activateSet = async () => {
+    if (!selected || !window.confirm(`Activate ${selected.display_name} revision ${selected.revision} for gateway routing? This does not start workers.`)) return;
+    await runAction("activate", async () => {
+      const result = await postJson<{ plan: DemoSetPlan }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/activate`);
+      await configurationChanged();
+      setPlan(result.plan);
+      setFeedback({ tone: "good", message: `${selected.display_name} is now the active gateway routing configuration.` });
+    });
+  };
+
+  const removeSet = async () => {
+    if (!selected || !window.confirm(`Delete draft demo set ${selected.display_name}?`)) return;
+    await runAction("delete", async () => {
+      await deleteJson(`/api/demo-sets/${encodeURIComponent(selected.id)}`);
+      setSelectedId("");
+      setDraft(null);
+      await configurationChanged();
+      setFeedback({ tone: "good", message: `Deleted ${selected.display_name}.` });
+    });
+  };
+
+  const restoreRevision = async (revision: number) => {
+    if (!selected || !window.confirm(`Restore revision ${revision} as a new draft revision?`)) return;
+    await runAction(`restore:${revision}`, async () => {
+      const restored = await postJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${revision}/restore`);
+      await configurationChanged();
+      setFeedback({ tone: "good", message: `Restored revision ${revision} as revision ${restored.revision}.` });
+    });
+  };
+
+  const activateRevision = async (revision: number) => {
+    if (!selected || !window.confirm(`Activate historical revision ${revision}? This changes routing only.`)) return;
+    await runAction(`activate-revision:${revision}`, async () => {
+      await postJson(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${revision}/activate`);
+      await configurationChanged();
+      setFeedback({ tone: "good", message: `Revision ${revision} is now the active gateway routing configuration.` });
+    });
+  };
+
+  const refreshRouteStatus = async (routeId: string) => {
+    if (!selected) return;
+    await runAction(`status:${routeId}`, async () => {
+      const status = await getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/status`);
+      setRouteStatuses((current) => ({ ...current, [routeId]: status }));
+      setFeedback({ tone: status.ready ? "good" : "bad", message: status.ready ? `${status.public_model} is ready through the gateway.` : `${status.public_model} is not ready through the gateway.` });
+    });
+  };
+
+  const smokeRoute = async (routeId: string) => {
+    if (!selected || !window.confirm("Run a small generation request through this active gateway route?")) return;
+    await runAction(`smoke:${routeId}`, async () => {
+      const result = await postJson<DemoRouteSmokeResult>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/smoke`);
+      const status = await getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/status`);
+      setRouteStatuses((current) => ({ ...current, [routeId]: status }));
+      setFeedback({ tone: "good", message: `${result.public_model} passed through ${result.provider ?? "its ready provider"} in ${result.duration_seconds.toFixed(2)} seconds.` });
+    });
+  };
+
+  return <div className="view-stack">
+    <section className="notice-panel">
+      <strong>Declarative demo compatibility</strong>
+      <p>Define the stable model routes each demo expects, bind them to configured deployments, validate the contracts, then activate one versioned routing snapshot. Activation never starts a large model automatically.</p>
+    </section>
+    {openDay && <div className="configuration-feedback bad" role="status">Open Day mode is locked. Review the active configuration here, but edit and activate revisions before entering booth mode.</div>}
+    {feedback && <div className={`configuration-feedback ${feedback.tone}`} role="status">{feedback.message}</div>}
+    <div className="demo-set-layout">
+      <aside className="panel demo-set-list">
+        <PanelHeading title="Demo sets" detail={`${demoSets.length} configured`} />
+        {demoSets.map((item) => <button className={item.id === selected?.id ? "demo-set-select active" : "demo-set-select"} key={item.id} onClick={() => { setSelectedId(item.id); setDraft(null); setValidation(null); setPlan(null); }}><span><strong>{item.display_name}</strong><small>{item.id} · revision {item.revision}{item.active_revision !== null && item.active_revision !== item.revision ? ` · active revision ${item.active_revision}` : ""}</small></span>{item.active && <StateBadge state="ready" />}</button>)}
+        {!openDay && <form className="new-demo-set" onSubmit={(event) => { event.preventDefault(); void createSet(); }}>
+          <label>Identifier<input required pattern="[a-z][a-z0-9-]{1,62}" value={newSet.id} onChange={(event) => setNewSet({ ...newSet, id: event.target.value })} placeholder="open-day-2027" /></label>
+          <label>Display name<input required value={newSet.display_name} onChange={(event) => setNewSet({ ...newSet, display_name: event.target.value })} placeholder="Open Day 2027" /></label>
+          <button disabled={pendingAction !== null}>{pendingAction === "create" ? "Creating…" : "Create demo set"}</button>
+        </form>}
+      </aside>
+      <section className="panel demo-set-detail">
+        {!selected ? <div className="empty-state"><h2>No demo set selected</h2><p>Create a draft to define demo route contracts.</p></div> : draft ? (
+          <DemoSetEditor draft={draft} setDraft={setDraft} deployments={deployments} adapters={adapters} pending={pendingAction !== null} save={() => void saveDraft()} cancel={() => setDraft(null)} />
+        ) : <>
+          <div className="demo-set-heading"><div><p className="eyebrow">{selected.active_revision === selected.revision ? "Active routing snapshot" : selected.active ? `Draft revision; revision ${selected.active_revision} remains active` : "Draft routing configuration"}</p><h2>{selected.display_name}</h2><p>{selected.description || "No description."}</p></div><StateBadge state={selected.active_revision === selected.revision ? "ready" : "discovered"} /></div>
+          <div className="button-row demo-set-actions">
+            <button className="secondary" disabled={openDay || pendingAction !== null} onClick={() => setDraft(structuredClone(selected))}>Edit</button>
+            <button className="secondary" disabled={pendingAction !== null} onClick={() => void validateSet()}>{pendingAction === "validate" ? "Validating…" : "Validate"}</button>
+            <button className="secondary" disabled={pendingAction !== null} onClick={() => void planSet()}>{pendingAction === "plan" ? "Planning…" : "Plan activation"}</button>
+            <button disabled={openDay || pendingAction !== null} onClick={() => void activateSet()}>{pendingAction === "activate" ? "Activating…" : "Activate routing"}</button>
+            <button className="secondary danger" disabled={openDay || selected.active || pendingAction !== null} onClick={() => void removeSet()}>Delete draft</button>
+          </div>
+          {validation && <ValidationSummary validation={validation} />}
+          {plan && <PlanSummary plan={plan} />}
+          <details className="revision-history"><summary>Revision history ({revisions.length})</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{formatDate(revision.updated_at)}</small></span>{revision.active_revision === revision.revision ? <StateBadge state="ready" /> : <div className="button-row"><button type="button" className="secondary" disabled={openDay || pendingAction !== null || revision.revision === selected.revision} onClick={() => void restoreRevision(revision.revision)}>{pendingAction === `restore:${revision.revision}` ? "Restoring…" : "Restore as draft"}</button><button type="button" className="secondary" disabled={openDay || pendingAction !== null} onClick={() => void activateRevision(revision.revision)}>{pendingAction === `activate-revision:${revision.revision}` ? "Activating…" : "Activate"}</button></div>}</article>)}</div></details>
+          <div className="demo-route-list">{selected.routes.map((route) => {
+            const demo = selected.demos.find((item) => item.id === route.demo_id);
+            const adapter = adapters.find((item) => item.id === route.adapter_id);
+            const status = routeStatuses[route.id];
+            return <article className="demo-route-card" key={route.id}>
+              <div className="demo-route-heading"><div><p className="worker-id">{demo?.display_name ?? route.demo_id}</p><h3>{route.display_name}</h3></div><code>{route.public_model}</code></div>
+              <p className="worker-summary">{adapter?.display_name ?? route.adapter_id} · {humanise(route.qualification_policy)} · {humanise(route.fallback_policy)}</p>
+              <div className="route-rehearsal"><span><StatusDot state={status?.ready ? "good" : status?.gateway_available ? "warn" : "bad"} /><strong>{status?.ready ? "Gateway ready" : status?.active ? "Gateway unavailable" : "Revision not active"}</strong><small>{status?.effective_provider ?? status?.smoke_unavailable_reason ?? "No effective provider"}</small></span><div className="button-row"><button type="button" className="secondary" disabled={pendingAction !== null} onClick={() => void refreshRouteStatus(route.id)}>{pendingAction === `status:${route.id}` ? "Checking…" : "Check readiness"}</button><button type="button" disabled={pendingAction !== null || !status?.ready || !status.smoke_supported} title={status?.smoke_unavailable_reason ?? undefined} onClick={() => void smokeRoute(route.id)}>{pendingAction === `smoke:${route.id}` ? "Testing…" : "Smoke route"}</button></div></div>
+              <div className="route-provider-list">{route.providers.length ? [...route.providers].sort((left, right) => left.priority - right.priority).map((binding) => {
+                const deployment = deployments.find((item) => item.id === binding.deployment_id);
+                return <div key={binding.deployment_id}><span><strong>{binding.deployment_id}</strong><small>{deployment ? `${deployment.model.model_id} · ${deployment.runtime}` : "Missing deployment"}</small></span><StateBadge state={deployment?.worker?.state ?? "incompatible"} /></div>;
+              }) : <p className="muted">No provider deployment; the route is structurally unavailable.</p>}</div>
+            </article>;
+          })}</div>
+        </>}
+      </section>
+    </div>
+  </div>;
+}
+
+function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, save, cancel }: {
+  draft: DemoSet;
+  setDraft: (value: DemoSet) => void;
+  deployments: Deployment[];
+  adapters: DemoAdapter[];
+  pending: boolean;
+  save: () => void;
+  cancel: () => void;
+}) {
+  const updateRoute = (index: number, updates: Partial<DemoSet["routes"][number]>) => setDraft({ ...draft, routes: draft.routes.map((route, routeIndex) => routeIndex === index ? { ...route, ...updates } : route) });
+  const addDemo = () => {
+    const index = nextAvailableSuffix("demo", draft.demos.map((demo) => demo.id));
+    setDraft({ ...draft, demos: [...draft.demos, { id: `demo-${index}`, display_name: `Demo ${index}` }] });
+  };
+  const addRoute = () => {
+    if (!draft.demos.length || !adapters.length) return;
+    const index = nextAvailableSuffix("route", draft.routes.map((route) => route.id));
+    setDraft({ ...draft, routes: [...draft.routes, { id: `route-${index}`, demo_id: draft.demos[0].id, display_name: `Route ${index}`, adapter_id: adapters[0].id, public_model: `route-${index}`, qualification_policy: "registered", fallback_policy: "structured-unavailable", providers: [] }] });
+  };
+  return <form className="demo-set-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
+    <div className="demo-set-heading"><div><p className="eyebrow">Editing revision {draft.revision}</p><h2>{draft.display_name}</h2></div></div>
+    <div className="runtime-fields">
+      <label>Display name<input required value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
+      <label className="wide-field">Description<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+    </div>
+    <div className="editor-section-heading"><h3>Demos</h3><button type="button" className="secondary" onClick={addDemo}>Add demo</button></div>
+    <div className="demo-editor-list">{draft.demos.map((demo, index) => <div key={demo.id}><code>{demo.id}</code><input aria-label={`Display name for ${demo.id}`} value={demo.display_name} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item, demoIndex) => demoIndex === index ? { ...item, display_name: event.target.value } : item) })} /><button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, demos: draft.demos.filter((_, demoIndex) => demoIndex !== index), routes: draft.routes.filter((route) => route.demo_id !== demo.id) })}>Remove</button></div>)}</div>
+    <div className="editor-section-heading"><h3>Route contracts</h3><button type="button" className="secondary" disabled={!draft.demos.length} onClick={addRoute}>Add route</button></div>
+    <div className="route-editor-list">{draft.routes.map((route, routeIndex) => <article className="route-editor" key={route.id}>
+      <div className="route-editor-title"><strong>{route.id}</strong><button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, routes: draft.routes.filter((_, index) => index !== routeIndex) })}>Remove route</button></div>
+      <div className="runtime-fields">
+        <label>Display name<input required value={route.display_name} onChange={(event) => updateRoute(routeIndex, { display_name: event.target.value })} /></label>
+        <label>Demo<select value={route.demo_id} onChange={(event) => updateRoute(routeIndex, { demo_id: event.target.value })}>{draft.demos.map((demo) => <option value={demo.id} key={demo.id}>{demo.display_name}</option>)}</select></label>
+        <label>Public model alias<input required pattern="[a-z][a-z0-9-]{1,62}" value={route.public_model} onChange={(event) => updateRoute(routeIndex, { public_model: event.target.value })} /></label>
+        <label>Protocol adapter<select value={route.adapter_id} onChange={(event) => updateRoute(routeIndex, { adapter_id: event.target.value })}>{adapters.map((adapter) => <option value={adapter.id} key={adapter.id}>{adapter.display_name}</option>)}</select></label>
+        <label>Qualification<select value={route.qualification_policy} onChange={(event) => updateRoute(routeIndex, { qualification_policy: event.target.value as DemoSet["routes"][number]["qualification_policy"] })}><option value="registered">Registered deployment</option><option value="tested-working-recorded">Recorded tested-working evidence</option></select></label>
+        <label>Fallback policy<select value={route.fallback_policy} onChange={(event) => updateRoute(routeIndex, { fallback_policy: event.target.value as DemoSet["routes"][number]["fallback_policy"] })}><option value="structured-unavailable">Structured unavailable</option><option value="none">No fallback</option><option value="ordered">Ordered providers</option><option value="mock-visible">Visible mock fallback</option></select></label>
+      </div>
+      <div className="editor-section-heading"><h4>Provider deployments</h4><button type="button" className="secondary" disabled={!deployments.length} onClick={() => { const candidate = deployments.find((deployment) => !route.providers.some((binding) => binding.deployment_id === deployment.id)); if (candidate) updateRoute(routeIndex, { providers: [...route.providers, { deployment_id: candidate.id, priority: route.providers.length * 10 }] }); }}>Add provider</button></div>
+      <div className="provider-editor-list">{route.providers.map((binding, providerIndex) => <div key={`${binding.deployment_id}-${providerIndex}`}><select aria-label={`Provider ${providerIndex + 1} for ${route.id}`} value={binding.deployment_id} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, deployment_id: event.target.value } : item) })}>{deployments.map((deployment) => <option value={deployment.id} key={deployment.id}>{deployment.id} · {deployment.model.model_id}</option>)}</select><input aria-label={`Priority for ${binding.deployment_id}`} type="number" min="0" max="10000" value={binding.priority} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, priority: Number(event.target.value) } : item) })} /><button type="button" className="secondary danger" onClick={() => updateRoute(routeIndex, { providers: route.providers.filter((_, index) => index !== providerIndex) })}>Remove</button></div>)}</div>
+    </article>)}</div>
+    <div className="button-row"><button disabled={pending}>Save new revision</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
+  </form>;
+}
+
+function nextAvailableSuffix(prefix: string, identifiers: string[]) {
+  const used = new Set(identifiers);
+  let suffix = 1;
+  while (used.has(`${prefix}-${suffix}`)) suffix += 1;
+  return suffix;
+}
+
+function ValidationSummary({ validation }: { validation: DemoSetValidation }) {
+  return <section className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Valid route configuration" : `${validation.errors.length} validation issue${validation.errors.length === 1 ? "" : "s"}`}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={`${error.route_id}-${error.deployment_id}-${index}`}>{[error.route_id, error.deployment_id].filter(Boolean).join(" / ")}: {error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`${warning.route_id}-${index}`}>{warning.route_id}: {warning.message}</li>)}</ul>}</section>;
+}
+
+function PlanSummary({ plan }: { plan: DemoSetPlan }) {
+  return <section className="validation-summary"><strong>Activation plan</strong><DefinitionList rows={[["Primary deployments", plan.desired_primary_deployments.join(", ") || "None"], ["Start required", plan.start_required.join(", ") || "None"], ["Stop required", plan.stop_required.join(", ") || "None"], ["Process changes", plan.applies_process_changes ? "Applied automatically" : "Operator controlled"]]} compact />{plan.warnings.length > 0 && <ul>{plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}</section>;
+}
+
+function demoSetPayload(demoSet: DemoSet) {
+  return {
+    id: demoSet.id,
+    display_name: demoSet.display_name,
+    description: demoSet.description,
+    demos: demoSet.demos,
+    routes: demoSet.routes,
+  };
 }
 
 function WorkersView({ workers, profiles, models, compatibility, providerSelections, pending, operate, stopAll, selectProvider }: {

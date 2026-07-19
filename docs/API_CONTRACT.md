@@ -38,6 +38,34 @@ FastAPI also serves the committed operator-console assets and returns the SPA en
 for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
 through to the frontend.
 
+### Deployments and demo routes
+
+`GET /api/deployments` presents each registered deployment separately from its current
+worker process state. `GET /api/demo-adapters` lists the allowlisted protocol contracts.
+Demo sets are managed through `GET` and `POST /api/demo-sets` and `GET`, `PUT`, and
+`DELETE /api/demo-sets/{demo_set_id}`. Creation and update append immutable revisions;
+an activated revision cannot be deleted.
+
+`GET /api/demo-sets/{demo_set_id}/revisions` lists immutable history and `GET
+.../revisions/{revision}` retrieves one revision. `POST .../revisions/{revision}/restore`
+copies historical content into a new draft revision; it never rewrites history. `POST
+.../revisions/{revision}/activate` validates and atomically reactivates that exact revision,
+providing a direct routing rollback.
+
+`POST /api/demo-sets/{demo_set_id}/validate` checks deployment, capability, policy, and
+compatibility-evidence requirements. `POST .../plan` adds an advisory worker transition
+plan without changing processes. `POST .../activate` validates and atomically promotes
+the latest revision to the gateway routing snapshot. Activation never starts or stops a
+worker. Open Day mode permits reads, validation, and planning, but rejects configuration
+mutation and activation server-side.
+
+`GET /api/demo-sets/{demo_set_id}/routes/{route_id}/status` combines deployment worker
+state with the alias advertised by the live gateway. `POST .../routes/{route_id}/smoke`
+runs a small, bounded request through the active gateway protocol contract and reports
+the effective provider without returning generated content. It never starts workers.
+Speech routes report that an interactive WebSocket client is required instead of claiming
+an HTTP smoke result.
+
 ## Gateway (`127.0.0.1:8600`)
 
 Implemented: `/v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/providers`, AR chat and
@@ -62,6 +90,10 @@ the alias is not ready and there is no E2B or cloud fallback. `/v1/models` repor
 Persisted local profiles are discovered by the gateway on each request and
 advertised under their configured alias without requiring a gateway restart.
 The gateway applies the persisted HF-cache allow policy on every route refresh.
+After a demo set is activated, its snapshot replaces legacy alias discovery. Each route
+is available only through the gateway surface declared by its protocol adapter. With no
+activated set, the packaged reserved aliases and explicit provider selections retain
+their previous behaviour.
 
 ### Native autoregressive trace token metadata
 

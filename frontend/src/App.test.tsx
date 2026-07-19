@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ProviderSelection, Worker } from "./types";
+import type { CompatibilityTest, DemoAdapter, DemoSet, Deployment, GatewayStatus, ModelEntry, Profile, ProviderSelection, Worker } from "./types";
 
 const capabilities: Worker["capabilities"] = {
   chat: true,
@@ -56,6 +56,53 @@ const profile: Profile = {
   settings: { cache_root: "/mnt/work/models/huggingface/hub" },
   source: "built-in",
   modeldeck_allowed: true,
+};
+
+const deployment: Deployment = {
+  id: profile.id,
+  source: "packaged",
+  model: {
+    model_id: profile.model_id,
+    revision: profile.revision,
+    artifact_model_id: null,
+    artifact_revision: null,
+  },
+  runtime: profile.preferred_runtime,
+  generation_family: profile.generation_family,
+  lifecycle: profile.lifecycle,
+  capabilities,
+  allowed: true,
+  registered: true,
+  worker,
+};
+
+const demoAdapters: DemoAdapter[] = [{
+  id: "openai-chat-v1",
+  display_name: "OpenAI-compatible chat",
+  generation_family: "autoregressive",
+  required_capabilities: ["chat"],
+  surfaces: ["POST /v1/chat/completions"],
+}];
+
+const defaultDemoSet: DemoSet = {
+  id: "open-day-demos",
+  display_name: "Open Day demos",
+  description: "Editable demo routes.",
+  demos: [{ id: "chat-demo", display_name: "Chat demo" }],
+  routes: [{
+    id: "fast-chat",
+    demo_id: "chat-demo",
+    display_name: "Fast chat",
+    adapter_id: "openai-chat-v1",
+    public_model: "fast-chat",
+    qualification_policy: "registered",
+    fallback_policy: "structured-unavailable",
+    providers: [{ deployment_id: worker.id, priority: 10 }],
+  }],
+  revision: 1,
+  updated_at: "2026-07-19T10:00:00Z",
+  active: false,
+  active_revision: null,
 };
 
 const completeModel: ModelEntry = {
@@ -130,6 +177,7 @@ let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 let localProfiles: Profile[] = [];
 let additionalWorkers: Worker[] = [];
+let demoSets: DemoSet[] = [defaultDemoSet];
 let scenechatSelection: ProviderSelection = {
   alias: "scenechat-vision",
   display_name: "SceneChat provider",
@@ -182,12 +230,44 @@ function mockFetch() {
     const path = String(input);
     if (managementFailure && path === "/api/hardware") return json({ detail: "Probe unavailable" }, 503);
     if (init?.method === "DELETE") {
+      if (path.startsWith("/api/demo-sets/")) {
+        const id = decodeURIComponent(path.split("/").at(-1) ?? "");
+        demoSets = demoSets.filter((candidate) => candidate.id !== id);
+        return json({ ok: true, demo_set_id: id });
+      }
       const id = decodeURIComponent(path.split("/").at(-1) ?? "");
       localProfiles = localProfiles.filter((candidate) => candidate.id !== id);
       return json({ ok: true, profile_id: id, cache_removed: false });
     }
+    if (init?.method === "PUT" && path.startsWith("/api/demo-sets/")) {
+      const payload = JSON.parse(String(init.body));
+      const current = demoSets.find((candidate) => candidate.id === payload.id);
+      const updated = { ...current, ...payload, revision: (current?.revision ?? 0) + 1 };
+      demoSets = demoSets.map((candidate) => candidate.id === updated.id ? updated : candidate);
+      return json(updated);
+    }
     if (init?.method === "POST") {
       if (postFailure) return json({ detail: "Pinned runtime is unavailable" }, 409);
+      if (path === "/api/demo-sets") {
+        const payload = JSON.parse(String(init.body));
+        const created = { ...payload, revision: 1, updated_at: "2026-07-19T10:00:00Z", active: false, active_revision: null };
+        demoSets.push(created);
+        return json(created, 201);
+      }
+      if (path.endsWith("/validate") && path.startsWith("/api/demo-sets/")) {
+        return json({ valid: true, errors: [], warnings: [] });
+      }
+      if (path.endsWith("/plan") && path.startsWith("/api/demo-sets/")) {
+        return json({ validation: { valid: true, errors: [], warnings: [] }, desired_primary_deployments: [worker.id], start_required: [worker.id], stop_required: [], warnings: [], applies_process_changes: false });
+      }
+      if (path.includes("/routes/") && path.endsWith("/smoke")) {
+        return json({ ok: true, route_id: "fast-chat", public_model: "demo-chat", adapter_id: "openai-chat-v1", provider: worker.id, evidence: "choices", duration_seconds: 0.25 });
+      }
+      if (path.endsWith("/activate") && path.startsWith("/api/demo-sets/")) {
+        const id = path.split("/").at(-2);
+        demoSets = demoSets.map((candidate) => ({ ...candidate, active: candidate.id === id, active_revision: candidate.id === id ? candidate.revision : null }));
+        return json({ plan: { desired_primary_deployments: [worker.id], start_required: [worker.id], stop_required: [], warnings: [], applies_process_changes: false } });
+      }
       if (path === "/api/profiles") {
         const payload = JSON.parse(String(init.body));
         const created = {
@@ -257,6 +337,22 @@ function mockFetch() {
     if (path === "/api/telemetry") return json(telemetry);
     if (path === "/api/workers") return json([currentWorker, ...additionalWorkers]);
     if (path === "/api/profiles") return json([profile, ...localProfiles]);
+    if (path === "/api/deployments") return json([deployment]);
+    if (path === "/api/demo-sets") return json({ demo_sets: demoSets });
+    if (path.startsWith("/api/demo-sets/") && path.endsWith("/revisions")) {
+      const id = decodeURIComponent(path.split("/").at(-2) ?? "");
+      return json({ revisions: demoSets.filter((candidate) => candidate.id === id) });
+    }
+    if (path.includes("/routes/") && path.endsWith("/status")) {
+      const parts = path.split("/");
+      const id = decodeURIComponent(parts[3] ?? "");
+      const routeId = decodeURIComponent(parts[5] ?? "");
+      const demoSet = demoSets.find((candidate) => candidate.id === id);
+      const route = demoSet?.routes.find((candidate) => candidate.id === routeId);
+      const active = demoSet?.active_revision === demoSet?.revision;
+      return json({ demo_set_id: id, revision: demoSet?.revision ?? 0, route_id: routeId, public_model: route?.public_model ?? "", adapter_id: route?.adapter_id ?? "", active, gateway_available: true, advertised: active, ready: active, selected_provider: active ? worker.id : null, effective_provider: active ? worker.id : null, providers: [{ deployment_id: worker.id, priority: 10, worker_state: active ? "ready" : "stopped" }], smoke_supported: true, smoke_unavailable_reason: null });
+    }
+    if (path === "/api/demo-adapters") return json({ adapters: demoAdapters });
     if (path === "/api/catalogue") return json({ models: catalogueModels, downloads_started: false });
     if (path === "/api/compatibility") return json({ tests: compatibilityTests });
     if (path.endsWith("/logs")) return json({ logs: [{ timestamp: "2026-07-14T10:00:00Z", source: "stderr", level: "warning", message: "prompt=[redacted]" }] });
@@ -274,6 +370,7 @@ describe("ModelDeck operator console", () => {
     managementFailure = false;
     localProfiles = [];
     additionalWorkers = [];
+    demoSets = [structuredClone(defaultDemoSet)];
     scenechatSelection = {
       alias: "scenechat-vision",
       display_name: "SceneChat provider",
@@ -313,6 +410,29 @@ describe("ModelDeck operator console", () => {
     expect(screen.getByText("Local runtimes are standing by")).toBeInTheDocument();
     expect(screen.getByText("Disabled")).toBeInTheDocument();
     expect(screen.getByText("Never")).toBeInTheDocument();
+  });
+
+  it("edits, validates, plans and activates versioned demo routes", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Demo routes" }));
+
+    expect(screen.getByRole("heading", { name: "Fast chat" })).toBeInTheDocument();
+    expect(screen.getByText(worker.id)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Public model alias"), { target: { value: "demo-chat" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save new revision" }));
+    expect(await screen.findByText("Saved Open Day demos revision 2.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Validate" }));
+    expect(await screen.findByText("Valid route configuration")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Plan activation" }));
+    expect(await screen.findByText("Activation plan")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Activate routing" }));
+    expect(await screen.findByText("Open Day demos is now the active gateway routing configuration.")).toBeInTheDocument();
+    expect(await screen.findByText("Revision history (1)")).toBeInTheDocument();
+    expect(await screen.findByText("Gateway ready")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Smoke route" }));
+    expect(await screen.findByText(/passed through qwen-small-rocm/)).toBeInTheDocument();
   });
 
   it("shows a structured gateway unavailable state without breaking management", async () => {

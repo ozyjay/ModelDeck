@@ -18,6 +18,14 @@ from pydantic import BaseModel, Field
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
+from modeldeck.demo_config import (
+    DEMO_ADAPTERS,
+    DemoRouteContract,
+    DemoSetDefinition,
+    default_demo_set,
+    routing_snapshot,
+    validate_demo_set,
+)
 from modeldeck.hardware import probe_environment
 from modeldeck.profile_registry import (
     load_local_profiles,
@@ -97,6 +105,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.profiles.append(profile)
             if profile_allowed(profile, policy):
                 app.state.supervisor.register_profile(profile)
+        if not store.list_demo_sets():
+            store.save_demo_set(default_demo_set(app.state.profiles).model_dump(mode="json"))
         yield
         await app.state.supervisor.stop_all()
 
@@ -222,6 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: GatewayProviderSelectionRequest,
         request: Request,
     ):
+        _require_configuration_mutable(request)
         contract = selectable_aliases().get(alias)
         if contract is None:
             raise HTTPException(404, "Unknown selectable reserved gateway alias")
@@ -277,6 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/catalogue/policy")
     async def set_catalogue_policy(payload: ModelCachePolicyRequest, request: Request):
+        _require_configuration_mutable(request)
         cached = next(
             (
                 model
@@ -362,8 +374,206 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for profile in request.app.state.profiles
         ]
 
+    @app.get("/api/deployments")
+    async def list_deployments(request: Request):
+        built_in_ids = request.app.state.built_in_profile_ids
+        policy = request.app.state.compatibility_store.list_model_cache_policy()
+        supervisor = request.app.state.supervisor
+        return [
+            {
+                "id": profile.id,
+                "source": "packaged" if profile.id in built_in_ids else "local",
+                "model": {
+                    "model_id": profile.model_id,
+                    "revision": profile.revision,
+                    "artifact_model_id": profile.artifact_model_id,
+                    "artifact_revision": profile.artifact_revision,
+                },
+                "runtime": profile.preferred_runtime,
+                "generation_family": profile.generation_family,
+                "lifecycle": profile.lifecycle,
+                "capabilities": profile.capabilities.model_dump(mode="json"),
+                "allowed": profile_allowed(profile, policy),
+                "registered": profile.id in supervisor.workers,
+                "worker": (supervisor.get_worker(profile.id) if profile.id in supervisor.workers else None),
+            }
+            for profile in request.app.state.profiles
+        ]
+
+    @app.get("/api/demo-adapters")
+    async def list_demo_adapters():
+        return {"adapters": [adapter.model_dump(mode="json") for adapter in DEMO_ADAPTERS.values()]}
+
+    @app.get("/api/demo-sets")
+    async def list_demo_sets(request: Request):
+        return {
+            "demo_sets": [
+                _demo_set_response(record)
+                for record in request.app.state.compatibility_store.list_demo_sets()
+            ]
+        }
+
+    @app.get("/api/demo-sets/{demo_set_id}")
+    async def get_demo_set(demo_set_id: str, request: Request):
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set")
+        return _demo_set_response(record)
+
+    @app.get("/api/demo-sets/{demo_set_id}/revisions")
+    async def list_demo_set_revisions(demo_set_id: str, request: Request):
+        revisions = request.app.state.compatibility_store.list_demo_set_revisions(demo_set_id)
+        if not revisions:
+            raise HTTPException(404, "Unknown demo set")
+        return {"revisions": [_demo_set_response(record) for record in revisions]}
+
+    @app.get("/api/demo-sets/{demo_set_id}/revisions/{revision}")
+    async def get_demo_set_revision(demo_set_id: str, revision: int, request: Request):
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id, revision)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set revision")
+        return _demo_set_response(record)
+
+    @app.post("/api/demo-sets", status_code=201)
+    async def create_demo_set(payload: DemoSetDefinition, request: Request):
+        _require_configuration_mutable(request)
+        store = request.app.state.compatibility_store
+        if store.get_demo_set(payload.id) is not None:
+            raise HTTPException(409, "That demo set already exists")
+        return _demo_set_response(store.save_demo_set(payload.model_dump(mode="json")))
+
+    @app.put("/api/demo-sets/{demo_set_id}")
+    async def update_demo_set(demo_set_id: str, payload: DemoSetDefinition, request: Request):
+        _require_configuration_mutable(request)
+        if payload.id != demo_set_id:
+            raise HTTPException(409, "The demo set identifier cannot be changed")
+        store = request.app.state.compatibility_store
+        if store.get_demo_set(demo_set_id) is None:
+            raise HTTPException(404, "Unknown demo set")
+        return _demo_set_response(store.save_demo_set(payload.model_dump(mode="json")))
+
+    @app.delete("/api/demo-sets/{demo_set_id}")
+    async def delete_demo_set(demo_set_id: str, request: Request):
+        _require_configuration_mutable(request)
+        try:
+            removed = request.app.state.compatibility_store.delete_demo_set(demo_set_id)
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
+        if not removed:
+            raise HTTPException(404, "Unknown demo set")
+        return {"ok": True, "demo_set_id": demo_set_id}
+
+    @app.post("/api/demo-sets/{demo_set_id}/validate")
+    async def validate_stored_demo_set(demo_set_id: str, request: Request):
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set")
+        definition = DemoSetDefinition.model_validate(record["definition"])
+        return {
+            "demo_set_id": demo_set_id,
+            "revision": record["revision"],
+            **_validate_demo_definition(definition, request),
+        }
+
+    @app.post("/api/demo-sets/{demo_set_id}/plan")
+    async def plan_demo_set(demo_set_id: str, request: Request):
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set")
+        definition = DemoSetDefinition.model_validate(record["definition"])
+        validation = _validate_demo_definition(definition, request)
+        return {
+            "demo_set_id": demo_set_id,
+            "revision": record["revision"],
+            "validation": validation,
+            **_demo_set_plan(definition, request),
+        }
+
+    @app.post("/api/demo-sets/{demo_set_id}/activate")
+    async def activate_demo_set(demo_set_id: str, request: Request):
+        _require_configuration_mutable(request)
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set")
+        return _activate_demo_set_record(demo_set_id, record, request)
+
+    @app.post("/api/demo-sets/{demo_set_id}/revisions/{revision}/activate")
+    async def activate_demo_set_revision(demo_set_id: str, revision: int, request: Request):
+        _require_configuration_mutable(request)
+        record = request.app.state.compatibility_store.get_demo_set(demo_set_id, revision)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set revision")
+        return _activate_demo_set_record(demo_set_id, record, request)
+
+    @app.post("/api/demo-sets/{demo_set_id}/revisions/{revision}/restore", status_code=201)
+    async def restore_demo_set_revision(demo_set_id: str, revision: int, request: Request):
+        _require_configuration_mutable(request)
+        store = request.app.state.compatibility_store
+        record = store.get_demo_set(demo_set_id, revision)
+        if record is None:
+            raise HTTPException(404, "Unknown demo set revision")
+        restored = store.save_demo_set(record["definition"])
+        return _demo_set_response(restored)
+
+    @app.get("/api/demo-sets/{demo_set_id}/routes/{route_id}/status")
+    async def demo_route_status(demo_set_id: str, route_id: str, request: Request):
+        record, route = _demo_route_record(demo_set_id, route_id, request)
+        gateway = await _gateway_status(request.app.state.settings)
+        gateway_model = next(
+            (
+                model
+                for model in (gateway.get("models") or {}).get("data", [])
+                if model.get("id") == route.public_model
+            ),
+            {},
+        )
+        supervisor = request.app.state.supervisor
+        providers = []
+        for binding in sorted(route.providers, key=lambda item: (item.priority, item.deployment_id)):
+            worker = (
+                supervisor.get_worker(binding.deployment_id)
+                if binding.deployment_id in supervisor.workers
+                else None
+            )
+            providers.append(
+                {
+                    "deployment_id": binding.deployment_id,
+                    "priority": binding.priority,
+                    "worker_state": worker.get("state") if worker else "unregistered",
+                }
+            )
+        active = record["active_revision"] == record["revision"]
+        return {
+            "demo_set_id": demo_set_id,
+            "revision": record["revision"],
+            "route_id": route.id,
+            "public_model": route.public_model,
+            "adapter_id": route.adapter_id,
+            "active": active,
+            "gateway_available": gateway["available"],
+            "advertised": active and bool(gateway_model),
+            "ready": active and gateway_model.get("ready") is True,
+            "selected_provider": gateway_model.get("selected_provider") if active else None,
+            "effective_provider": gateway_model.get("effective_provider") if active else None,
+            "providers": providers,
+            "smoke_supported": route.adapter_id != "speech-conversation-v1",
+            "smoke_unavailable_reason": (
+                "Speech conversation rehearsal requires an interactive WebSocket client"
+                if route.adapter_id == "speech-conversation-v1"
+                else None
+            ),
+        }
+
+    @app.post("/api/demo-sets/{demo_set_id}/routes/{route_id}/smoke")
+    async def smoke_demo_route(demo_set_id: str, route_id: str, request: Request):
+        record, route = _demo_route_record(demo_set_id, route_id, request)
+        if record["active_revision"] != record["revision"]:
+            raise HTTPException(409, "Activate this revision before rehearsing its gateway routes")
+        return await _smoke_demo_route(route, request.app.state.settings)
+
     @app.post("/api/profiles", status_code=201)
     async def create_profile(payload: LocalProfileRequest, request: Request):
+        _require_configuration_mutable(request)
         catalogue = discover_huggingface_models()
         cached = next(
             (
@@ -449,6 +659,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/profiles/{profile_id}")
     async def delete_profile(profile_id: str, request: Request):
+        _require_configuration_mutable(request)
         if profile_id in request.app.state.built_in_profile_ids:
             raise HTTPException(409, "Built-in runtime configurations cannot be removed")
         profile = next(
@@ -681,6 +892,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.put("/api/compatibility/tests/{test_id}/lifecycle")
     async def compatibility_lifecycle(test_id: int, payload: LifecycleEvidence, request: Request):
+        _require_configuration_mutable(request)
         try:
             return request.app.state.compatibility_store.update_test_evidence(
                 test_id, payload.model_dump(exclude_none=True)
@@ -707,6 +919,214 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _frontend_index()
 
     return app
+
+
+def _require_configuration_mutable(request: Request) -> None:
+    if request.app.state.settings.open_day:
+        raise HTTPException(
+            409,
+            "Open Day mode locks deployment, route, provider and compatibility configuration",
+        )
+
+
+def _demo_set_response(record: dict) -> dict:
+    return {
+        **record["definition"],
+        "revision": record["revision"],
+        "updated_at": record["updated_at"],
+        "active": record["active"],
+        "active_revision": record["active_revision"],
+    }
+
+
+def _activate_demo_set_record(demo_set_id: str, record: dict, request: Request) -> dict:
+    definition = DemoSetDefinition.model_validate(record["definition"])
+    validation = _validate_demo_definition(definition, request)
+    if not validation["valid"]:
+        raise HTTPException(409, {"message": "Demo set validation failed", **validation})
+    activated = request.app.state.compatibility_store.activate_demo_set(
+        demo_set_id,
+        record["revision"],
+        routing_snapshot(definition, record["revision"]),
+    )
+    return {**activated, "plan": _demo_set_plan(definition, request)}
+
+
+def _demo_route_record(demo_set_id: str, route_id: str, request: Request) -> tuple[dict, DemoRouteContract]:
+    record = request.app.state.compatibility_store.get_demo_set(demo_set_id)
+    if record is None:
+        raise HTTPException(404, "Unknown demo set")
+    definition = DemoSetDefinition.model_validate(record["definition"])
+    route = next((candidate for candidate in definition.routes if candidate.id == route_id), None)
+    if route is None:
+        raise HTTPException(404, "Unknown demo route")
+    return record, route
+
+
+def _demo_route_smoke_request(route: DemoRouteContract) -> tuple[str, dict]:
+    common_model = {"model": route.public_model}
+    if route.adapter_id == "openai-chat-v1":
+        return "/v1/chat/completions", {
+            **common_model,
+            "messages": [{"role": "user", "content": "Reply with the word ready."}],
+            "max_tokens": 4,
+            "temperature": 0,
+            "stream": False,
+        }
+    if route.adapter_id == "openai-completions-v1":
+        return "/v1/completions", {
+            **common_model,
+            "prompt": "Reply with the word ready.",
+            "max_tokens": 4,
+            "temperature": 0,
+            "stream": False,
+        }
+    if route.adapter_id == "native-ar-trace-v1":
+        return "/native/autoregressive/trace", {
+            **common_model,
+            "prompt": "Reply with the word ready.",
+            "max_tokens": 4,
+            "temperature": 0,
+            "top_k": 3,
+            "seed": 7,
+        }
+    if route.adapter_id == "text-diffusion-v1":
+        return "/v1/refine", {
+            **common_model,
+            "prompt": "A local worker is ready.",
+            "denoising_steps": 4,
+            "seed": 7,
+        }
+    if route.adapter_id == "scene-analysis-v1":
+        from modeldeck.contracts.scenechat import external_prompt
+
+        pixel = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+            "AAAAASUVORK5CYII="
+        )
+        return "/v1/vision/analyse", {
+            **common_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": pixel}},
+                        {"type": "text", "text": external_prompt("Describe the scene.")},
+                    ],
+                }
+            ],
+            "max_tokens": 256,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+            "stream": False,
+        }
+    raise HTTPException(
+        409,
+        "Speech conversation rehearsal requires an interactive WebSocket client",
+    )
+
+
+async def _smoke_demo_route(route: DemoRouteContract, settings: Settings) -> dict:
+    path, payload = _demo_route_smoke_request(route)
+    started = asyncio.get_running_loop().time()
+    timeout_seconds = max(60.0, settings.scenechat_timeout_seconds)
+    if route.adapter_id == "text-diffusion-v1":
+        timeout_seconds = settings.diffusion_timeout_seconds
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            response = await client.post(
+                f"http://{settings.host}:{settings.gateway_port}{path}", json=payload
+            )
+        if not response.is_success:
+            try:
+                body = response.json()
+                code = body.get("error", {}).get("code") or body.get("detail")
+            except ValueError:
+                code = None
+            raise HTTPException(
+                response.status_code,
+                f"Gateway route rehearsal failed{f': {code}' if code else ''}",
+            )
+        body = response.json()
+    except httpx.HTTPError as error:
+        raise HTTPException(503, "The local ModelDeck gateway is unavailable") from error
+    evidence_fields = {
+        "openai-chat-v1": "choices",
+        "openai-completions-v1": "choices",
+        "native-ar-trace-v1": "events",
+        "text-diffusion-v1": "frames",
+        "scene-analysis-v1": "choices",
+    }
+    evidence_field = evidence_fields[route.adapter_id]
+    if not body.get(evidence_field):
+        raise HTTPException(502, "Gateway route rehearsal returned no generation evidence")
+    return {
+        "ok": True,
+        "route_id": route.id,
+        "public_model": route.public_model,
+        "adapter_id": route.adapter_id,
+        "provider": response.headers.get("x-modeldeck-provider"),
+        "evidence": evidence_field,
+        "duration_seconds": round(asyncio.get_running_loop().time() - started, 4),
+    }
+
+
+def _validate_demo_definition(definition: DemoSetDefinition, request: Request) -> dict:
+    profiles = request.app.state.profiles
+    supervisor = request.app.state.supervisor
+    policy = request.app.state.compatibility_store.list_model_cache_policy()
+    return validate_demo_set(
+        definition,
+        profiles,
+        registered_ids=set(supervisor.workers),
+        allowed_ids={profile.id for profile in profiles if profile_allowed(profile, policy)},
+        compatibility_tests=request.app.state.compatibility_store.list_tests(),
+    )
+
+
+def _demo_set_plan(definition: DemoSetDefinition, request: Request) -> dict:
+    supervisor = request.app.state.supervisor
+    profiles = {profile.id: profile for profile in request.app.state.profiles}
+    desired = []
+    for route in definition.routes:
+        if not route.providers:
+            continue
+        provider_id = min(route.providers, key=lambda item: (item.priority, item.deployment_id)).deployment_id
+        if provider_id not in desired:
+            desired.append(provider_id)
+    states = {
+        deployment_id: supervisor.get_worker(deployment_id)["state"]
+        for deployment_id in desired
+        if deployment_id in supervisor.workers
+    }
+    start_required = [
+        deployment_id for deployment_id in desired if states.get(deployment_id) not in {"ready", "busy"}
+    ]
+    desired_exclusive = [
+        deployment_id
+        for deployment_id in desired
+        if deployment_id in profiles and profiles[deployment_id].lifecycle.value == "exclusive"
+    ]
+    active_exclusive = [
+        worker["id"]
+        for worker in supervisor.list_workers()
+        if worker["lifecycle"] == "exclusive" and worker["state"] not in {"stopped", "failed", "incompatible"}
+    ]
+    warnings = []
+    if len(desired_exclusive) > 1:
+        warnings.append(
+            "The demo set selects multiple exclusive primary deployments; they cannot all run concurrently"
+        )
+    return {
+        "desired_primary_deployments": desired,
+        "start_required": start_required,
+        "stop_required": [
+            deployment_id for deployment_id in active_exclusive if deployment_id not in desired_exclusive
+        ],
+        "warnings": warnings,
+        "applies_process_changes": False,
+    }
 
 
 def _frontend_index() -> FileResponse | HTMLResponse:

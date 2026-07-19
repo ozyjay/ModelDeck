@@ -52,6 +52,112 @@ async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_demo_sets_are_versioned_validated_planned_and_activated(monkeypatch, tmp_path: Path) -> None:
+    async def gateway_status(_settings):
+        return {
+            "available": True,
+            "models": {
+                "data": [
+                    {
+                        "id": "my-chat",
+                        "ready": True,
+                        "selected_provider": "qwen-small-rocm",
+                        "effective_provider": "qwen-small-rocm",
+                    }
+                ]
+            },
+            "providers": {"providers": []},
+        }
+
+    async def smoke_route(route, _settings):
+        return {
+            "ok": True,
+            "route_id": route.id,
+            "public_model": route.public_model,
+            "adapter_id": route.adapter_id,
+            "provider": "qwen-small-rocm",
+            "evidence": "choices",
+            "duration_seconds": 0.1,
+        }
+
+    monkeypatch.setattr(main_module, "_gateway_status", gateway_status)
+    monkeypatch.setattr(main_module, "_smoke_demo_route", smoke_route)
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    definition = {
+        "id": "my-open-day",
+        "display_name": "My Open Day",
+        "description": "Selected demo route contracts.",
+        "demos": [{"id": "chat-demo", "display_name": "Chat demo"}],
+        "routes": [
+            {
+                "id": "chat-route",
+                "demo_id": "chat-demo",
+                "display_name": "Chat route",
+                "adapter_id": "openai-chat-v1",
+                "public_model": "my-chat",
+                "qualification_policy": "registered",
+                "fallback_policy": "structured-unavailable",
+                "providers": [{"deployment_id": "qwen-small-rocm", "priority": 10}],
+            }
+        ],
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            deployments = await client.get("/api/deployments")
+            created = await client.post("/api/demo-sets", json=definition)
+            validated = await client.post("/api/demo-sets/my-open-day/validate")
+            planned = await client.post("/api/demo-sets/my-open-day/plan")
+            activated = await client.post("/api/demo-sets/my-open-day/activate")
+            definition["description"] = "A revised draft."
+            revised = await client.put("/api/demo-sets/my-open-day", json=definition)
+            history = await client.get("/api/demo-sets/my-open-day/revisions")
+            first_revision = await client.get("/api/demo-sets/my-open-day/revisions/1")
+            restored = await client.post("/api/demo-sets/my-open-day/revisions/1/restore")
+            historical_activation = await client.post("/api/demo-sets/my-open-day/revisions/2/activate")
+            inactive_status = await client.get("/api/demo-sets/my-open-day/routes/chat-route/status")
+            await client.post("/api/demo-sets/my-open-day/activate")
+            active_status = await client.get("/api/demo-sets/my-open-day/routes/chat-route/status")
+            route_smoke = await client.post("/api/demo-sets/my-open-day/routes/chat-route/smoke")
+
+    assert any(item["id"] == "qwen-small-rocm" for item in deployments.json())
+    assert created.status_code == 201
+    assert created.json()["revision"] == 1
+    assert validated.json()["valid"] is True
+    assert planned.json()["start_required"] == ["qwen-small-rocm"]
+    assert activated.json()["routing"]["routes"][0]["public_model"] == "my-chat"
+    assert activated.json()["plan"]["applies_process_changes"] is False
+    assert revised.json()["revision"] == 2
+    assert revised.json()["active"] is True
+    assert revised.json()["active_revision"] == 1
+    assert [item["revision"] for item in history.json()["revisions"]] == [2, 1]
+    assert first_revision.json()["description"] == "Selected demo route contracts."
+    assert restored.status_code == 201
+    assert restored.json()["revision"] == 3
+    assert historical_activation.json()["revision"] == 2
+    assert inactive_status.json()["active"] is False
+    assert active_status.json()["ready"] is True
+    assert route_smoke.json()["provider"] == "qwen-small-rocm"
+
+
+@pytest.mark.asyncio
+async def test_open_day_mode_locks_configuration_mutations(tmp_path: Path) -> None:
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", open_day=True))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/demo-sets",
+                json={"id": "blocked-set", "display_name": "Blocked set"},
+            )
+
+    assert response.status_code == 409
+    assert "Open Day mode locks" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_cached_autoregressive_runtime_configuration_is_persistent_and_removable(
     monkeypatch, tmp_path: Path
 ) -> None:
