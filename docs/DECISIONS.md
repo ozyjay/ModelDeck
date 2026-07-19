@@ -1,14 +1,12 @@
 # Architecture decisions
 
-## ADR-010 — Versioned demo contracts activate immutable routing snapshots
+## ADR-010 — Events publish immutable Route snapshots
 
-Open Day applications are represented by editable demo sets rather than hard-wired
-worker cards. Demo routes bind stable public aliases and allowlisted protocol adapters to
-ordered deployments; deployments bind models to trusted runtimes, while workers remain
-ephemeral process instances. Saving creates an immutable revision. Validation and an
-advisory plan precede atomic activation, which changes routing only and never starts or
-stops a large model. This makes event configuration auditable, keeps lifecycle decisions
-explicit, and prevents partially edited configuration reaching demo clients.
+Open Day requirements are editable Events containing shared Routes and Demos. A Route
+binds a public name and trusted protocol to one primary Worker and ordered backups. Workers
+bind cached Models to trusted runtimes. Drafts autosave; publishing creates an immutable
+revision and atomically changes routing without starting or stopping a process. No Worker
+instances or public names are seeded.
 
 ## ADR-001 — Transformers-first, provider-neutral management
 
@@ -36,10 +34,11 @@ The first UI is dependency-free HTML served by FastAPI. This reduces moving part
 lifecycle behaviour is proved and remains reversible if React/Vite becomes justified.
 This initial decision is superseded by ADR-009.
 
-## ADR-006 — Fixed ports and allowlisted launches
+## ADR-006 — Allocated ports and allowlisted launches
 
-Development and Open Day use documented fixed ports. Worker commands are internal argument
-arrays derived from strict profiles; the UI cannot provide commands or raw arguments.
+Workers receive a free port from a bounded local range. Commands are internal argument
+arrays derived from immutable Worker definitions; the UI cannot provide commands or raw
+arguments.
 
 ## ADR-007 — Evidence preserves failures
 

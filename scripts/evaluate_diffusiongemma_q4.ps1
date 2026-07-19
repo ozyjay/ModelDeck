@@ -1,5 +1,17 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory)]
+    [string]$Q4Worker,
+
+    [Parameter(Mandatory)]
+    [string]$BF16Worker,
+
+    [Parameter(Mandatory)]
+    [string]$Q4Route,
+
+    [Parameter(Mandatory)]
+    [string]$BF16Route,
+
     [ValidateRange(1, 16)]
     [int]$SeedRepeats = 1,
 
@@ -35,22 +47,12 @@ if ($LASTEXITCODE -ne 0) {
     throw 'The Q4 environment does not have the current ModelDeck package. Run: python -m pip install --no-deps -e .'
 }
 
-$ManagementUrl = 'http://127.0.0.1:3600'
-try {
-    Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 1 | Out-Null
-    $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-    if ('diffusiongemma-q4-rocm' -notin @($Profiles.id)) {
-        throw 'The running management service predates the Q4 profile.'
-    }
-}
-catch {
-    & (Join-Path $PSScriptRoot 'stop.ps1')
-    & (Join-Path $PSScriptRoot 'run.ps1')
-    Start-Sleep -Seconds 1
-}
-
 $Arguments = @(
     './scripts/evaluate_diffusiongemma_q4.py',
+    '--q4-worker', $Q4Worker,
+    '--bf16-worker', $BF16Worker,
+    '--q4-route', $Q4Route,
+    '--bf16-route', $BF16Route,
     '--seed-repeats', "$SeedRepeats",
     '--stability-runs', "$StabilityRuns",
     '--max-length', "$MaxLength",

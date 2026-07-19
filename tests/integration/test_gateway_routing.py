@@ -5,8 +5,10 @@ import socket
 import httpx
 import pytest
 from modeldeck.gateway import create_gateway_app
-from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.profiles import ModelProfile
 from modeldeck.supervisor import WorkerSupervisor
+
+from tests.model_profiles import default_model_profiles
 
 
 def free_port() -> int:
@@ -68,17 +70,17 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
             )
             cancellation = await client.post("/v1/requests/gateway-stream/cancel")
         assert stream.status_code == 200
-        assert stream.headers["x-modeldeck-provider"] == "mock-ar"
+        assert "x-modeldeck-worker" not in stream.headers
         assert "event: token" in stream.text
         assert trace.status_code == 200
-        assert trace.headers["x-modeldeck-provider"] == "mock-ar"
+        assert "x-modeldeck-worker" not in trace.headers
         assert trace.json()["prompt_tokens"][:3] == ["hidden", " ", "policy"]
         assert trace.json()["user_prompt_tokens"] == ["latest", "  ", "question"]
         assert "hidden" not in trace.json()["user_prompt_tokens"]
         assert len(trace.json()["prompt_token_ids"]) == len(trace.json()["prompt_tokens"])
         assert len(trace.json()["user_prompt_token_ids"]) == len(trace.json()["user_prompt_tokens"])
         assert cancellation.json()["ok"] is True
-        assert cancellation.json()["providers"] == ["mock-ar"]
+        assert cancellation.json()["workers"] == ["mock-ar"]
     finally:
         await supervisor.stop_all()
 
@@ -102,14 +104,14 @@ async def test_gateway_forwards_diffusion_job_status_events_and_cancellation() -
             events = await client.get(f"/v1/jobs/{job_id}/events")
             cancellation = await client.post(f"/v1/jobs/{job_id}/cancel")
 
-        assert queued.headers["x-modeldeck-provider"] == "mock-diffusion"
+        assert "x-modeldeck-worker" not in queued.headers
         assert status.status_code == 200
-        assert status.headers["x-modeldeck-provider"] == "mock-diffusion"
+        assert "x-modeldeck-worker" not in status.headers
         assert status.json()["state"] == "complete"
         assert events.status_code == 200
-        assert events.headers["x-modeldeck-provider"] == "mock-diffusion"
+        assert "x-modeldeck-worker" not in events.headers
         assert "event: frame" in events.text
         assert cancellation.status_code == 200
-        assert cancellation.headers["x-modeldeck-provider"] == "mock-diffusion"
+        assert "x-modeldeck-worker" not in cancellation.headers
     finally:
         await supervisor.stop_all()

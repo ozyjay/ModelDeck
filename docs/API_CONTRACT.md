@@ -1,155 +1,80 @@
 # API contract
 
-## Management (`127.0.0.1:3600`)
+All services bind to `127.0.0.1` by default.
 
-Implemented: health, hardware, telemetry, catalogue, profiles, workers, worker
-start/stop/restart/warmup/smoke/logs, SSE events and log streams, compatibility reads,
-preset listing, stop-all, and same-origin gateway status. `GET /api/gateway/status`
-returns gateway health, advertised models, and providers, or a structured `available:
-false` response when the separate gateway process cannot be reached. Profile mutation
-is limited to `POST /api/profiles` and `DELETE /api/profiles/{profile_id}` for
-configurations backed by allowlisted autoregressive, SceneChat Gemma 4, DiffusionGemma
-BF16, or manifest-verified ModelDeck DiffusionGemma Q4 workers. Creation requires an exact complete snapshot already
-returned by cache discovery and accepts only an alias, trusted template ID, dtype,
-lifecycle, context length, and output ceiling. ModelDeck derives the cache root, runtime,
-port, capabilities, offline policy, and fixed launch arguments. Active workers must be
-stopped first, routing dependencies must be reassigned, and deleting a profile never
-deletes cache content.
+## Management (`:3600`)
 
-`GET /api/runtime-templates` lists each loaded template with its package identity,
-version, publisher, source, SHA-256 and registered implementation. Installation is a
-local-administrator-only operation and is not exposed through the management API.
+### Discovery and trust
 
-`POST /api/catalogue/policy` persists an allow/disallow decision for an exact cached
-`model_id` and `revision`. Disallowing requires every matching cache-backed worker to be
-stopped, then removes those workers and gateway routes from active ModelDeck use without
-deleting cache files or profile documents. Re-allowing restores configured workers.
-Profiles backed by packaged checkpoints rather than the Hugging Face cache are unaffected.
-Downloaded Q4 releases are controlled by their derivative repository and revision, not
-by the upstream base-model policy.
+- `GET /api/health`, `/api/hardware`, `/api/telemetry`, `/api/gateway/status`
+- `GET /api/catalogue` and `POST /api/catalogue/policy`
+- `GET /api/runtime-templates` and `/api/protocol-contracts`
+- `GET /api/compatibility`
 
-`GET /api/gateway/provider-selections` lists every explicitly selectable reserved alias.
-`GET` and `POST /api/gateway/provider-selections/{alias}` expose and update one selection;
-`scenechat-vision` is currently the packaged selectable contract. The POST body
-contains only an existing profile ID. Management accepts registered, policy-allowed
-profiles satisfying the selected alias's packaged family and capability contract. The response
-reports selection, worker state, gateway readiness, and eligible profiles without
-settings, filesystem paths, endpoints, or credentials. Selection does not start or stop
-workers. When a demo set is active, its route snapshot is the routing authority: legacy
-selections are reported as superseded and cannot be changed until demo routing is
-inactive. An effective selected local profile must be replaced before its configuration
-can be removed or its cached revision disallowed.
+The catalogue is read-only discovery. Worker creation is accepted only for an exact,
+complete, locally discovered revision using an installed trusted runtime template.
 
-FastAPI also serves the committed operator-console assets and returns the SPA entry point
-for non-API routes. Unknown `/api` routes remain JSON 404 responses rather than falling
-through to the frontend.
+### Workers
 
-### Deployments and demo routes
+- `GET|POST /api/workers`
+- `GET|PATCH|DELETE /api/workers/{worker_id}`
+- `GET /api/workers/{worker_id}/usage`
+- `POST /api/workers/{worker_id}/start|stop|restart|smoke`
+- `POST /api/workers/{worker_id}/replacement`
+- `POST /api/workers/stop-all`
+- `GET /api/workers/{worker_id}/logs` and `/logs/stream`
 
-`GET /api/deployments` presents each registered deployment separately from its current
-worker process state. Operator-facing names are mutable metadata while deployment IDs
-remain stable references; `PUT /api/deployments/{deployment_id}/display-name` updates a
-name without rewriting routes or evidence. `GET /api/deployments/usage` and `GET
-/api/deployments/{deployment_id}/usage` consolidate active and latest-draft route
-bindings, legacy alias selections and worker-state dependencies. Local deployment
-removal and cache disallow operations return structured blocking dependencies until
-those references are reassigned or the worker is stopped. `GET /api/demo-adapters`
-lists the allowlisted protocol contracts.
-Catalogue entries include `capability_hints` describing potential model uses; these are
-discovery hints rather than runtime readiness claims. Deployment capabilities and
-compatibility evidence remain authoritative for configured execution paths.
-Demo sets are managed through `GET` and `POST /api/demo-sets` and `GET`, `PUT`, and
-`DELETE /api/demo-sets/{demo_set_id}`. Creation and update append immutable revisions;
-an activated revision cannot be deleted.
+`PATCH` changes only the editable name. Execution settings are immutable: a different
+Model, revision, runtime or bounded setting creates a replacement Worker. Draft Event
+references may be rebound during replacement; published revisions are never rewritten.
+Archiving is blocked until the Worker is stopped and no draft or active Event revision
+references it. Historical revisions retain their audit reference. Cache files are never
+removed by Worker operations.
 
-`GET /api/demo-sets/{demo_set_id}/revisions` lists immutable history and `GET
-.../revisions/{revision}` retrieves one revision. `POST .../revisions/{revision}/restore`
-copies historical content into a new draft revision; it never rewrites history. `POST
-.../revisions/{revision}/activate` validates and atomically reactivates that exact revision,
-providing a direct routing rollback. `DELETE .../revisions/{revision}` discards only the
-latest inactive draft and reveals the preceding revision; discarded revision numbers are
-not reused. Deleting the demo-set endpoint removes the entire set and its revision history,
-and remains blocked while any revision is active.
+Smoke testing requires a ready Worker and performs health, Model, metrics and bounded
+generation requests. Both successful and failed evidence is persisted.
 
-`POST /api/demo-sets/{demo_set_id}/validate` checks deployment, capability, policy, and
-compatibility-evidence requirements. `POST .../plan` adds an advisory worker transition
-plan without changing processes. `POST .../activate` validates and atomically promotes
-the latest revision to the gateway routing snapshot. Activation never starts or stops a
-worker. Open Day mode permits reads, validation, and planning, but rejects configuration
-mutation and activation server-side.
+### Events and live routing
 
-`GET /api/demo-sets/{demo_set_id}/routes/{route_id}/status` combines deployment worker
-state with the alias advertised by the live gateway. `POST .../routes/{route_id}/smoke`
-runs a small, bounded request through the active gateway protocol contract and reports
-the effective provider without returning generated content. It never starts workers.
-Speech routes report that an interactive WebSocket client is required instead of claiming
-an HTTP smoke result.
+- `GET|POST /api/events`
+- `GET|DELETE /api/events/{event_id}`
+- `PUT|DELETE /api/events/{event_id}/draft`
+- `POST /api/events/{event_id}/validate|publish`
+- `GET /api/events/{event_id}/revisions`
+- `POST /api/events/{event_id}/revisions/{revision}/publish`
+- `POST /api/events/{event_id}/routes/{route_id}/smoke`
+- `GET /api/live`
 
-## Gateway (`127.0.0.1:8600`)
+Event bodies contain `name`, `description`, `qualification`, `demos` and `routes`. Each
+Route contains a display name, public name, trusted protocol contract and ordered
+`worker_ids`; index zero is primary. Each Demo contains a name and shared `route_ids`.
 
-Implemented: `/v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/providers`, AR chat and
-completion, native AR trace, native refine/diffuse, and an explicit unsupported vision
-route. Requests route only to ready loopback workers. Unavailable responses use HTTP 503,
-`local_provider_unavailable`, required family, alias, and
-`cloud_fallback_attempted: false`.
+Publishing validates the current draft, creates an immutable revision and atomically makes
+it the active routing snapshot. Publishing and configuration mutation are locked in Open
+Day mode. Route smoke works only for a Route in the currently published Event and sends a
+bounded request through the gateway.
 
-The gateway forwards SSE streams without buffering and propagates cancellation through
-`POST /v1/requests/{request_id}/cancel`. Text-diffusion jobs are available through
-`GET /v1/jobs/{job_id}`, `GET /v1/jobs/{job_id}/events`, and
-`POST /v1/jobs/{job_id}/cancel`; the gateway retains provider affinity and can rediscover
-jobs from local diffusion providers after a gateway restart. Diffusion request timeouts
-default to 900 seconds and can be changed with `MODELDECK_DIFFUSION_TIMEOUT_SECONDS`.
-`fast-chat` and `token-explainer` prefer the live Qwen worker when ready and fall back
-explicitly to the mock AR worker. Stricter OpenAI SSE compatibility remains later work.
-Applications always request `scenechat-vision`; ModelDeck resolves that stable alias to
-the explicitly selected physical vision profile. With no stored selection, the pinned E2B
-profile is selected. Once stored, only that profile is considered: if it is unavailable,
-the alias is not ready and there is no E2B or cloud fallback. `/v1/models` reports both
-`selected_provider` and the ready `effective_provider`.
-Persisted local profiles are discovered by the gateway on each request and
-advertised under their configured alias without requiring a gateway restart.
-The gateway applies the persisted HF-cache allow policy on every route refresh.
-After a demo set is activated, its snapshot replaces legacy alias discovery. Each route
-is available only through the gateway surface declared by its protocol adapter. With no
-activated set, the packaged reserved aliases and explicit provider selections retain
-their previous behaviour.
+Unknown API routes remain JSON 404 responses. Browser routes serve the committed React
+bundle. The browser cannot submit commands, paths, arbitrary environment values or remote
+Model identifiers.
 
-### Native autoregressive trace token metadata
+## Gateway (`:8600`)
 
-`POST /native/autoregressive/trace` preserves the existing trace events, probabilities,
-alternatives, readiness, errors, metrics, and `prompt_token_ids`. Its non-streaming response
-adds `prompt_tokens`, `user_prompt_token_ids`, and `user_prompt_tokens` as documented in the
-[worker protocol](WORKER_PROTOCOL.md#autoregressive-worker).
+- `GET /v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/routes`
+- `POST /v1/chat/completions`, `/v1/completions`
+- `POST /native/autoregressive/trace`
+- `POST /v1/refine`, `/v1/diffuse`
+- `GET /v1/jobs/{job_id}`, `/v1/jobs/{job_id}/events`
+- `POST /v1/jobs/{job_id}/cancel`
+- `POST /v1/requests/{request_id}/cancel`
+- `POST /v1/vision/analyse`
+- `WS /v1/speech/conversations`
 
-`prompt_token_ids` and `prompt_tokens` describe the complete inference context and align
-one-to-one. `user_prompt_tokens` is the safe public-display view of only the latest
-user-entered prompt; it does not contain hidden system instructions or chat-template control
-tokens and aligns with `user_prompt_token_ids`. These values come from the selected worker's
-tokenizer. The gateway only validates and propagates them. Invalid or misaligned successful
-worker metadata is returned as HTTP 502 with `invalid_worker_trace_metadata`, rather than as
-a misleading trace.
+Clients always supply a published Route `public_name` in the `model` field. Routes are
+advertised only from the active Event snapshot and only on surfaces permitted by their
+protocol. The gateway tries Workers in configured order and routes only to a ready local
+process. It forwards streams and cancellation and retains local diffusion-job affinity.
 
-## SceneChat vision API (`127.0.0.1:8600`)
-
-The stable gateway advertises `scenechat-vision` with `image_input` and
-`structured_output`. It accepts the SceneChat OpenAI-shaped request at
-`POST /v1/chat/completions` or `POST /v1/vision/analyse`, routes only to the selected local
-Gemma 4 worker, and returns `local_provider_unavailable` when that worker is stopped. The
-gateway translates the alias to the exact worker model identifier and injects the private
-loopback credential internally.
-
-## Direct SceneChat compatibility API (`127.0.0.1:8000`)
-
-The managed SceneChat worker preserves the existing client contract at `GET /v1/models`
-and `POST /v1/chat/completions`, plus native smoke at
-`POST /native/vision-language/smoke`. These routes require
-`Authorization: Bearer <MODELDECK_SCENECHAT_API_KEY>`; the loopback development default is
-`local`. Lifecycle routes remain loopback-only for the supervisor.
-
-Chat accepts the exact pinned model, one user message, one base64 JPEG/PNG image followed
-by one approved SceneChat prompt, `temperature: 0.1`, `max_tokens` from 1 through 700
-(clamped to the profile's 512-token generation ceiling),
-`response_format: {"type":"json_object"}`, and `stream: false`. Errors use a sanitised
-OpenAI-shaped `error` object with status 401, 413, 422, 429, 502, 503, or 504. This direct
-worker route is retained for supervisor smoke tests and diagnosis; applications use the
-stable gateway.
+When no matching Worker is ready, the response is HTTP 503 with code
+`local_route_unavailable`, the requested Route and `cloud_fallback_attempted: false`.
+Worker UUIDs and the removed provider-selection model are not part of public responses.

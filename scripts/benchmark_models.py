@@ -21,16 +21,6 @@ from PIL import Image
 
 REPORT_FORMAT = "modeldeck-benchmark"
 REPORT_VERSION = 1
-DEFAULT_PHYSICAL_PROFILES = (
-    "qwen-small-rocm",
-    "qwen-1-5b-rocm",
-    "qwen-3b-rocm",
-    "diffusiongemma-q4-rocm",
-    "diffusiongemma-rocm",
-    "scenechat-gemma4-e2b-rocm",
-)
-OPTIONAL_PHYSICAL_PROFILES = ("local-repartee-gpt-oss-120b",)
-PHYSICAL_PROFILES = DEFAULT_PHYSICAL_PROFILES + OPTIONAL_PHYSICAL_PROFILES
 ALLOWED_INITIAL_STATES = {"ready", "stopped"}
 SYSTEM_PROMPT_PATH = (
     Path(__file__).resolve().parents[1] / "backend/modeldeck/contracts/scenechat/scene_analysis_system.txt"
@@ -62,19 +52,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--management-url", default="http://127.0.0.1:3600")
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8600")
     parser.add_argument("--preset", choices=tuple(PRESETS), default="standard")
-    parser.add_argument("--models", nargs="+", default=list(DEFAULT_PHYSICAL_PROFILES))
+    parser.add_argument(
+        "--workers",
+        nargs="+",
+        required=True,
+        help="Editable Worker names or immutable Worker UUIDs.",
+    )
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--markdown-output", type=Path)
     return parser.parse_args()
 
 
-def validate_models(models: list[str]) -> list[str]:
-    selected = list(dict.fromkeys(models))
-    unknown = sorted(set(selected) - set(PHYSICAL_PROFILES))
-    if unknown:
-        raise BenchmarkError("Unknown or non-physical benchmark profiles: " + ", ".join(unknown))
+def validate_workers(workers: list[str]) -> list[str]:
+    selected = list(dict.fromkeys(workers))
     if not selected:
-        raise BenchmarkError("At least one physical model profile must be selected")
+        raise BenchmarkError("At least one physical Worker must be selected")
     return selected
 
 
@@ -162,12 +154,6 @@ def request_json(
     return body, response.headers
 
 
-def assert_provider(headers: httpx.Headers, expected: str) -> None:
-    actual = headers.get("x-modeldeck-provider")
-    if actual != expected:
-        raise BenchmarkError(f"Gateway selected provider {actual or '[missing]'}; expected {expected}")
-
-
 class BenchmarkRunner:
     def __init__(
         self,
@@ -200,26 +186,47 @@ class BenchmarkRunner:
         return safe_telemetry(self.get("/api/telemetry"))
 
     def preflight(self, selected: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        profiles_response = self.client.get(self.management_url + "/api/profiles")
-        profiles_response.raise_for_status()
-        profiles = profiles_response.json()
-        if not isinstance(profiles, list):
-            raise BenchmarkError("Management profiles endpoint returned a non-list response")
-        by_id = {str(profile.get("id")): profile for profile in profiles}
-        missing = sorted(set(selected) - set(by_id))
-        if missing:
-            raise BenchmarkError("Running ModelDeck is missing profiles: " + ", ".join(missing))
-        for worker in self.workers():
+        workers = self.workers()
+        resolved = []
+        for selector in selected:
+            matches = [
+                worker
+                for worker in workers
+                if worker.get("id") == selector or worker.get("name") == selector
+            ]
+            if not matches:
+                raise BenchmarkError(f"Running ModelDeck has no Worker named or identified by: {selector}")
+            if len(matches) > 1:
+                raise BenchmarkError(f"Worker name is ambiguous; use its UUID: {selector}")
+            if matches[0].get("runtime") == "mock":
+                raise BenchmarkError(f"Mock Workers are not physical benchmark targets: {selector}")
+            resolved.append(dict(matches[0]))
+        for worker in workers:
             if worker.get("state") not in ALLOWED_INITIAL_STATES:
                 raise BenchmarkError(
                     f"Worker {worker.get('id')} is {worker.get('state')}; "
                     "benchmarks require ready or stopped workers"
                 )
-        hardware = self.get("/api/hardware")
-        return profiles, hardware
+        live = self.get("/api/live")
+        for worker in resolved:
+            routes = [
+                route
+                for route in live.get("routes", [])
+                if worker["id"] in route.get("worker_ids", [])
+            ]
+            if not routes:
+                raise BenchmarkError(
+                    f"Worker {worker['name']} is not assigned to a Route in the published Event"
+                )
+            if len(routes) > 1:
+                raise BenchmarkError(
+                    f"Worker {worker['name']} serves several published Routes; benchmark them separately"
+                )
+            worker["gateway_model"] = routes[0]["public_name"]
+        return resolved, self.get("/api/hardware")
 
     def stop_all(self) -> None:
-        self.post("/api/presets/stop-all")
+        self.post("/api/workers/stop-all")
 
     def start_worker(self, worker_id: str) -> tuple[dict[str, Any], float]:
         started = time.perf_counter()
@@ -239,7 +246,7 @@ class BenchmarkRunner:
 
     def run_autoregressive(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
-            "model": profile["alias"],
+            "model": profile["gateway_model"],
             "prompt": "Summarise the role of local inference in one concise paragraph.",
             "seed": 7,
             "max_tokens": self.preset.autoregressive_tokens,
@@ -249,11 +256,10 @@ class BenchmarkRunner:
             "stream": False,
         }
         started = time.perf_counter()
-        body, headers = request_json(
+        body, _ = request_json(
             self.client, "POST", self.gateway_url + "/native/autoregressive/trace", payload=payload
         )
         wall = time.perf_counter() - started
-        assert_provider(headers, profile["id"])
         events = body.get("events") or []
         metrics = body.get("metrics") or {}
         text = events[-1].get("text_so_far", "") if events else ""
@@ -271,7 +277,7 @@ class BenchmarkRunner:
 
     def run_llama_vulkan(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
-            "model": profile["alias"],
+            "model": profile["gateway_model"],
             "messages": [
                 {
                     "role": "user",
@@ -284,11 +290,10 @@ class BenchmarkRunner:
             "stream": False,
         }
         started = time.perf_counter()
-        body, headers = request_json(
+        body, _ = request_json(
             self.client, "POST", self.gateway_url + "/v1/chat/completions", payload=payload
         )
         wall = time.perf_counter() - started
-        assert_provider(headers, profile["id"])
         choices = body.get("choices") or []
         content = choices[0].get("message", {}).get("content") if choices else None
         if not str(content or "").strip():
@@ -308,7 +313,7 @@ class BenchmarkRunner:
 
     def run_diffusion(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
-            "model": profile["alias"],
+            "model": profile["gateway_model"],
             "prompt": "Explain why reproducible local benchmarks are useful in concise prose.",
             "max_length": self.preset.diffusion_tokens,
             "block_length": self.preset.diffusion_tokens,
@@ -318,8 +323,9 @@ class BenchmarkRunner:
             "stream_intermediate_frames": False,
         }
         started = time.perf_counter()
-        queued, headers = request_json(self.client, "POST", self.gateway_url + "/v1/diffuse", payload=payload)
-        assert_provider(headers, profile["id"])
+        queued, _ = request_json(
+            self.client, "POST", self.gateway_url + "/v1/diffuse", payload=payload
+        )
         job_id = str(queued.get("job_id") or "")
         if not job_id:
             raise BenchmarkError("Diffusion benchmark returned no job identifier")
@@ -347,7 +353,7 @@ class BenchmarkRunner:
         prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
         prompt += "\n\nSelected curated question:\nDescribe the scene."
         payload = {
-            "model": profile["alias"],
+            "model": profile["gateway_model"],
             "messages": [
                 {
                     "role": "user",
@@ -363,11 +369,10 @@ class BenchmarkRunner:
             "stream": False,
         }
         started = time.perf_counter()
-        body, headers = request_json(
+        body, _ = request_json(
             self.client, "POST", self.gateway_url + "/v1/vision/analyse", payload=payload
         )
         wall = time.perf_counter() - started
-        assert_provider(headers, profile["id"])
         choices = body.get("choices") or []
         content = choices[0].get("message", {}).get("content") if choices else None
         if not content:
@@ -382,7 +387,7 @@ class BenchmarkRunner:
         }
 
     def run_workload(self, profile: dict[str, Any]) -> dict[str, Any]:
-        if profile.get("preferred_runtime") == "llama-vulkan":
+        if profile.get("runtime") == "llama-vulkan":
             return self.run_llama_vulkan(profile)
         family = profile["generation_family"]
         if family == "autoregressive":
@@ -414,11 +419,13 @@ class BenchmarkRunner:
                 raise BenchmarkError("Every measured request failed")
             fingerprint_fields = build_fingerprint_fields(hardware, profile, model, metrics_after)
             result = {
-                "profile_id": profile["id"],
+                "worker_id": profile["id"],
+                "worker_name": profile["name"],
+                "route_name": profile["gateway_model"],
                 "model_id": profile["model_id"],
                 "model_revision": profile["revision"],
                 "generation_family": profile["generation_family"],
-                "runtime": profile["preferred_runtime"],
+                "runtime": profile["runtime"],
                 "dtype": profile["dtype"],
                 "status": "success" if not failures else "partial-failure",
                 "started_at": started_at,
@@ -443,11 +450,11 @@ class BenchmarkRunner:
         for worker_id in initially_ready:
             try:
                 worker, _ = self.start_worker(worker_id)
-                outcomes.append({"profile_id": worker_id, "status": worker.get("state")})
+                outcomes.append({"worker_id": worker_id, "status": worker.get("state")})
             except Exception as error:
-                outcomes.append({"profile_id": worker_id, "status": "failed", "error": sanitise_error(error)})
+                outcomes.append({"worker_id": worker_id, "status": "failed", "error": sanitise_error(error)})
         return {
-            "requested_ready_profiles": initially_ready,
+            "requested_ready_workers": initially_ready,
             "outcomes": outcomes,
             "passed": all(item["status"] == "ready" for item in outcomes),
         }
@@ -475,7 +482,7 @@ def build_fingerprint_fields(
         "model_revision": model.get("revision", profile.get("revision")),
         "quantisation": model.get("quantization", "none"),
         "dtype": model.get("dtype", profile.get("dtype")),
-        "runtime": profile.get("preferred_runtime"),
+        "runtime": profile.get("runtime"),
         "environment_overrides": {
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
@@ -527,7 +534,7 @@ def markdown_report(report: dict[str, Any]) -> str:
             [
                 f"## {family}",
                 "",
-                "| Profile | Status | Cold start (s) | Median request (s) | p95 request (s) "
+                "| Worker | Status | Cold start (s) | Median request (s) | p95 request (s) "
                 "| Median throughput (tok/s) | Peak device/GTT (GiB) |",
                 "|---|---:|---:|---:|---:|---:|---:|",
             ]
@@ -542,7 +549,7 @@ def markdown_report(report: dict[str, Any]) -> str:
                 peak = metrics.get("system_gtt_peak_used_bytes")
             lines.append(
                 "| {profile} | {status} | {cold} | {wall} | {p95} | {throughput} | {peak} |".format(
-                    profile=item.get("profile_id", "unknown"),
+                    profile=item.get("worker_name") or item.get("worker_id", "unknown"),
                     status=item.get("status", "failed"),
                     cold=format_number(item.get("cold_start_wall_seconds")),
                     wall=format_number(wall.get("median")),
@@ -578,29 +585,30 @@ def run_benchmark(
     preset_name: str,
 ) -> dict[str, Any]:
     profiles, hardware = runner.preflight(selected)
-    profiles_by_id = {profile["id"]: profile for profile in profiles}
     initial_workers = runner.workers()
     initially_ready = [worker["id"] for worker in initial_workers if worker.get("state") == "ready"]
     started = time.perf_counter()
     started_at = datetime.now(UTC).isoformat()
     results: list[dict[str, Any]] = []
     restoration: dict[str, Any] = {
-        "requested_ready_profiles": initially_ready,
+        "requested_ready_workers": initially_ready,
         "outcomes": [],
         "passed": False,
     }
     runner.stop_all()
     try:
-        for worker_id in selected:
+        for profile in profiles:
+            worker_id = profile["id"]
             print(f"Benchmarking {worker_id}…", flush=True)
             try:
-                results.append(runner.benchmark_profile(profiles_by_id[worker_id], hardware))
+                results.append(runner.benchmark_profile(profile, hardware))
             except BaseException as error:
                 results.append(
                     {
-                        "profile_id": worker_id,
-                        "model_id": profiles_by_id[worker_id]["model_id"],
-                        "generation_family": profiles_by_id[worker_id]["generation_family"],
+                        "worker_id": worker_id,
+                        "worker_name": profile["name"],
+                        "model_id": profile["model_id"],
+                        "generation_family": profile["generation_family"],
                         "status": "failed",
                         "error": sanitise_error(error),
                     }
@@ -624,9 +632,9 @@ def run_benchmark(
         "status": status,
         "configuration": {
             "preset": preset_name,
-            "selected_profiles": selected,
+            "selected_workers": [profile["id"] for profile in profiles],
             "warmup_requests": 1,
-            "measured_requests_per_profile": runner.preset.repetitions,
+            "measured_requests_per_worker": runner.preset.repetitions,
             "autoregressive_tokens": runner.preset.autoregressive_tokens,
             "diffusion_tokens": runner.preset.diffusion_tokens,
             "diffusion_steps": runner.preset.diffusion_steps,
@@ -652,7 +660,7 @@ def report_exit_code(report: dict[str, Any]) -> int:
 def main() -> int:
     args = parse_args()
     try:
-        selected = validate_models(args.models)
+        selected = validate_workers(args.workers)
         default_json, default_markdown = default_output_paths()
         json_path = args.json_output or default_json
         markdown_path = args.markdown_output or (

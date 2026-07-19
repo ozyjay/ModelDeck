@@ -4,7 +4,6 @@ import socket
 import sys
 
 import pytest
-from modeldeck.profiles import default_model_profiles
 from modeldeck.protocol import LifecycleClass
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.supervisor.service import (
@@ -15,6 +14,8 @@ from modeldeck.supervisor.service import (
     classify_log_level,
     redact_log,
 )
+
+from tests.model_profiles import default_model_profiles
 
 
 def free_port() -> int:

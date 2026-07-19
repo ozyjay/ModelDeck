@@ -1,171 +1,86 @@
 # Architecture
 
-## Boundaries
+## Conceptual model
 
 ```text
-Operator console/API :3600 ---- WorkerSupervisor ---- one allowlisted process per model :8610+
-       |                                      |-- autoregressive contract
-       |                                      `-- text-diffusion contract
-       `---- read-only cache + hardware + SQLite evidence
-
-Demo clients ---- Stable gateway :8600 ---- capability alias ---- ready local worker
-                                                   `---- structured unavailable result
+Model (cached, read-only)
+  └─ Worker (configured runtime; editable name, immutable execution identity)
+       └─ Route (public name + protocol; primary Worker + ordered backups)
+            └─ Demo (uses one or more shared Routes)
+                 └─ Event (versioned publication boundary)
 ```
 
-The configuration model separates four concepts that used to be implicit in worker
-cards. A model artefact identifies cached or packaged weights; a deployment is a trusted
-model profile plus its runtime and launch policy; a worker is one deployment's current
-process state; and a demo route is an application-facing protocol contract bound to an
-ordered set of deployments. This keeps booth requirements stable while models and
-runtimes change independently.
+The relationships are references, not ownership. One Model can have several Workers for
+different runtimes or settings. One Worker can serve several Routes. A Route can be shared
+by several Demos in an Event. Removing a Demo therefore does not remove its Routes or
+Workers.
 
-Catalogue model entries describe a capability envelope rather than assigning the model
-to one exclusive use. For example, a multimodal model may expose text generation, chat,
-image input, and structured-output capabilities. The narrower generation family belongs
-to each configured deployment and records the engine and protocol path ModelDeck has
-actually validated.
+Operator-facing names are labels and can change. Workers, Routes, Demos and Events have
+hidden UUIDs so renaming does not rewrite references. A Route's `public_name` is different:
+it is the external identifier sent by demo clients in the gateway `model` field, so an
+operator edits it intentionally as part of the Route contract.
 
-## Runtime environments
+## Runtime boundary
 
-`.venv` is ModelDeck's control-plane runtime: API, operator-console assets, supervisor, gateway,
-catalogue, evidence store, fallbacks, and tests. `.venv-rocm72` is the primary target
-inference runtime used by the core Qwen and DiffusionGemma worker processes. Both belong
-to the target installation, but they remain separate so GPU dependencies and tensors
-never enter the management process. A GPU-free `.venv` run is a useful development or
-recovery mode, not the primary inference configuration.
+```text
+Operator console/API :3600 ── WorkerSupervisor ── trusted Worker processes on loopback
+          │                         │
+          │                         └─ fixed argument arrays; no browser-supplied commands
+          └─ SQLite configuration, evidence and active Event snapshot
 
-HuggingFacePull owns Hugging Face acquisition and cleanup. OllamaPull will own Ollama
-registry storage when inspected. ModelDeck owns profiles, runtime process lifecycle,
-scheduling, evidence, fixed local routing, and management presentation. Demos retain
-public wording, interaction state, reset, and prepared replay assets.
+Demo applications ── gateway :8600 ── published Route ── first ready Worker in order
+```
 
-## Runtime registries and deployment seeds
+`.venv` owns the management service, gateway, supervisor, discovery, fallback fixtures and
+tests. `.venv-rocm72` owns the primary ROCm inference stack. `.venv-rocm72-q4` isolates the
+Q4 GPTQ dependencies. Model libraries and tensors never enter the management process;
+stopping a Worker process is the memory-recovery boundary.
 
-Three versioned, validated JSON registries under `backend/modeldeck/registry_data` provide
-runtime templates, first-run deployment seeds, and reserved gateway contracts. Runtime
-templates describe the bounded fields ModelDeck may derive for a recognised cache model;
-they select, but cannot define, a trusted worker launch implementation. Registry loading
-rejects unknown versions, duplicate IDs, invalid capabilities, and implementations without
-a trusted launch builder.
+## Trusted configuration
 
-Deployment seeds are imported into SQLite exactly once. After import they are ordinary
-operator-owned deployment records: their names can change and they can be removed after
-routing dependencies and running workers are cleared. A seed-completion marker prevents a
-removed deployment from reappearing on restart. The gateway and management service both
-load deployments from SQLite; packaged JSON is not a live deployment registry.
+Operator configuration and executable trust are separate:
 
-SQLite is the source of truth for deployments, display-name metadata, cache policy,
-compatibility evidence, explicit provider selections, and immutable demo-set revisions.
-Runtime implementations, protocol adapters and validation constraints remain packaged
-because they form the trusted execution boundary rather than operator configuration.
-Runtime template packages can also be installed by a local administrator using an exact
-reviewed SHA-256. These packages are versioned configuration, not executable plugins: they
-may select only a code-registered launch builder and implementation-specific bounded
-settings. Their provenance is visible through the management API and Model library. See
-[Trusted runtime manifests](TRUSTED_RUNTIME_MANIFESTS.md).
+- Operators CRUD Events and Workers and edit names, Route contracts and Worker order.
+- ModelDeck code owns protocol contracts and launch builders.
+- Versioned runtime templates select an installed launch builder and bounded settings.
+- Worker creation accepts a discovered pinned Model, a trusted runtime template and
+  bounded options. It never accepts a command, executable, path, arbitrary argument,
+  environment variable or remote-code flag from the web interface.
 
-## Process and failure model
+No Worker instances or public Route aliases are seeded. The trusted templates describe
+what may be created, not what exists.
 
-The management API does not import model libraries or hold model tensors. Each worker is
-an isolated subprocess launched with a fixed argument array derived from a validated
-profile. The supervisor serialises loads, checks fixed ports, captures stdout/stderr,
-polls health, runs warmup, detects exit, requests graceful shutdown, and terminates only
-after a timeout. Terminating the worker is the memory-recovery boundary.
+## Event lifecycle
 
-Worker log records are bounded on disk, severity-classified, and tagged by launch
-session. The management log API shows the current launch by default so resolved failures
-from an earlier runtime do not appear to describe the active worker.
+Each Event has one mutable autosaved draft and zero or more immutable published revisions.
+Validation checks that all Worker references exist, the generation family and capabilities
+match the protocol, Worker order is unambiguous, and any requested tested-working policy
+has matching evidence. Publishing creates a revision and atomically replaces the one live
+routing snapshot. It never starts or stops a process.
 
-States are `discovered`, `stopped`, `validating`, `starting`, `loading`, `warming`,
-`ready`, `busy`, `degraded`, `stopping`, `failed`, `orphaned`, and `incompatible`.
-Process existence alone never means ready.
+An earlier revision can be made live again exactly. Discarding a draft restores the newest
+published definition. Published revisions retain their Worker UUID references; replacing a
+Worker can rebind mutable drafts but never silently rewrites history.
 
-## Gateway and routing
+## Gateway
 
-The operator console can CRUD versioned demo sets. Each set names the demos expected at
-an event and defines route contracts with a public model alias, an allowlisted protocol
-adapter, a qualification rule, an explicit fallback policy, and ordered deployment
-bindings. Validation checks registration, cache policy, generation family, capabilities,
-mock visibility, and—when selected—recorded tested-working evidence. Planning reports
-which primary deployments would need to start or stop but deliberately makes no process
-changes.
+The gateway has one routing authority: the active Event snapshot. With no published Event,
+`/v1/models` is empty and requests return structured `local_route_unavailable` responses.
+For each Route the gateway tries the primary Worker and then backups in displayed order,
+using readiness rather than process existence. No cloud fallback occurs.
 
-Activation validates a specific immutable revision and atomically replaces the gateway's
-routing snapshot. The gateway rereads that snapshot on each route assembly, so activation
-does not require a restart. It only exposes a route on the endpoint surfaces declared by
-its adapter. Activation does not start or stop workers; readiness remains observable and
-an unavailable provider still produces the structured local error. Until the first demo
-set is activated, the legacy reserved-alias registry remains the effective routing source
-for backwards compatibility.
+Routes are exposed only on surfaces permitted by their trusted protocol contract. The
+gateway does not expose physical Worker identity as an application-facing provider layer.
+Mock/replay use remains explicit and is signalled as fallback evidence.
 
-The active demo-set snapshot is the sole routing authority once it exists. Stored legacy
-provider selections remain visible for compatibility diagnostics but are marked as
-superseded and cannot be edited. Management also derives a consolidated dependency view
-for each deployment from active and latest-draft route bindings, effective legacy aliases
-and worker state. The same view drives the operator console's **Used by** guidance and
-server-side removal checks, preventing configuration deletion from leaving dangling
-routes.
+## Persistence and cut-over
 
-Immutable history supports two distinct recovery operations: restoring old content creates
-a new editable draft revision, while activating an exact historical revision performs an
-atomic routing rollback. Route rehearsal queries the live gateway advertisement and can
-send a bounded adapter-specific request only for the active revision. It neither starts a
-worker nor exposes generated content through the management API. Full-duplex speech remains
-an explicitly interactive WebSocket rehearsal.
+SQLite schema v2 stores Workers, Event drafts, Event revisions, the active routing
+snapshot, exact Model cache policy and compatibility evidence. A legacy unversioned
+database is refused rather than guessed or auto-migrated. `scripts/cutover_v2.ps1` moves
+only the exact database, WAL and SHM files to a timestamped backup and initialises an empty
+v2 database.
 
-Aliases route according to the reserved-alias registry and declared capability contract. `fast-chat` prefers the core
-Qwen ROCm worker and `text-diffusion` prefers the separate core DiffusionGemma ROCm
-worker. `scenechat-vision` routes image-and-text requests to the explicitly selected Gemma 4
-profile and injects its private loopback credential. Each fallback-capable alias retains an explicit
-mock provider for GPU-unavailable demonstrations
-and contract testing. When no candidate is ready, the gateway returns a structured local
-unavailable response; no cloud request occurs. The gateway and management API are
-separate processes and ports so demo clients have a stable contract while management
-restarts evolve independently.
-
-## Scheduler
-
-The first scheduler invariant is a single global model-load lock. Profiles declare
-`resident`, `on-demand`, or `exclusive`. Later measured peak/steady memory, context/KV
-growth, temperature, reserve, process use, and compatibility evidence will inform launch
-decisions. Parameter count alone will not.
-
-## Cache integration
-
-The scanner resolves `HF_HUB_CACHE`, `${HF_HOME}/hub`, the normal user cache, then
-`/mnt/work/models/huggingface/hub`. It reads snapshots, config hints, incomplete markers,
-revision refs, model payloads, and physical size. A snapshot with model weights is shown
-as completely acquired even when it has no Transformers configuration; runtime support
-is reported separately. The scanner never calls the Hub and never treats files as proof
-that a model is runnable. For recognised complete snapshots matching the allowlisted
-autoregressive, SceneChat Gemma 4, DiffusionGemma BF16, or self-contained ModelDeck Q4
-implementations, the operator may
-create a constrained local profile. The server resolves the selected catalogue entry
-and derives its cache root; no filesystem path, runtime executable, command argument,
-environment variable, remote model identifier, or remote-code flag is accepted from the
-browser. Local profiles are persisted in SQLite, loaded by management at startup, and
-discovered dynamically by the gateway.
-
-The reserved `scenechat-vision` alias is application-facing and cannot be claimed by a
-local profile. SQLite stores its selected physical profile ID. Management owns constrained
-selection; the gateway rereads the mapping, local profiles, and cache policy whenever it
-assembles routes, so promotion requires no gateway restart. The default is
-`scenechat-gemma4-e2b-rocm`. An explicit selection is exclusive for the stable alias:
-provider unavailability produces a not-ready alias rather than fallback. Requests are
-rewritten to the selected profile's physical `model_id` before reaching the worker.
-
-An exact model/revision allow policy controls whether Hugging Face cache-backed profiles
-participate in management workers and gateway routes. Disallowing is reversible and never
-mutates the cache or deletes profile configuration. Profiles reading packaged ModelDeck
-checkpoints do not inherit policy merely because they record the same upstream model ID.
-Downloaded Q4 profiles instead carry a separate derivative artefact identity, so their
-policy follows the exact Hugging Face repository revision while worker loading and smoke
-evidence retain the pinned base-model identity.
-
-## Data and security
-
-SQLite stores model profiles, compatibility tests, worker events, presets, demo-set
-revisions, and the single activated routing snapshot. Logs are
-bounded in memory in this slice and redact prompt/output/credential-shaped fields.
-Services bind to loopback. The API has no shell, arbitrary environment, filesystem
-browser, token, Docker socket, upload, camera, or cloud inference surface.
+Worker smoke tests make a real bounded generation request and record both success and
+failure against the detected hardware, OS, ROCm/library versions, pinned Model revision,
+runtime, data type and relevant environment overrides.

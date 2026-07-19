@@ -1,3 +1,3 @@
-from .store import CompatibilityStore, evidence_fingerprint
+from .store import CompatibilityStore, LegacyDatabaseError, evidence_fingerprint
 
-__all__ = ["CompatibilityStore", "evidence_fingerprint"]
+__all__ = ["CompatibilityStore", "LegacyDatabaseError", "evidence_fingerprint"]

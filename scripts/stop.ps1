@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Continue'
 Set-Location (Join-Path $PSScriptRoot '..')
 try {
-    Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3600/api/presets/stop-all' -TimeoutSec 15 |
+    Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3600/api/workers/stop-all' -TimeoutSec 15 |
         Out-Null
 }
 catch { Write-Verbose 'The management service was unavailable for graceful worker shutdown.' }

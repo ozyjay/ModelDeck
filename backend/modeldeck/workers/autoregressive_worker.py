@@ -36,7 +36,7 @@ class ChatMessage(BaseModel):
 
 class GenerationRequest(BaseModel):
     request_id: str | None = None
-    model: str = "token-explainer"
+    model: str = "local-worker"
     prompt: str | None = Field(default=None, max_length=16_000)
     messages: list[ChatMessage] | None = None
     stream: bool = False

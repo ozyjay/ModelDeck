@@ -118,10 +118,14 @@ def _filesystem(path: str) -> dict[str, Any]:
 def _listening_ports() -> list[int]:
     listening: set[int] = set()
     for port in MODEL_PORTS:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.01)
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                listening.add(port)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.01)
+                if sock.connect_ex(("127.0.0.1", port)) == 0:
+                    listening.add(port)
+        except OSError:
+            # Hardened and sandboxed environments may deny socket creation entirely.
+            return sorted(listening)
     return sorted(listening)
 
 

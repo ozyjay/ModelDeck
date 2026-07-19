@@ -5,9 +5,11 @@ import socket
 
 import httpx
 import pytest
-from modeldeck.profiles import ModelProfile, default_model_profiles
+from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import WorkerState
 from modeldeck.supervisor import WorkerSupervisor
+
+from tests.model_profiles import default_model_profiles
 
 
 def free_port() -> int:

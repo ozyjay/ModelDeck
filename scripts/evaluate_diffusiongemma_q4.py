@@ -21,10 +21,6 @@ GIB = 1024**3
 DEFAULT_MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 DEFAULT_REVISION = "52de6b914ee1749a7d4933202505ddf5b414ec43"
 DEFAULT_CACHE_ROOT = "/mnt/work/models/huggingface/hub"
-Q4_WORKER = "diffusiongemma-q4-rocm"
-BF16_WORKER = "diffusiongemma-rocm"
-Q4_ALIAS = "text-diffusion"
-BF16_ALIAS = "text-diffusion-bf16"
 
 
 @dataclass(frozen=True)
@@ -129,12 +125,16 @@ DEFAULT_PROMPTS = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare the packaged DiffusionGemma Q4 worker with its pinned BF16 "
+            "Compare configured DiffusionGemma Q4 and pinned BF16 Workers "
             "baseline and apply local quality, determinism, memory, and latency gates."
         )
     )
     parser.add_argument("--management-url", default="http://127.0.0.1:3600")
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8600")
+    parser.add_argument("--q4-worker", required=True, help="Editable Worker name or UUID")
+    parser.add_argument("--bf16-worker", required=True, help="Editable Worker name or UUID")
+    parser.add_argument("--q4-route", required=True, help="Published public Route name for Q4")
+    parser.add_argument("--bf16-route", required=True, help="Published public Route name for BF16")
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument(
@@ -223,6 +223,29 @@ def stop_worker(client: httpx.Client, management_url: str, worker_id: str) -> No
     response = client.post(f"{management_url}/api/workers/{worker_id}/stop")
     if response.status_code not in {200, 404}:
         raise RuntimeError(f"Could not stop {worker_id} ({response.status_code}): {response.text}")
+
+
+def resolve_worker(workers: list[dict[str, Any]], selector: str) -> dict[str, Any]:
+    matches = [
+        worker
+        for worker in workers
+        if str(worker.get("id")) == selector
+        or str(worker.get("name", "")).casefold() == selector.casefold()
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"Worker selector {selector!r} matched {len(matches)} Workers")
+    return matches[0]
+
+
+def require_live_route(live: dict[str, Any], public_name: str, worker_id: str) -> None:
+    route = next(
+        (item for item in live.get("routes", []) if item.get("public_name") == public_name),
+        None,
+    )
+    if route is None:
+        raise RuntimeError(f"Published Route {public_name!r} was not found")
+    if worker_id not in [str(item.get("id")) for item in route.get("workers", [])]:
+        raise RuntimeError(f"Published Route {public_name!r} does not reference the selected Worker")
 
 
 def metrics(client: httpx.Client, endpoint: str) -> dict[str, Any]:
@@ -469,15 +492,17 @@ def restore_worker(
     *,
     management_url: str,
     leave_worker: str,
+    q4_worker_id: str,
+    bf16_worker_id: str,
     attempts: int = 3,
     retry_seconds: float = 1.0,
 ) -> None:
     if attempts < 1:
         raise ValueError("Worker restoration attempts must be at least 1")
 
-    target = {"q4": Q4_WORKER, "bf16": BF16_WORKER}.get(leave_worker)
-    stop_worker(client, management_url, Q4_WORKER)
-    stop_worker(client, management_url, BF16_WORKER)
+    target = {"q4": q4_worker_id, "bf16": bf16_worker_id}.get(leave_worker)
+    stop_worker(client, management_url, q4_worker_id)
+    stop_worker(client, management_url, bf16_worker_id)
     if target is None:
         return
 
@@ -491,8 +516,8 @@ def restore_worker(
             if attempt == attempts:
                 break
             print(f"  Worker restoration attempt {attempt}/{attempts} failed: {error}. Retrying...")
-            stop_worker(client, management_url, Q4_WORKER)
-            stop_worker(client, management_url, BF16_WORKER)
+            stop_worker(client, management_url, q4_worker_id)
+            stop_worker(client, management_url, bf16_worker_id)
             time.sleep(retry_seconds)
 
     if last_error is not None:
@@ -504,12 +529,16 @@ def restore_worker_best_effort(
     *,
     management_url: str,
     leave_worker: str,
+    q4_worker_id: str,
+    bf16_worker_id: str,
 ) -> None:
     try:
         restore_worker(
             client,
             management_url=management_url,
             leave_worker=leave_worker,
+            q4_worker_id=q4_worker_id,
+            bf16_worker_id=bf16_worker_id,
         )
     except RuntimeError as error:
         print(f"WARNING: Evaluation completed, but the requested worker could not be restored: {error}")
@@ -547,20 +576,21 @@ def main() -> None:
     timeout = httpx.Timeout(900.0, connect=3.0)
 
     with httpx.Client(timeout=timeout) as client:
-        profile_response = client.get(f"{args.management_url}/api/profiles")
-        profile_response.raise_for_status()
-        profile_payload = profile_response.json()
-        if not isinstance(profile_payload, list):
-            raise RuntimeError("Management profiles endpoint returned a non-list response")
-        profile_ids = {str(profile.get("id")) for profile in profile_payload}
-        missing_profiles = {Q4_WORKER, BF16_WORKER} - profile_ids
-        if missing_profiles:
-            raise RuntimeError(
-                "The running management service is missing profiles: " + ", ".join(sorted(missing_profiles))
-            )
+        worker_response = client.get(f"{args.management_url}/api/workers")
+        worker_response.raise_for_status()
+        worker_payload = worker_response.json()
+        if not isinstance(worker_payload, list):
+            raise RuntimeError("Management Workers endpoint returned a non-list response")
+        q4_definition = resolve_worker(worker_payload, args.q4_worker)
+        bf16_definition = resolve_worker(worker_payload, args.bf16_worker)
+        q4_worker_id = str(q4_definition["id"])
+        bf16_worker_id = str(bf16_definition["id"])
+        live = request_json(client, "GET", f"{args.management_url}/api/live")
+        require_live_route(live, args.q4_route, q4_worker_id)
+        require_live_route(live, args.bf16_route, bf16_worker_id)
 
         print("Phase 1/3: Q4 quality, determinism, and stability")
-        q4_worker = start_worker(client, args.management_url, Q4_WORKER)
+        q4_worker = start_worker(client, args.management_url, q4_worker_id)
         q4_endpoint = str(q4_worker["endpoint"])
         q4_metrics_before = metrics(client, q4_endpoint)
         if q4_metrics_before.get("quantization") != "gptq-q4-g32-expert-only":
@@ -568,7 +598,7 @@ def main() -> None:
         q4_results, q4_memory = run_suite(
             client,
             gateway_url=args.gateway_url,
-            alias=Q4_ALIAS,
+            alias=args.q4_route,
             prompts=prompts,
             seed=args.seed,
             seed_repeats=args.seed_repeats,
@@ -582,7 +612,7 @@ def main() -> None:
         replay = run_diffusion(
             client,
             gateway_url=args.gateway_url,
-            alias=Q4_ALIAS,
+            alias=args.q4_route,
             spec=prompts[0],
             seed=args.seed,
             max_length=args.max_length,
@@ -612,7 +642,7 @@ def main() -> None:
             result = run_diffusion(
                 client,
                 gateway_url=args.gateway_url,
-                alias=Q4_ALIAS,
+                alias=args.q4_route,
                 spec=spec,
                 seed=args.seed + 50_000 + index,
                 max_length=args.max_length,
@@ -631,13 +661,13 @@ def main() -> None:
         q4_metrics_after = metrics(client, q4_endpoint)
 
         print("Phase 2/3: pinned BF16 comparison suite")
-        bf16_worker = start_worker(client, args.management_url, BF16_WORKER)
+        bf16_worker = start_worker(client, args.management_url, bf16_worker_id)
         bf16_endpoint = str(bf16_worker["endpoint"])
         bf16_metrics_before = metrics(client, bf16_endpoint)
         bf16_results, bf16_memory = run_suite(
             client,
             gateway_url=args.gateway_url,
-            alias=BF16_ALIAS,
+            alias=args.bf16_route,
             prompts=prompts,
             seed=args.seed,
             seed_repeats=args.seed_repeats,
@@ -752,6 +782,8 @@ def main() -> None:
             client,
             management_url=args.management_url,
             leave_worker=args.leave_worker,
+            q4_worker_id=q4_worker_id,
+            bf16_worker_id=bf16_worker_id,
         )
 
     display = {

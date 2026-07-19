@@ -8,8 +8,7 @@ from modeldeck.config import Settings
 def main() -> None:
     settings = Settings.from_env()
     uvicorn.run(
-        "modeldeck.main:create_app",
-        factory=True,
+        "modeldeck.main:app",
         host=settings.host,
         port=settings.management_port,
         log_level="info",

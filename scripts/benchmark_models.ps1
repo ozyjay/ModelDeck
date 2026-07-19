@@ -3,14 +3,7 @@ param(
     [ValidateSet('Quick', 'Standard')]
     [string]$Preset = 'Standard',
 
-    [string[]]$Models = @(
-        'qwen-small-rocm',
-        'qwen-1-5b-rocm',
-        'qwen-3b-rocm',
-        'diffusiongemma-q4-rocm',
-        'diffusiongemma-rocm',
-        'scenechat-gemma4-e2b-rocm'
-    ),
+    [string[]]$Workers = @(),
 
     [string]$JsonOutput,
     [string]$MarkdownOutput
@@ -21,9 +14,6 @@ Set-Location (Join-Path $PSScriptRoot '..')
 
 if (-not (Test-Path '.venv/bin/python')) {
     throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
-}
-if (-not $Models.Count) {
-    throw 'Select at least one physical ModelDeck profile with -Models.'
 }
 
 $ManagementUrl = 'http://127.0.0.1:3600'
@@ -66,11 +56,18 @@ try {
         if (-not $Ready) { throw 'ModelDeck services did not become ready within 30 seconds.' }
     }
 
+    if (-not $Workers.Count) {
+        $ConfiguredWorkers = @(Invoke-RestMethod -Uri "$ManagementUrl/api/workers" -TimeoutSec 10)
+        $Workers = @($ConfiguredWorkers | Where-Object { $_.runtime -ne 'mock' } | ForEach-Object { $_.id })
+    }
+    if (-not $Workers.Count) {
+        throw 'Create at least one physical Worker, or select Workers with -Workers.'
+    }
     $Arguments = @(
         './scripts/benchmark_models.py',
         '--preset', $Preset.ToLowerInvariant(),
-        '--models'
-    ) + $Models
+        '--workers'
+    ) + $Workers
     if ($JsonOutput) { $Arguments += @('--json-output', $JsonOutput) }
     if ($MarkdownOutput) { $Arguments += @('--markdown-output', $MarkdownOutput) }
 

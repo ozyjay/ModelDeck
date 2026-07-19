@@ -33,7 +33,7 @@ def test_diffusiongemma_selected_preset_burn_in_validates_without_starting_hardw
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Profile: diffusiongemma-q4-rocm" in result.stdout
+    assert "Worker selector:" in result.stdout
     assert "Duration: 120 minutes; interval: 5 seconds" in result.stdout
     assert not json_output.exists()
     assert not markdown_output.exists()

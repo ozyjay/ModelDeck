@@ -31,18 +31,6 @@ def test_records_compatibility_without_overwriting_negative_history(tmp_path) ->
     assert records[0]["evidence"]["memory_recovery_result"] == "not-measured-process-exit-confirmed"
 
 
-def test_compatibility_store_persists_and_removes_local_profiles(tmp_path) -> None:
-    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
-    store.initialise()
-    profile = {"id": "local-example", "model_id": "example/model", "revision": "abc"}
-
-    store.save_model_profile(profile)
-
-    assert store.list_model_profiles() == [profile]
-    assert store.delete_model_profile("local-example") is True
-    assert store.list_model_profiles() == []
-
-
 def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tmp_path) -> None:
     store = CompatibilityStore(tmp_path / "evidence.sqlite3")
     store.initialise()
@@ -52,15 +40,3 @@ def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tm
 
     assert store.model_cache_allowed("google/model", "revision-1") is False
     assert store.list_model_cache_policy() == {("google/model", "revision-1"): False}
-
-
-def test_gateway_provider_selection_persists(tmp_path) -> None:
-    path = tmp_path / "evidence.sqlite3"
-    store = CompatibilityStore(path)
-    store.initialise()
-
-    assert store.gateway_provider_selection("scenechat-vision") is None
-    store.set_gateway_provider_selection("scenechat-vision", "local-gemma-26b")
-
-    restored = CompatibilityStore(path)
-    assert restored.gateway_provider_selection("scenechat-vision") == "local-gemma-26b"

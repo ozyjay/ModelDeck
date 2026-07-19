@@ -35,7 +35,7 @@ Example non-streaming response (generation fields abbreviated):
 ```json
 {
   "request_id": "8d638d96-23ca-4ce5-bfa1-f12cf131947e",
-  "model": "token-explainer",
+  "model": "worker-a1b2c3d4",
   "prompt_token_ids": [151644, 8948, 198, 9707, 151645, 198, 151644, 872, 198, 9707, 151645, 198, 151644, 77091, 198],
   "prompt_tokens": ["<|im_start|>", "system", "\n", "Be concise.", "<|im_end|>", "\n", "<|im_start|>", "user", "\n", "Hello", "<|im_end|>", "\n", "<|im_start|>", "assistant", "\n"],
   "user_prompt_token_ids": [9707],

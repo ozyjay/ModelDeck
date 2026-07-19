@@ -40,7 +40,7 @@ class EngineConfig:
 
 
 class DiffusionRequest(BaseModel):
-    model: str = "text-diffusion"
+    model: str = "local-worker"
     prompt: str = Field(min_length=1, max_length=16_000)
     max_length: int = Field(default=256, ge=8, le=256)
     denoising_steps: int = Field(default=48, ge=1, le=48)

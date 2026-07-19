@@ -2,12 +2,15 @@
 param(
     [double]$DurationMinutes = 30,
     [int]$IntervalSeconds = 5,
+    [Parameter(Mandatory)][string]$Worker,
+    [Parameter(Mandatory)][string]$RouteName,
     [string]$JsonOutput,
     [string]$MarkdownOutput
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 if (-not (Test-Path '.venv/bin/python')) {
     throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
 }
@@ -16,8 +19,6 @@ if ($IntervalSeconds -lt 1) { throw 'IntervalSeconds must be at least one.' }
 
 $ManagementUrl = 'http://127.0.0.1:3600'
 $GatewayUrl = 'http://127.0.0.1:8600'
-$WorkerId = 'local-repartee-gpt-oss-120b'
-$Alias = 'repartee-strong'
 $RecoveryToleranceBytes = 1GB
 $StartedServices = $false
 $WorkerStopped = $false
@@ -77,22 +78,18 @@ if ([IO.Path]::GetFullPath($JsonOutput) -eq [IO.Path]::GetFullPath($MarkdownOutp
 $BaselineGtt = Get-AmdGttUsedBytes
 try {
     try {
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-        $Profile = $Profiles | Where-Object { $_.id -eq $WorkerId }
-        if (-not $Profile -or $Profile.preferred_runtime -ne 'llama-vulkan') {
-            throw 'The configured GPT-OSS Vulkan profile is unavailable.'
-        }
+        Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
     } catch {
         & (Join-Path $PSScriptRoot 'stop.ps1')
         & (Join-Path $PSScriptRoot 'run.ps1')
         $StartedServices = $true
         Start-Sleep -Seconds 1
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 5
-        $Profile = $Profiles | Where-Object { $_.id -eq $WorkerId }
-        if (-not $Profile -or $Profile.preferred_runtime -ne 'llama-vulkan') {
-            throw 'Configure the verified repartee-strong GPT-OSS Vulkan profile first.'
-        }
     }
+    $SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+        -Runtime 'llama-vulkan'
+    $Route = Resolve-ModelDeckRoute -ManagementUrl $ManagementUrl -WorkerId $SelectedWorker.id `
+        -PublicName $RouteName
+    $WorkerId = $SelectedWorker.id
 
     Write-Host 'Starting GPT-OSS for the sustained stability run.'
     $Worker = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$WorkerId/start" `
@@ -101,16 +98,12 @@ try {
     $Evidence = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$WorkerId/smoke" `
         -TimeoutSec 120
     if (-not $Evidence.ok) { throw 'Initial GPT-OSS compatibility smoke failed.' }
-    $Selection = @{ profile_id = $WorkerId } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/gateway/provider-selections/$Alias" `
-        -ContentType 'application/json' -Body $Selection -TimeoutSec 10 | Out-Null
-
     $Deadline = [datetime]::UtcNow.AddMinutes($DurationMinutes)
     $WorkloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "Running GPT-OSS stability checks for $DurationMinutes minutes."
     while ([datetime]::UtcNow -lt $Deadline) {
         $Body = @{
-            model = $Alias
+            model = $Route.public_name
             messages = @(@{
                 role = 'user'
                 content = 'Reply with a short confirmation that the local worker is ready.'
@@ -129,9 +122,6 @@ try {
             $RequestTimer.Stop()
             if (-not ([string]$Response.choices[0].message.content).Trim()) {
                 throw 'Gateway completion was empty.'
-            }
-            if ([string]$Headers['x-modeldeck-provider'] -ne $WorkerId) {
-                throw 'Gateway selected an unexpected provider.'
             }
             $Latencies.Add($RequestTimer.Elapsed.TotalSeconds)
             $RequestCount += 1
@@ -190,10 +180,12 @@ try {
         duration_seconds = [math]::Round($WorkloadStopwatch.Elapsed.TotalSeconds, 3)
         total_seconds = [math]::Round($Stopwatch.Elapsed.TotalSeconds, 3)
         interval_seconds = $IntervalSeconds
-        profile_id = $WorkerId
-        model_id = $Profile.model_id
-        model_revision = $Profile.revision
-        runtime = $Profile.preferred_runtime
+        worker_id = $WorkerId
+        worker_name = $SelectedWorker.name
+        route_name = $Route.public_name
+        model_id = $SelectedWorker.model_id
+        model_revision = $SelectedWorker.revision
+        runtime = $SelectedWorker.runtime
         compatibility_test_id = $Evidence.test.id
         requests = [ordered]@{
             successful = $RequestCount

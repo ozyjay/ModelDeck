@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -32,11 +33,22 @@ class ModelProfile(BaseModel):
     capabilities: CapabilitySet
     settings: dict[str, int | float | str | bool] = Field(default_factory=dict)
 
-    @field_validator("id", "alias")
+    @field_validator("alias")
     @classmethod
     def safe_identifier(cls, value: str) -> str:
         if not SAFE_ALIAS.fullmatch(value):
             raise ValueError("must use lowercase letters, digits, and hyphens")
+        return value
+
+    @field_validator("id")
+    @classmethod
+    def safe_internal_identifier(cls, value: str) -> str:
+        if SAFE_ALIAS.fullmatch(value):
+            return value
+        try:
+            UUID(value)
+        except ValueError as error:
+            raise ValueError("must be a legacy identifier or UUID") from error
         return value
 
     @field_validator("preferred_runtime")
@@ -71,10 +83,3 @@ class ModelProfile(BaseModel):
         ):
             raise ValueError("speech-conversation profiles must advertise full-duplex audio")
         return self
-
-
-def default_model_profiles() -> list[ModelProfile]:
-    # Imported lazily to keep the profile schema independent from packaged data loading.
-    from modeldeck.registry import seed_profiles
-
-    return [profile.model_copy(deep=True) for profile in seed_profiles().values()]

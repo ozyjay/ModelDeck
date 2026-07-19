@@ -24,6 +24,15 @@ export async function putJson<T>(path: string, body: unknown): Promise<T> {
   return readResponse<T>(response);
 }
 
+export async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PATCH",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return readResponse<T>(response);
+}
+
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(path, {
     method: "DELETE",

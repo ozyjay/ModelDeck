@@ -2,22 +2,18 @@ import hashlib
 import json
 
 import pytest
-from modeldeck.profiles import LocalProfileRequest, create_local_profile, default_model_profiles
+from modeldeck.profiles import LocalProfileRequest, create_local_profile
 from modeldeck.registry import (
     install_runtime_manifest,
-    reserved_aliases,
     runtime_template_registrations,
     runtime_templates,
 )
 
 
-def test_packaged_registries_are_versioned_and_cross_referenced(tmp_path) -> None:
-    profiles = {profile.id: profile for profile in default_model_profiles()}
+def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
     templates = runtime_templates()
     registrations = runtime_template_registrations()
-    aliases = reserved_aliases()
 
-    assert len(profiles) == 8
     assert set(templates) == {
         "autoregressive-transformers",
         "scenechat-gemma4",
@@ -26,11 +22,6 @@ def test_packaged_registries_are_versioned_and_cross_referenced(tmp_path) -> Non
         "gpt-oss-llama-vulkan",
         "moshiko-speech",
     }
-    assert aliases["scenechat-vision"].default_provider == "scenechat-gemma4-e2b-rocm"
-    assert aliases["scenechat-vision"].accepts(profiles["scenechat-gemma4-e2b-rocm"])
-    assert not aliases["scenechat-vision"].accepts(profiles["qwen-small-rocm"])
-    assert aliases["repartee-strong"].providers == []
-    assert aliases["repartee-speech"].required_generation_family == "speech-conversation"
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
     assert registrations["autoregressive-transformers"].source == "packaged"
 

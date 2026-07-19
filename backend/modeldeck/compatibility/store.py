@@ -27,6 +27,10 @@ FINGERPRINT_FIELDS = (
 )
 
 
+class LegacyDatabaseError(RuntimeError):
+    pass
+
+
 def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
     canonical = {field: evidence.get(field) for field in FINGERPRINT_FIELDS}
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str)
@@ -34,28 +38,70 @@ def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
 
 
 class CompatibilityStore:
+    """SQLite persistence for the v2 ModelDeck domain and compatibility evidence."""
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
     def initialise(self) -> None:
+        self.initialise_v2()
+
+    def initialise_v2(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as database:
+            tables = {
+                str(row[0])
+                for row in database.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            if tables and "schema_metadata" not in tables:
+                raise LegacyDatabaseError(
+                    "This is a legacy ModelDeck database. Run scripts/cutover_v2.ps1 before starting."
+                )
+            if "schema_metadata" in tables:
+                row = database.execute(
+                    "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+                ).fetchone()
+                if row is None or str(row[0]) != "2":
+                    raise LegacyDatabaseError("The ModelDeck database schema is not version 2")
             database.executescript(
                 """
                 PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS model_profiles (
-                    id TEXT PRIMARY KEY,
-                    document_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    origin TEXT NOT NULL DEFAULT 'local'
+                CREATE TABLE IF NOT EXISTS schema_metadata (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS configuration_metadata (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS deployment_metadata (
-                    deployment_id TEXT PRIMARY KEY,
-                    display_name TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS workers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    document_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS events (
+                    id TEXT PRIMARY KEY,
+                    draft_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS event_revisions (
+                    event_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    document_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    PRIMARY KEY (event_id, revision),
+                    FOREIGN KEY (event_id) REFERENCES events(id)
+                );
+                CREATE TABLE IF NOT EXISTS active_event (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    event_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    routing_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS model_cache_policy (
                     model_id TEXT NOT NULL,
@@ -63,11 +109,6 @@ class CompatibilityStore:
                     allowed INTEGER NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (model_id, revision)
-                );
-                CREATE TABLE IF NOT EXISTS gateway_provider_selection (
-                    alias TEXT PRIMARY KEY,
-                    profile_id TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS compatibility_tests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,247 +120,216 @@ class CompatibilityStore:
                 );
                 CREATE INDEX IF NOT EXISTS compatibility_fingerprint_idx
                     ON compatibility_tests(fingerprint, tested_at);
-                CREATE TABLE IF NOT EXISTS worker_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    worker_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    details_json TEXT NOT NULL,
-                    occurred_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS presets (
-                    id TEXT PRIMARY KEY, document_json TEXT NOT NULL, updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS demo_set_revisions (
-                    demo_set_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    document_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    discarded_at TEXT,
-                    PRIMARY KEY (demo_set_id, revision)
-                );
-                CREATE TABLE IF NOT EXISTS active_demo_set (
-                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-                    demo_set_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    routing_json TEXT NOT NULL,
-                    activated_at TEXT NOT NULL
-                );
+                CREATE UNIQUE INDEX IF NOT EXISTS workers_active_name_idx
+                    ON workers(name COLLATE NOCASE) WHERE archived_at IS NULL;
                 """
             )
-            revision_columns = {
-                row[1] for row in database.execute("PRAGMA table_info(demo_set_revisions)").fetchall()
-            }
-            if "discarded_at" not in revision_columns:
-                database.execute("ALTER TABLE demo_set_revisions ADD COLUMN discarded_at TEXT")
-            profile_columns = {
-                row[1] for row in database.execute("PRAGMA table_info(model_profiles)").fetchall()
-            }
-            if "origin" not in profile_columns:
-                database.execute("ALTER TABLE model_profiles ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
-
-    def configuration_value(self, key: str) -> str | None:
-        if not self.path.exists():
-            return None
-        with sqlite3.connect(self.path) as database:
-            row = database.execute(
-                "SELECT value FROM configuration_metadata WHERE key = ?", (key,)
-            ).fetchone()
-        return str(row[0]) if row is not None else None
-
-    def set_configuration_value(self, key: str, value: str) -> None:
-        updated_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
+            now = _now()
             database.execute(
-                "INSERT INTO configuration_metadata (key, value, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
-                "updated_at = excluded.updated_at",
-                (key, value, updated_at),
+                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '2', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (now,),
             )
 
-    def deployment_display_names(self) -> dict[str, str]:
-        if not self.path.exists():
-            return {}
-        with sqlite3.connect(self.path) as database:
-            rows = database.execute("SELECT deployment_id, display_name FROM deployment_metadata").fetchall()
-        return {str(row[0]): str(row[1]) for row in rows}
-
-    def set_deployment_display_name(self, deployment_id: str, display_name: str) -> None:
-        updated_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
-            database.execute(
-                "INSERT INTO deployment_metadata (deployment_id, display_name, updated_at) "
-                "VALUES (?, ?, ?) ON CONFLICT(deployment_id) DO UPDATE SET "
-                "display_name = excluded.display_name, updated_at = excluded.updated_at",
-                (deployment_id, display_name, updated_at),
-            )
-
-    def delete_deployment_display_name(self, deployment_id: str) -> None:
-        with sqlite3.connect(self.path) as database:
-            database.execute("DELETE FROM deployment_metadata WHERE deployment_id = ?", (deployment_id,))
-
-    def list_demo_sets(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
+    def list_workers(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT document_json, created_at, updated_at, archived_at FROM workers"
+        if not include_archived:
+            query += " WHERE archived_at IS NULL"
+        query += " ORDER BY name COLLATE NOCASE, id"
+        try:
+            with sqlite3.connect(self.path) as database:
+                rows = database.execute(query).fetchall()
+        except sqlite3.OperationalError:
             return []
-        with sqlite3.connect(self.path) as database:
-            rows = database.execute(
-                "SELECT revisions.demo_set_id, revisions.revision, revisions.document_json, "
-                "revisions.created_at, active.demo_set_id IS NOT NULL, active.revision "
-                "FROM demo_set_revisions AS revisions "
-                "JOIN (SELECT demo_set_id, MAX(revision) AS revision FROM demo_set_revisions "
-                "WHERE discarded_at IS NULL GROUP BY demo_set_id) AS latest "
-                "ON latest.demo_set_id = revisions.demo_set_id AND latest.revision = revisions.revision "
-                "LEFT JOIN active_demo_set AS active ON active.singleton_id = 1 "
-                "AND active.demo_set_id = revisions.demo_set_id "
-                "ORDER BY revisions.demo_set_id"
-            ).fetchall()
         return [
             {
-                "definition": json.loads(row[2]),
-                "revision": int(row[1]),
-                "updated_at": row[3],
-                "active": bool(row[4]),
-                "active_revision": int(row[5]) if row[5] is not None else None,
+                "definition": json.loads(row[0]),
+                "created_at": row[1],
+                "updated_at": row[2],
+                "archived_at": row[3],
             }
             for row in rows
         ]
 
-    def get_demo_set(self, demo_set_id: str, revision: int | None = None) -> dict[str, Any] | None:
+    def get_worker_definition(self, worker_id: str) -> dict[str, Any] | None:
         if not self.path.exists():
             return None
         with sqlite3.connect(self.path) as database:
-            if revision is None:
-                row = database.execute(
-                    "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                    "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC LIMIT 1",
-                    (demo_set_id,),
-                ).fetchone()
-            else:
-                row = database.execute(
-                    "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                    "WHERE demo_set_id = ? AND revision = ? AND discarded_at IS NULL",
-                    (demo_set_id, revision),
-                ).fetchone()
-            active = database.execute(
-                "SELECT revision FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
-                (demo_set_id,),
+            row = database.execute(
+                "SELECT document_json, created_at, updated_at, archived_at FROM workers WHERE id = ?",
+                (worker_id,),
             ).fetchone()
-        if row is None:
-            return None
-        return {
-            "definition": json.loads(row[1]),
-            "revision": int(row[0]),
-            "updated_at": row[2],
-            "active": active is not None,
-            "active_revision": int(active[0]) if active is not None else None,
-        }
+        return (
+            {
+                "definition": json.loads(row[0]),
+                "created_at": row[1],
+                "updated_at": row[2],
+                "archived_at": row[3],
+            }
+            if row
+            else None
+        )
 
-    def list_demo_set_revisions(self, demo_set_id: str) -> list[dict[str, Any]]:
+    def save_worker_definition(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        now = _now()
+        worker_id = str(document["id"])
+        try:
+            with sqlite3.connect(self.path) as database:
+                database.execute(
+                    "INSERT INTO workers (id, name, document_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "name = excluded.name, document_json = excluded.document_json, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        worker_id,
+                        str(document["name"]),
+                        json.dumps(dict(document), sort_keys=True),
+                        now,
+                        now,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("A Worker with that name already exists") from error
+        return self.get_worker_definition(worker_id)  # type: ignore[return-value]
+
+    def archive_worker(self, worker_id: str) -> bool:
+        now = _now()
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute(
+                "UPDATE workers SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL",
+                (now, now, worker_id),
+            )
+        return cursor.rowcount > 0
+
+    def delete_worker_definition(self, worker_id: str) -> bool:
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
+        return cursor.rowcount > 0
+
+    def list_events(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         with sqlite3.connect(self.path) as database:
             rows = database.execute(
-                "SELECT revision, document_json, created_at FROM demo_set_revisions "
-                "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC",
-                (demo_set_id,),
+                "SELECT events.id, events.draft_json, events.created_at, events.updated_at, "
+                "active.event_id IS NOT NULL, active.revision, "
+                "(SELECT MAX(revision) FROM event_revisions WHERE event_id = events.id) "
+                "FROM events LEFT JOIN active_event AS active "
+                "ON active.singleton_id = 1 AND active.event_id = events.id "
+                "ORDER BY json_extract(events.draft_json, '$.name') COLLATE NOCASE"
+            ).fetchall()
+        return [
+            {
+                "definition": json.loads(row[1]),
+                "created_at": row[2],
+                "updated_at": row[3],
+                "active": bool(row[4]),
+                "active_revision": int(row[5]) if row[5] is not None else None,
+                "latest_revision": int(row[6]) if row[6] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        return next((item for item in self.list_events() if item["definition"]["id"] == event_id), None)
+
+    def save_event_draft(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        now = _now()
+        event_id = str(document["id"])
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO events (id, draft_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET draft_json = excluded.draft_json, "
+                "updated_at = excluded.updated_at",
+                (event_id, json.dumps(dict(document), sort_keys=True), now, now),
+            )
+        return self.get_event(event_id)  # type: ignore[return-value]
+
+    def delete_event(self, event_id: str) -> bool:
+        with sqlite3.connect(self.path) as database:
+            active = database.execute(
+                "SELECT 1 FROM active_event WHERE singleton_id = 1 AND event_id = ?", (event_id,)
+            ).fetchone()
+            revision = database.execute(
+                "SELECT 1 FROM event_revisions WHERE event_id = ? LIMIT 1", (event_id,)
+            ).fetchone()
+            if active or revision:
+                raise RuntimeError("Published Events cannot be deleted")
+            cursor = database.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        return cursor.rowcount > 0
+
+    def list_event_revisions(self, event_id: str) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT revision, document_json, published_at FROM event_revisions "
+                "WHERE event_id = ? ORDER BY revision DESC",
+                (event_id,),
             ).fetchall()
             active = database.execute(
-                "SELECT revision FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
-                (demo_set_id,),
+                "SELECT revision FROM active_event WHERE singleton_id = 1 AND event_id = ?",
+                (event_id,),
             ).fetchone()
-        active_revision = int(active[0]) if active is not None else None
+        active_revision = int(active[0]) if active else None
         return [
             {
                 "definition": json.loads(row[1]),
                 "revision": int(row[0]),
-                "updated_at": row[2],
+                "published_at": row[2],
                 "active": active_revision == int(row[0]),
-                "active_revision": active_revision,
             }
             for row in rows
         ]
 
-    def save_demo_set(self, document: Mapping[str, Any]) -> dict[str, Any]:
-        demo_set_id = str(document["id"])
-        created_at = datetime.now(UTC).isoformat()
+    def get_event_revision(self, event_id: str, revision: int) -> dict[str, Any] | None:
+        return next(
+            (item for item in self.list_event_revisions(event_id) if item["revision"] == revision),
+            None,
+        )
+
+    def publish_event(self, document: Mapping[str, Any], routing: Mapping[str, Any]) -> dict[str, Any]:
+        event_id = str(document["id"])
+        published_at = _now()
         with sqlite3.connect(self.path) as database:
             row = database.execute(
-                "SELECT COALESCE(MAX(revision), 0) FROM demo_set_revisions WHERE demo_set_id = ?",
-                (demo_set_id,),
+                "SELECT COALESCE(MAX(revision), 0) FROM event_revisions WHERE event_id = ?",
+                (event_id,),
             ).fetchone()
             revision = int(row[0]) + 1
             database.execute(
-                "INSERT INTO demo_set_revisions "
-                "(demo_set_id, revision, document_json, created_at) VALUES (?, ?, ?, ?)",
-                (demo_set_id, revision, json.dumps(dict(document), sort_keys=True), created_at),
+                "INSERT INTO event_revisions (event_id, revision, document_json, published_at) "
+                "VALUES (?, ?, ?, ?)",
+                (event_id, revision, json.dumps(dict(document), sort_keys=True), published_at),
             )
-        return self.get_demo_set(demo_set_id, revision)  # type: ignore[return-value]
+            self._set_active(database, event_id, revision, routing, published_at)
+        return self.get_event_revision(event_id, revision)  # type: ignore[return-value]
 
-    def discard_latest_demo_set_revision(self, demo_set_id: str, revision: int) -> dict[str, Any]:
-        discarded_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
-            rows = database.execute(
-                "SELECT revision FROM demo_set_revisions "
-                "WHERE demo_set_id = ? AND discarded_at IS NULL ORDER BY revision DESC",
-                (demo_set_id,),
-            ).fetchall()
-            if not rows or revision not in {int(row[0]) for row in rows}:
-                raise KeyError("Unknown demo set revision")
-            if int(rows[0][0]) != revision:
-                raise RuntimeError("Only the latest draft revision can be discarded")
-            active = database.execute(
-                "SELECT revision FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
-                (demo_set_id,),
-            ).fetchone()
-            if active is not None and int(active[0]) == revision:
-                raise RuntimeError("The active demo set revision cannot be discarded")
-            if len(rows) == 1:
-                raise RuntimeError("Delete the demo set instead of discarding its only revision")
-            database.execute(
-                "UPDATE demo_set_revisions SET discarded_at = ? WHERE demo_set_id = ? AND revision = ?",
-                (discarded_at, demo_set_id, revision),
-            )
-        restored = self.get_demo_set(demo_set_id)
-        if restored is None:  # pragma: no cover - protected by the remaining-revision check
-            raise RuntimeError("The preceding demo set revision could not be restored")
-        return restored
-
-    def delete_demo_set(self, demo_set_id: str) -> bool:
-        with sqlite3.connect(self.path) as database:
-            active = database.execute(
-                "SELECT 1 FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
-                (demo_set_id,),
-            ).fetchone()
-            if active is not None:
-                raise RuntimeError("The active demo set cannot be deleted")
-            cursor = database.execute("DELETE FROM demo_set_revisions WHERE demo_set_id = ?", (demo_set_id,))
-        return cursor.rowcount > 0
-
-    def activate_demo_set(
-        self, demo_set_id: str, revision: int, routing: Mapping[str, Any]
+    def activate_event_revision(
+        self, event_id: str, revision: int, routing: Mapping[str, Any]
     ) -> dict[str, Any]:
-        activated_at = datetime.now(UTC).isoformat()
+        record = self.get_event_revision(event_id, revision)
+        if record is None:
+            raise KeyError("Unknown Event revision")
         with sqlite3.connect(self.path) as database:
-            exists = database.execute(
-                "SELECT 1 FROM demo_set_revisions WHERE demo_set_id = ? AND revision = ?",
-                (demo_set_id, revision),
-            ).fetchone()
-            if exists is None:
-                raise KeyError(f"Unknown demo set revision: {demo_set_id}@{revision}")
-            database.execute(
-                "INSERT INTO active_demo_set "
-                "(singleton_id, demo_set_id, revision, routing_json, activated_at) "
-                "VALUES (1, ?, ?, ?, ?) ON CONFLICT(singleton_id) DO UPDATE SET "
-                "demo_set_id = excluded.demo_set_id, revision = excluded.revision, "
-                "routing_json = excluded.routing_json, activated_at = excluded.activated_at",
-                (demo_set_id, revision, json.dumps(dict(routing), sort_keys=True), activated_at),
-            )
-        return {
-            "demo_set_id": demo_set_id,
-            "revision": revision,
-            "routing": dict(routing),
-            "activated_at": activated_at,
-        }
+            self._set_active(database, event_id, revision, routing, _now())
+        return record
+
+    @staticmethod
+    def _set_active(
+        database: sqlite3.Connection,
+        event_id: str,
+        revision: int,
+        routing: Mapping[str, Any],
+        published_at: str,
+    ) -> None:
+        snapshot = {**dict(routing), "revision": revision}
+        database.execute(
+            "INSERT INTO active_event "
+            "(singleton_id, event_id, revision, routing_json, published_at) "
+            "VALUES (1, ?, ?, ?, ?) ON CONFLICT(singleton_id) DO UPDATE SET "
+            "event_id = excluded.event_id, revision = excluded.revision, "
+            "routing_json = excluded.routing_json, published_at = excluded.published_at",
+            (event_id, revision, json.dumps(snapshot, sort_keys=True), published_at),
+        )
 
     def active_routing_snapshot(self) -> dict[str, Any] | None:
         if not self.path.exists():
@@ -327,11 +337,57 @@ class CompatibilityStore:
         try:
             with sqlite3.connect(self.path) as database:
                 row = database.execute(
-                    "SELECT routing_json FROM active_demo_set WHERE singleton_id = 1"
+                    "SELECT routing_json FROM active_event WHERE singleton_id = 1"
                 ).fetchone()
         except sqlite3.OperationalError:
             return None
-        return json.loads(row[0]) if row is not None else None
+        return json.loads(row[0]) if row else None
+
+    def discard_event_draft(self, event_id: str) -> dict[str, Any]:
+        revisions = self.list_event_revisions(event_id)
+        if not revisions:
+            raise RuntimeError("An unpublished Event has no published revision to restore")
+        return self.save_event_draft(revisions[0]["definition"])
+
+    def rebind_event_drafts(self, old_worker_id: str, new_worker_id: str) -> list[str]:
+        changed: list[str] = []
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute("SELECT id, draft_json FROM events").fetchall()
+            for event_id, document_json in rows:
+                document = json.loads(document_json)
+                touched = False
+                for route in document.get("routes", []):
+                    if old_worker_id in route.get("worker_ids", []):
+                        route["worker_ids"] = [
+                            new_worker_id if item == old_worker_id else item for item in route["worker_ids"]
+                        ]
+                        touched = True
+                if touched:
+                    database.execute(
+                        "UPDATE events SET draft_json = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(document, sort_keys=True), _now(), event_id),
+                    )
+                    changed.append(str(event_id))
+        return changed
+
+    def list_model_cache_policy(self) -> dict[tuple[str, str], bool]:
+        if not self.path.exists():
+            return {}
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute("SELECT model_id, revision, allowed FROM model_cache_policy").fetchall()
+        return {(str(row[0]), str(row[1])): bool(row[2]) for row in rows}
+
+    def model_cache_allowed(self, model_id: str, revision: str) -> bool:
+        return self.list_model_cache_policy().get((model_id, revision), True)
+
+    def set_model_cache_allowed(self, model_id: str, revision: str, *, allowed: bool) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO model_cache_policy (model_id, revision, allowed, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
+                "allowed = excluded.allowed, updated_at = excluded.updated_at",
+                (model_id, revision, int(allowed), _now()),
+            )
 
     def list_tests(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -353,128 +409,22 @@ class CompatibilityStore:
             for row in rows
         ]
 
-    def list_model_profiles(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        try:
-            with sqlite3.connect(self.path) as database:
-                rows = database.execute("SELECT document_json FROM model_profiles ORDER BY id").fetchall()
-        except sqlite3.OperationalError:
-            return []
-        profiles = []
-        for (document_json,) in rows:
-            try:
-                document = json.loads(document_json)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if isinstance(document, dict):
-                profiles.append(document)
-        return profiles
-
-    def model_profile_origins(self) -> dict[str, str]:
-        if not self.path.exists():
-            return {}
-        with sqlite3.connect(self.path) as database:
-            rows = database.execute("SELECT id, origin FROM model_profiles").fetchall()
-        return {str(row[0]): str(row[1]) for row in rows}
-
-    def save_model_profile(self, profile: Mapping[str, Any], *, origin: str = "local") -> None:
-        profile_id = str(profile["id"])
-        updated_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
-            database.execute(
-                "INSERT INTO model_profiles (id, document_json, updated_at, origin) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET document_json = excluded.document_json, "
-                "updated_at = excluded.updated_at",
-                (profile_id, json.dumps(dict(profile), sort_keys=True), updated_at, origin),
-            )
-
-    def delete_model_profile(self, profile_id: str) -> bool:
-        with sqlite3.connect(self.path) as database:
-            cursor = database.execute("DELETE FROM model_profiles WHERE id = ?", (profile_id,))
-        return cursor.rowcount > 0
-
-    def list_model_cache_policy(self) -> dict[tuple[str, str], bool]:
-        if not self.path.exists():
-            return {}
-        try:
-            with sqlite3.connect(self.path) as database:
-                rows = database.execute(
-                    "SELECT model_id, revision, allowed FROM model_cache_policy"
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return {}
-        return {(str(row[0]), str(row[1])): bool(row[2]) for row in rows}
-
-    def model_cache_allowed(self, model_id: str, revision: str) -> bool:
-        return self.list_model_cache_policy().get((model_id, revision), True)
-
-    def set_model_cache_allowed(self, model_id: str, revision: str, *, allowed: bool) -> None:
-        updated_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
-            database.execute(
-                "INSERT INTO model_cache_policy (model_id, revision, allowed, updated_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
-                "allowed = excluded.allowed, updated_at = excluded.updated_at",
-                (model_id, revision, int(allowed), updated_at),
-            )
-
-    def gateway_provider_selection(self, alias: str) -> str | None:
-        if not self.path.exists():
-            return None
-        try:
-            with sqlite3.connect(self.path) as database:
-                row = database.execute(
-                    "SELECT profile_id FROM gateway_provider_selection WHERE alias = ?",
-                    (alias,),
-                ).fetchone()
-        except sqlite3.OperationalError:
-            return None
-        return str(row[0]) if row is not None else None
-
-    def set_gateway_provider_selection(self, alias: str, profile_id: str) -> None:
-        updated_at = datetime.now(UTC).isoformat()
-        with sqlite3.connect(self.path) as database:
-            database.execute(
-                "INSERT INTO gateway_provider_selection (alias, profile_id, updated_at) "
-                "VALUES (?, ?, ?) ON CONFLICT(alias) DO UPDATE SET "
-                "profile_id = excluded.profile_id, updated_at = excluded.updated_at",
-                (alias, profile_id, updated_at),
-            )
-
-    def delete_gateway_provider_selections_for_profile(self, profile_id: str) -> list[str]:
-        with sqlite3.connect(self.path) as database:
-            rows = database.execute(
-                "SELECT alias FROM gateway_provider_selection WHERE profile_id = ? ORDER BY alias",
-                (profile_id,),
-            ).fetchall()
-            database.execute(
-                "DELETE FROM gateway_provider_selection WHERE profile_id = ?",
-                (profile_id,),
-            )
-        return [str(row[0]) for row in rows]
-
     def record_test(
-        self,
-        evidence: Mapping[str, Any],
-        *,
-        result: str,
-        failure_class: str | None = None,
+        self, evidence: Mapping[str, Any], *, result: str, failure_class: str | None = None
     ) -> dict[str, Any]:
-        tested_at = datetime.now(UTC).isoformat()
+        tested_at = _now()
         fingerprint = evidence_fingerprint(evidence)
-        document = dict(evidence)
-        document.update(
-            {
-                "result": result,
-                "failure_class": failure_class,
-                "tested_at": tested_at,
-            }
-        )
+        document = {
+            **dict(evidence),
+            "result": result,
+            "failure_class": failure_class,
+            "tested_at": tested_at,
+        }
         with sqlite3.connect(self.path) as database:
             cursor = database.execute(
                 "INSERT INTO compatibility_tests "
-                "(fingerprint, result, failure_class, evidence_json, tested_at) VALUES (?, ?, ?, ?, ?)",
+                "(fingerprint, result, failure_class, evidence_json, tested_at) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     fingerprint,
                     result,
@@ -483,9 +433,8 @@ class CompatibilityStore:
                     tested_at,
                 ),
             )
-            test_id = int(cursor.lastrowid)
         return {
-            "id": test_id,
+            "id": int(cursor.lastrowid),
             "fingerprint": fingerprint,
             "result": result,
             "failure_class": failure_class,
@@ -502,8 +451,7 @@ class CompatibilityStore:
             ).fetchone()
             if row is None:
                 raise KeyError(f"Unknown compatibility test: {test_id}")
-            evidence = json.loads(row[3])
-            evidence.update(dict(updates))
+            evidence = {**json.loads(row[3]), **dict(updates)}
             database.execute(
                 "UPDATE compatibility_tests SET evidence_json = ? WHERE id = ?",
                 (json.dumps(evidence, sort_keys=True, default=str), test_id),
@@ -516,3 +464,7 @@ class CompatibilityStore:
             "evidence": evidence,
             "tested_at": row[4],
         }
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()

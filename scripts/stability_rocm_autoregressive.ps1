@@ -1,9 +1,12 @@
 param(
     [double]$DurationMinutes = 30,
-    [int]$IntervalSeconds = 5
+    [int]$IntervalSeconds = 5,
+    [string]$Worker,
+    [string]$RouteName
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 if (-not (Test-Path '.venv-rocm72/bin/python')) {
     throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
 }
@@ -19,25 +22,28 @@ $Failures = 0
 $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
     try {
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-        if ('qwen-small-rocm' -notin @($Profiles.id)) { throw 'Stale management service.' }
+        Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
     } catch {
         & (Join-Path $PSScriptRoot 'stop.ps1')
         & (Join-Path $PSScriptRoot 'run.ps1')
         $StartedServices = $true
         Start-Sleep -Seconds 1
     }
-    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/start" -TimeoutSec 360 |
+    $SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+        -ModelId 'Qwen/Qwen2.5-0.5B-Instruct' -Runtime 'transformers-rocm'
+    $Route = Resolve-ModelDeckRoute -ManagementUrl $ManagementUrl -WorkerId $SelectedWorker.id `
+        -PublicName $RouteName
+    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/start" -TimeoutSec 360 |
         Out-Null
     $Evidence = Invoke-RestMethod -Method Post `
-        -Uri "$ManagementUrl/api/workers/qwen-small-rocm/smoke" -TimeoutSec 120
+        -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/smoke" -TimeoutSec 120
     if (-not $Evidence.ok) { throw 'Initial compatibility smoke failed.' }
 
     $Deadline = [datetime]::UtcNow.AddMinutes($DurationMinutes)
     Write-Host "Running Qwen stability checks for $DurationMinutes minutes."
     while ([datetime]::UtcNow -lt $Deadline) {
         $Body = @{
-            model = 'token-explainer'
+            model = $Route.public_name
             prompt = 'Reply with a short confirmation that the local worker is ready.'
             max_tokens = 16
             temperature = 0
@@ -55,7 +61,7 @@ try {
         Start-Sleep -Seconds $IntervalSeconds
     }
     $Stopwatch.Stop()
-    $Stopped = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/stop" -TimeoutSec 30
+    $Stopped = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 30
     if ($Stopped.state -ne 'stopped' -or $null -ne $Stopped.pid) {
         throw 'The ROCm worker process did not report a clean stop.'
     }
@@ -75,8 +81,9 @@ try {
 } finally {
     if (-not $WorkerStopped) {
         try {
-            Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/stop" -TimeoutSec 30 |
+            if ($SelectedWorker) { Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 30 |
                 Out-Null
+            }
         } catch { Write-Warning "Could not request worker shutdown: $_" }
     }
     if ($StartedServices) { & (Join-Path $PSScriptRoot 'stop.ps1') }

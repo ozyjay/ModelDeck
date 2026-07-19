@@ -1,5 +1,8 @@
+[CmdletBinding()]
+param([string]$Worker)
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 if (-not (Test-Path '.venv-rocm72/bin/python')) {
     throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
 }
@@ -9,8 +12,7 @@ $WorkerStopped = $false
 try {
     try {
         Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 1 | Out-Null
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-        if ('diffusiongemma-rocm' -notin @($Profiles.id)) { throw 'Stale management service.' }
+        Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
     }
     catch {
         & (Join-Path $PSScriptRoot 'stop.ps1')
@@ -18,16 +20,18 @@ try {
         $StartedServices = $true
         Start-Sleep -Seconds 1
     }
-    Write-Host 'Starting the pinned DiffusionGemma ROCm worker; loading 11 local shards can take several minutes.'
-    $Worker = Invoke-RestMethod -Method Post `
-        -Uri "$ManagementUrl/api/workers/diffusiongemma-rocm/start" -TimeoutSec 900
-    if ($Worker.state -ne 'ready') { throw "Worker did not become ready: $($Worker.state)" }
+    $SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+        -Runtime 'text-diffusion-rocm'
+    Write-Host 'Starting the pinned DiffusionGemma ROCm Worker; loading 11 local shards can take several minutes.'
+    $RunningWorker = Invoke-RestMethod -Method Post `
+        -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/start" -TimeoutSec 900
+    if ($RunningWorker.state -ne 'ready') { throw "Worker did not become ready: $($RunningWorker.state)" }
     $Result = Invoke-RestMethod -Method Post `
-        -Uri "$ManagementUrl/api/workers/diffusiongemma-rocm/smoke" -TimeoutSec 600
+        -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/smoke" -TimeoutSec 600
     $Result | ConvertTo-Json -Depth 12
     if (-not $Result.ok) { throw 'The text-diffusion ROCm compatibility smoke failed.' }
     $Stopped = Invoke-RestMethod -Method Post `
-        -Uri "$ManagementUrl/api/workers/diffusiongemma-rocm/stop" -TimeoutSec 60
+        -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 60
     if ($Stopped.state -ne 'stopped' -or $null -ne $Stopped.pid) {
         throw 'The ROCm worker process did not report a clean stop.'
     }
@@ -42,8 +46,8 @@ try {
 finally {
     if (-not $WorkerStopped) {
         try {
-            Invoke-RestMethod -Method Post `
-                -Uri "$ManagementUrl/api/workers/diffusiongemma-rocm/stop" -TimeoutSec 60 | Out-Null
+            if ($SelectedWorker) { Invoke-RestMethod -Method Post `
+                -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 60 | Out-Null }
         }
         catch { Write-Warning "Could not request worker shutdown: $_" }
     }

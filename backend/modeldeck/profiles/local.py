@@ -7,14 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.registry import (
     RuntimeTemplateRegistration,
-    reserved_aliases,
     runtime_template_registrations,
 )
 
 from .models import ModelProfile
 
 LOCAL_PORT_RANGE = range(8630, 8700)
-RESERVED_GATEWAY_ALIASES = frozenset(reserved_aliases())
 
 
 class LocalProfileRequest(BaseModel):

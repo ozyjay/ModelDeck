@@ -23,14 +23,15 @@ def load_benchmark_module():
 benchmark = load_benchmark_module()
 
 
-def profile(family: str, *, profile_id: str = "qwen-small-rocm", alias: str = "qwen-0-5b"):
+def profile(family: str, *, profile_id: str = "worker-1", route: str = "qwen-0-5b"):
     return {
         "id": profile_id,
-        "alias": alias,
+        "name": profile_id,
+        "gateway_model": route,
         "model_id": "example/model",
         "revision": "commit",
         "generation_family": family,
-        "preferred_runtime": "transformers-rocm",
+        "runtime": "transformers-rocm",
         "dtype": "float16",
     }
 
@@ -51,7 +52,7 @@ def response(payload: Any, *, provider: str | None = None, status: int = 200) ->
     return httpx.Response(status, json=payload, headers=headers)
 
 
-def test_presets_and_model_selection_are_stable() -> None:
+def test_presets_and_worker_selection_are_stable() -> None:
     assert benchmark.PRESETS["quick"].repetitions == 2
     assert benchmark.PRESETS["standard"].repetitions == 5
     assert benchmark.PRESETS["standard"].autoregressive_tokens == 64
@@ -59,11 +60,9 @@ def test_presets_and_model_selection_are_stable() -> None:
     assert benchmark.PRESETS["standard"].diffusion_steps == 24
     assert benchmark.PRESETS["standard"].vision_tokens == 256
     assert benchmark.PRESETS["standard"].llama_tokens == 256
-    assert benchmark.validate_models(["qwen-small-rocm", "qwen-small-rocm"]) == ["qwen-small-rocm"]
-
-    with pytest.raises(benchmark.BenchmarkError, match="Unknown or non-physical"):
-        benchmark.validate_models(["mock-ar"])
-    assert benchmark.validate_models(["local-repartee-gpt-oss-120b"]) == ["local-repartee-gpt-oss-120b"]
+    assert benchmark.validate_workers(["Qwen trace", "Qwen trace"]) == ["Qwen trace"]
+    with pytest.raises(benchmark.BenchmarkError, match="At least one"):
+        benchmark.validate_workers([])
 
 
 def test_summary_uses_nearest_rank_p95_and_tracks_determinism() -> None:
@@ -138,8 +137,8 @@ def test_diffusion_workload_uses_fixed_request_and_provider() -> None:
         result = runner.run_diffusion(
             profile(
                 "text-diffusion",
-                profile_id="diffusiongemma-q4-rocm",
-                alias="text-diffusion",
+                profile_id="worker-q4",
+                route="text-diffusion",
             )
         )
     finally:
@@ -173,10 +172,10 @@ def test_llama_vulkan_workload_uses_chat_route_and_timing_metrics() -> None:
             {
                 **profile(
                     "autoregressive",
-                    profile_id="local-repartee-gpt-oss-120b",
-                    alias="repartee-strong",
+                    profile_id="worker-gpt-oss",
+                    route="gpt-oss-chat",
                 ),
-                "preferred_runtime": "llama-vulkan",
+                "runtime": "llama-vulkan",
             }
         )
     finally:
@@ -222,8 +221,8 @@ def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:
         result = runner.run_vision(
             profile(
                 "vision-language",
-                profile_id="scenechat-gemma4-e2b-rocm",
-                alias="scenechat-vision",
+                profile_id="worker-scenechat",
+                route="scenechat-vision",
             )
         )
     finally:
@@ -236,25 +235,6 @@ def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:
     assert result["generated_tokens"] == 30
     assert "data:image" not in json.dumps(result)
     assert "A synthetic field" not in json.dumps(result)
-
-
-def test_workload_rejects_mock_fallback_provider() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return response(
-            {
-                "prompt_token_ids": [1],
-                "events": [{"text_so_far": "mock output"}],
-                "metrics": {"generated_tokens": 1},
-            },
-            provider="mock-ar",
-        )
-
-    runner, client = runner_for(handler)
-    try:
-        with pytest.raises(benchmark.BenchmarkError, match="expected qwen-small-rocm"):
-            runner.run_autoregressive(profile("autoregressive"))
-    finally:
-        client.close()
 
 
 def test_error_sanitisation_removes_credentials_images_and_local_paths() -> None:
@@ -271,16 +251,19 @@ def test_error_sanitisation_removes_credentials_images_and_local_paths() -> None
 
 def test_preflight_refuses_any_busy_managed_worker() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/profiles":
-            return response([profile("autoregressive")])
         if request.url.path == "/api/workers":
-            return response([{"id": "mock-ar", "state": "busy"}])
+            return response(
+                [
+                    {**profile("autoregressive"), "state": "stopped"},
+                    {**profile("autoregressive", profile_id="worker-busy"), "state": "busy"},
+                ]
+            )
         raise AssertionError(f"Unexpected request: {request.url}")
 
     runner, client = runner_for(handler)
     try:
-        with pytest.raises(benchmark.BenchmarkError, match="mock-ar is busy"):
-            runner.preflight(["qwen-small-rocm"])
+        with pytest.raises(benchmark.BenchmarkError, match="worker-busy is busy"):
+            runner.preflight(["worker-1"])
     finally:
         client.close()
 
@@ -295,7 +278,7 @@ class FakeLifecycleRunner:
     def preflight(self, _selected):
         profiles = [
             profile("autoregressive", profile_id="qwen-small-rocm"),
-            profile("autoregressive", profile_id="qwen-1-5b-rocm", alias="qwen-1-5b"),
+            profile("autoregressive", profile_id="qwen-1-5b-rocm", route="qwen-1-5b"),
         ]
         return profiles, {"configured": {}, "detected": {}}
 
@@ -314,7 +297,7 @@ class FakeLifecycleRunner:
                 raise KeyboardInterrupt
             raise RuntimeError("request failed")
         return {
-            "profile_id": selected_profile["id"],
+            "worker_id": selected_profile["id"],
             "generation_family": "autoregressive",
             "status": "success",
             "samples": [],
@@ -324,8 +307,8 @@ class FakeLifecycleRunner:
     def restore(self, initially_ready):
         self.restored = initially_ready
         return {
-            "requested_ready_profiles": initially_ready,
-            "outcomes": [{"profile_id": item, "status": "ready"} for item in initially_ready],
+            "requested_ready_workers": initially_ready,
+            "outcomes": [{"worker_id": item, "status": "ready"} for item in initially_ready],
             "passed": True,
         }
 
@@ -369,7 +352,8 @@ def test_versioned_reports_do_not_contain_workload_content(tmp_path: Path) -> No
         "configuration": {"preset": "quick"},
         "results": [
             {
-                "profile_id": "qwen-small-rocm",
+                "worker_id": "qwen-small-rocm",
+                "worker_name": "Qwen trace",
                 "generation_family": "autoregressive",
                 "status": "success",
                 "cold_start_wall_seconds": 1.0,

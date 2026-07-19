@@ -2,6 +2,8 @@
 param(
     [double]$DurationMinutes = 30,
     [int]$IntervalSeconds = 5,
+    [string]$Worker,
+    [string]$RouteName,
     [string]$JsonOutput,
     [string]$MarkdownOutput,
     [switch]$ValidateOnly
@@ -9,13 +11,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 if ($DurationMinutes -le 0) { throw 'DurationMinutes must be greater than zero.' }
 if ($IntervalSeconds -lt 1) { throw 'IntervalSeconds must be at least one.' }
 
 $ManagementUrl = 'http://127.0.0.1:3600'
 $GatewayUrl = 'http://127.0.0.1:8600'
-$WorkerId = 'diffusiongemma-q4-rocm'
-$Alias = 'text-diffusion'
 $RecoveryToleranceBytes = 1GB
 $RecoveryTimeoutSeconds = 30
 $StartedServices = $false
@@ -82,7 +83,7 @@ if ([IO.Path]::GetFullPath($JsonOutput) -eq [IO.Path]::GetFullPath($MarkdownOutp
 }
 if ($ValidateOnly) {
     Write-Host 'Q4 DiffusionGemma stability configuration is valid.'
-    Write-Host "Profile: $WorkerId"
+    Write-Host "Worker selector: $Worker"
     Write-Host "Duration: $DurationMinutes minutes; interval: $IntervalSeconds seconds"
     Write-Host "JSON report: $JsonOutput"
     Write-Host "Markdown report: $MarkdownOutput"
@@ -96,22 +97,18 @@ $BaselineGtt = Get-AmdGttUsedBytes
 $PeakGtt = $BaselineGtt
 try {
     try {
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-        $Profile = $Profiles | Where-Object { $_.id -eq $WorkerId }
-        if (-not $Profile -or $Profile.preferred_runtime -ne 'text-diffusion-gptq-rocm') {
-            throw 'The default Q4 DiffusionGemma profile is unavailable.'
-        }
+        Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
     } catch {
         & (Join-Path $PSScriptRoot 'stop.ps1')
         & (Join-Path $PSScriptRoot 'run.ps1')
         $StartedServices = $true
         Start-Sleep -Seconds 1
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 5
-        $Profile = $Profiles | Where-Object { $_.id -eq $WorkerId }
-        if (-not $Profile -or $Profile.preferred_runtime -ne 'text-diffusion-gptq-rocm') {
-            throw 'The default Q4 DiffusionGemma profile is unavailable.'
-        }
     }
+    $SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+        -Runtime 'text-diffusion-gptq-rocm'
+    $Route = Resolve-ModelDeckRoute -ManagementUrl $ManagementUrl -WorkerId $SelectedWorker.id `
+        -PublicName $RouteName
+    $WorkerId = $SelectedWorker.id
     $ActiveWorkers = @(
         Invoke-RestMethod -Uri "$ManagementUrl/api/workers" -TimeoutSec 5 |
             Where-Object { $_.state -ne 'stopped' }
@@ -128,18 +125,12 @@ try {
     $Evidence = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$WorkerId/smoke" `
         -TimeoutSec 600
     if (-not $Evidence.ok) { throw 'Initial Q4 DiffusionGemma compatibility smoke failed.' }
-    $Models = Invoke-RestMethod -Uri "$GatewayUrl/v1/models" -TimeoutSec 10
-    $GatewayModel = $Models.data | Where-Object { $_.id -eq $Alias }
-    if (-not $GatewayModel -or $GatewayModel.effective_provider -ne $WorkerId) {
-        throw 'The stable gateway did not select the default Q4 DiffusionGemma provider.'
-    }
-
     $Deadline = [datetime]::UtcNow.AddMinutes($DurationMinutes)
     $WorkloadStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "Running Q4 DiffusionGemma stability checks for $DurationMinutes minutes."
     while ([datetime]::UtcNow -lt $Deadline) {
         $Body = @{
-            model = $Alias
+            model = $Route.public_name
             prompt = 'Explain why reliable local software should be tested before a demonstration.'
             max_length = 128
             block_length = 128
@@ -154,9 +145,6 @@ try {
             $Queued = Invoke-RestMethod -Method Post -Uri "$GatewayUrl/v1/diffuse" `
                 -ContentType 'application/json' -Body $Body -TimeoutSec 30 `
                 -ResponseHeadersVariable Headers
-            if ([string]$Headers['x-modeldeck-provider'] -ne $WorkerId) {
-                throw 'Gateway selected an unexpected provider.'
-            }
             $JobId = [string]$Queued.job_id
             if (-not $JobId) { throw 'Gateway did not return a diffusion job identifier.' }
             $JobDeadline = [datetime]::UtcNow.AddSeconds(900)
@@ -249,10 +237,12 @@ try {
         duration_seconds = [math]::Round($WorkloadStopwatch.Elapsed.TotalSeconds, 3)
         total_seconds = [math]::Round($Stopwatch.Elapsed.TotalSeconds, 3)
         interval_seconds = $IntervalSeconds
-        profile_id = $WorkerId
-        model_id = $Profile.model_id
-        model_revision = $Profile.revision
-        runtime = $Profile.preferred_runtime
+        worker_id = $WorkerId
+        worker_name = $SelectedWorker.name
+        route_name = $Route.public_name
+        model_id = $SelectedWorker.model_id
+        model_revision = $SelectedWorker.revision
+        runtime = $SelectedWorker.runtime
         compatibility_test_id = $Evidence.test.id
         workload = [ordered]@{
             max_length = 128

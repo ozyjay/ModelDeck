@@ -1,8 +1,9 @@
 [CmdletBinding()]
-param([switch]$Smoke)
+param([switch]$Smoke, [string]$Worker, [string]$RouteName)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 
 $Runtime = (Resolve-Path '.venv-rocm72-q4/bin/python' -ErrorAction SilentlyContinue).Path
 if (-not $Runtime) {
@@ -17,7 +18,7 @@ $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
 if ($Manifest.format_version -ne 2 -or $Manifest.artifact_type -ne 'self-contained') {
     throw @"
 The Q4 checkpoint is still an expert-only v1 delta. Materialise the self-contained v2
-artifact before starting this profile:
+artefact before starting this Worker:
 
     ./scripts/materialize_diffusiongemma_q4.ps1
 "@
@@ -27,10 +28,7 @@ $ManagementUrl = 'http://127.0.0.1:3600'
 
 try {
     Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 1 | Out-Null
-    $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-    if ('diffusiongemma-q4-rocm' -notin @($Profiles.id)) {
-        throw 'The running management service predates the Q4 profile.'
-    }
+    Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
 }
 catch {
     & (Join-Path $PSScriptRoot 'stop.ps1')
@@ -38,18 +36,19 @@ catch {
     Start-Sleep -Seconds 1
 }
 
-try {
-    Invoke-RestMethod -Method Post `
-        -Uri "$ManagementUrl/api/workers/diffusiongemma-rocm/stop" `
+$SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+    -Runtime 'text-diffusion-gptq-rocm'
+$OtherWorkers = @(Invoke-RestMethod -Uri "$ManagementUrl/api/workers" -TimeoutSec 10 | Where-Object {
+    $_.id -ne $SelectedWorker.id -and $_.generation_family -eq 'text-diffusion' -and $_.state -ne 'stopped'
+})
+foreach ($OtherWorker in $OtherWorkers) {
+    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($OtherWorker.id)/stop" `
         -TimeoutSec 60 | Out-Null
-}
-catch {
-    Write-Verbose 'The BF16 worker was already stopped or unavailable.'
 }
 
 Write-Host 'Starting self-contained DiffusionGemma GPTQ Q4/BF16 hybrid (group size 32)...'
 $Worker = Invoke-RestMethod -Method Post `
-    -Uri "$ManagementUrl/api/workers/diffusiongemma-q4-rocm/start" `
+    -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/start" `
     -TimeoutSec 900
 
 if ($Worker.state -ne 'ready') {
@@ -59,9 +58,11 @@ if ($Worker.state -ne 'ready') {
 $Worker | ConvertTo-Json -Depth 12
 Write-Host ''
 Write-Host 'Q4 metrics:'
-Invoke-RestMethod http://127.0.0.1:8622/metrics |
+Invoke-RestMethod "$($Worker.endpoint)/metrics" |
     ConvertTo-Json -Depth 12
 
 if ($Smoke) {
-    & (Join-Path $PSScriptRoot 'q4_smoke.ps1') -Model text-diffusion
+    $Route = Resolve-ModelDeckRoute -ManagementUrl $ManagementUrl -WorkerId $SelectedWorker.id `
+        -PublicName $RouteName
+    & (Join-Path $PSScriptRoot 'q4_smoke.ps1') -Model $Route.public_name
 }

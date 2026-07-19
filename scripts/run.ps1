@@ -18,4 +18,4 @@ Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
 Write-Host 'Management: http://127.0.0.1:3600'
 Write-Host 'Gateway:    http://127.0.0.1:8600/v1/health'
-Write-Host 'Workers:    SceneChat Gemma 4 on 8000; mocks 8610/8611; Qwen ROCm 8620/8623/8624; DiffusionGemma BF16 8621 and Q4 8622 (stopped)'
+Write-Host 'Workers:    Managed from the ModelDeck console; no Worker instances or public Routes are seeded.'

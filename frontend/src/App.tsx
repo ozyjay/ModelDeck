@@ -1,57 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { deleteJson, getJson, postJson, putJson } from "./api";
+import { deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
-  CompatibilityTest,
-  DemoAdapter,
-  DemoRouteSmokeResult,
-  DemoRouteStatus,
-  DemoSet,
-  DemoSetPlan,
-  DemoSetValidation,
-  Deployment,
-  DeploymentUsage,
-  GatewayStatus,
-  HardwareProbe,
-  LocalProfileRequest,
-  ManagementHealth,
-  ModelEntry,
-  Profile,
-  ProviderSelection,
-  RuntimeTemplate,
-  Telemetry,
-  Worker,
-  WorkerEvent,
-  WorkerLog,
+  CompatibilityTest, EventDefinition, EventRecord, EventRevision, EventValidation,
+  GatewayStatus, HardwareProbe, LiveState, ManagementHealth, ModelEntry,
+  ProtocolContract, RuntimeTemplate, Telemetry, Worker, WorkerLog,
 } from "./types";
 
-type View = "overview" | "demo-routes" | "workers" | "models" | "compatibility" | "logs";
+type View = "live" | "events" | "workers" | "models" | "advanced";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
-type WorkerGrouping = "family" | "runtime" | "lifecycle" | "none";
-type ModelSort =
-  | "name-asc"
-  | "name-desc"
-  | "size-desc"
-  | "size-asc"
-  | "readiness"
-  | "attention"
-  | "compatibility"
-  | "configured-desc"
-  | "configured-asc"
-  | "family-asc";
+type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc" | "readiness" | "workers";
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
-  { view: "overview", label: "Overview", path: "/" },
-  { view: "demo-routes", label: "Demo routes", path: "/demo-routes" },
+  { view: "live", label: "Live", path: "/" },
+  { view: "events", label: "Events", path: "/events" },
   { view: "workers", label: "Workers", path: "/workers" },
-  { view: "models", label: "Model library", path: "/models" },
-  { view: "compatibility", label: "Compatibility", path: "/compatibility" },
-  { view: "logs", label: "Logs", path: "/logs" },
+  { view: "models", label: "Models", path: "/models" },
+  { view: "advanced", label: "Advanced", path: "/advanced" },
 ];
 
-function viewFromPath(pathname: string): View {
-  return NAVIGATION.find((item) => item.path === pathname)?.view ?? "overview";
+function viewFromPath(path: string): View {
+  return NAVIGATION.find((item) => item.path === path)?.view ?? "live";
 }
 
 export default function App() {
@@ -60,1321 +30,252 @@ export default function App() {
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
   const [hardware, setHardware] = useState<HardwareProbe | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [live, setLive] = useState<LiveState>({ active_event: null, routes: [] });
   const [workers, setWorkers] = useState<Worker[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [events, setEvents] = useState<EventRecord[]>([]);
   const [models, setModels] = useState<ModelEntry[]>([]);
+  const [contracts, setContracts] = useState<ProtocolContract[]>([]);
+  const [templates, setTemplates] = useState<RuntimeTemplate[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
-  const [providerSelections, setProviderSelections] = useState<ProviderSelection[]>([]);
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [deploymentUsage, setDeploymentUsage] = useState<DeploymentUsage[]>([]);
-  const [demoSets, setDemoSets] = useState<DemoSet[]>([]);
-  const [demoAdapters, setDemoAdapters] = useState<DemoAdapter[]>([]);
-  const [runtimeTemplates, setRuntimeTemplates] = useState<RuntimeTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [eventStreamConnected, setEventStreamConnected] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
 
-  const refreshWorkers = useCallback(async () => {
-    setWorkers(await getJson<Worker[]>("/api/workers"));
-  }, []);
-
-  const refreshCompatibility = useCallback(async () => {
-    const response = await getJson<{ tests: CompatibilityTest[] }>("/api/compatibility");
-    setCompatibility(response.tests);
-  }, []);
-
-  const refreshDeploymentUsage = useCallback(async () => {
-    const response = await getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage");
-    setDeploymentUsage(response.deployments);
-  }, []);
-
-  const refreshGateway = useCallback(async () => {
-    const [nextGateway, selections] = await Promise.all([
+  const refresh = useCallback(async () => {
+    const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextLive, nextWorkers,
+      nextEvents, catalogue, contractResponse, templateResponse, tests] = await Promise.all([
+      getJson<ManagementHealth>("/api/health"),
       getJson<GatewayStatus>("/api/gateway/status"),
-      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
-    ]);
-    setGateway(nextGateway);
-    setProviderSelections(selections.selections);
-  }, []);
-
-  const refreshDemoConfiguration = useCallback(async () => {
-    const [deploymentResponse, demoSetResponse, usageResponse, selections] = await Promise.all([
-      getJson<Deployment[]>("/api/deployments"),
-      getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
-      getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
-      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
-    ]);
-    setDeployments(deploymentResponse);
-    setDemoSets(demoSetResponse.demo_sets);
-    setDeploymentUsage(usageResponse.deployments);
-    setProviderSelections(selections.selections);
-  }, []);
-
-  const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse, usageResponse, templateResponse] = await Promise.all([
-      getJson<Profile[]>("/api/profiles"),
+      getJson<HardwareProbe>("/api/hardware"),
+      getJson<Telemetry>("/api/telemetry"),
+      getJson<LiveState>("/api/live"),
       getJson<Worker[]>("/api/workers"),
-      getJson<GatewayStatus>("/api/gateway/status"),
+      getJson<{ events: EventRecord[] }>("/api/events"),
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
-      getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
-      getJson<Deployment[]>("/api/deployments"),
-      getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
-      getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
+      getJson<{ contracts: ProtocolContract[] }>("/api/protocol-contracts"),
       getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
+      getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
     ]);
-    setProfiles(nextProfiles);
-    setWorkers(nextWorkers);
-    setGateway(nextGateway);
-    setModels(catalogue.models);
-    setProviderSelections(selections.selections);
-    setDeployments(deploymentResponse);
-    setDemoSets(demoSetResponse.demo_sets);
-    setDeploymentUsage(usageResponse.deployments);
-    setRuntimeTemplates(templateResponse.templates);
+    setHealth(nextHealth); setGateway(nextGateway); setHardware(nextHardware);
+    setTelemetry(nextTelemetry); setLive(nextLive); setWorkers(nextWorkers);
+    setEvents(nextEvents.events); setModels(catalogue.models);
+    setContracts(contractResponse.contracts); setTemplates(templateResponse.templates);
+    setCompatibility(tests.tests);
   }, []);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
     setLoading(true);
-    setError(null);
-    try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse, usageResponse, templateResponse] =
-        await Promise.all([
-          getJson<ManagementHealth>("/api/health"),
-          getJson<GatewayStatus>("/api/gateway/status"),
-          getJson<HardwareProbe>("/api/hardware"),
-          getJson<Telemetry>("/api/telemetry"),
-          getJson<Worker[]>("/api/workers"),
-          getJson<Profile[]>("/api/profiles"),
-          getJson<{ models: ModelEntry[] }>("/api/catalogue"),
-          getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
-          getJson<{ selections: ProviderSelection[] }>("/api/gateway/provider-selections"),
-          getJson<Deployment[]>("/api/deployments"),
-          getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
-          getJson<{ adapters: DemoAdapter[] }>("/api/demo-adapters"),
-          getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
-          getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
-        ]);
-      setHealth(nextHealth);
-      setGateway(nextGateway);
-      setHardware(nextHardware);
-      setTelemetry(nextTelemetry);
-      setWorkers(nextWorkers);
-      setProfiles(nextProfiles);
-      setModels(catalogue.models);
-      setCompatibility(tests.tests);
-      setProviderSelections(selections.selections);
-      setDeployments(deploymentResponse);
-      setDemoSets(demoSetResponse.demo_sets);
-      setDemoAdapters(adapterResponse.adapters);
-      setDeploymentUsage(usageResponse.deployments);
-      setRuntimeTemplates(templateResponse.templates);
-    } catch (reason) {
-      setError(messageFrom(reason));
-    } finally {
-      setLoading(false);
-    }
+    refresh().catch((reason) => setError(messageFrom(reason))).finally(() => setLoading(false));
+  }, [refresh]);
+
+  useEffect(() => {
+    const onPop = () => setView(viewFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    const onPopState = () => setView(viewFromPath(window.location.pathname));
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      Promise.all([
+        getJson<Worker[]>("/api/workers").then(setWorkers),
+        getJson<LiveState>("/api/live").then(setLive),
+        getJson<GatewayStatus>("/api/gateway/status").then(setGateway),
+      ]).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    const source = new EventSource("/api/events");
-    source.onopen = () => setEventStreamConnected(true);
-    source.onerror = () => setEventStreamConnected(false);
-    source.addEventListener("worker", (raw) => {
-      try {
-        const event = JSON.parse((raw as MessageEvent).data) as WorkerEvent;
-        setWorkers((current) =>
-          current.map((worker) =>
-            worker.id === event.worker_id ? { ...worker, state: event.state } : worker,
-          ),
-        );
-      } catch {
-        setEventStreamConnected(false);
-      }
-    });
-    return () => source.close();
-  }, []);
-
-  useEffect(() => {
-    const poll = window.setInterval(() => {
-      if (!document.hidden) {
-        void refreshWorkers().catch(() => setEventStreamConnected(false));
-      }
-    }, eventStreamConnected ? 15_000 : 5_000);
-    return () => window.clearInterval(poll);
-  }, [eventStreamConnected, refreshWorkers]);
-
-  useEffect(() => {
-    const poll = window.setInterval(() => {
-      if (!document.hidden) {
-        void getJson<Telemetry>("/api/telemetry").then(setTelemetry).catch(() => undefined);
-        void refreshGateway().catch(() => undefined);
-      }
-    }, 8_000);
-    return () => window.clearInterval(poll);
-  }, [refreshGateway]);
-
-  const navigate = (next: View, path: string) => {
-    window.history.pushState({}, "", path);
-    setView(next);
-  };
 
   const operate = async (worker: Worker, operation: WorkerOperation) => {
-    if (!confirmOperation(worker, operation, workers)) return;
     const key = `${worker.id}:${operation}`;
-    setPending(key);
-    setError(null);
+    setPending(key); setError(null);
     try {
-      await postJson(`/api/workers/${encodeURIComponent(worker.id)}/${operation}`);
-      await Promise.all([refreshWorkers(), refreshGateway()]);
-      if (operation === "smoke") await refreshCompatibility();
-    } catch (reason) {
-      setError(`${worker.id}: ${messageFrom(reason)}`);
-    } finally {
-      setPending(null);
-    }
+      const result = await postJson<{ ok?: boolean; test?: { evidence?: { error_summary?: string } } }>(`/api/workers/${worker.id}/${operation}`);
+      await refresh();
+      if (operation === "smoke" && result.ok === false) {
+        throw new Error(result.test?.evidence?.error_summary ?? "Worker generation smoke test failed.");
+      }
+    } catch (reason) { setError(messageFrom(reason)); }
+    finally { setPending(null); }
   };
 
-  const stopAll = async () => {
-    if (!window.confirm("Stop every managed ModelDeck worker?")) return;
-    setPending("stop-all");
-    setError(null);
-    try {
-      await postJson("/api/presets/stop-all");
-      await Promise.all([refreshWorkers(), refreshGateway()]);
-    } catch (reason) {
-      setError(messageFrom(reason));
-    } finally {
-      setPending(null);
-    }
+  const navigate = (next: View, path: string) => {
+    window.history.pushState({}, "", path); setView(next);
   };
 
-  const selectProvider = async (alias: string, profileId: string) => {
-    setPending(`provider-selection:${alias}`);
-    setError(null);
-    try {
-      const selection = await postJson<ProviderSelection>(
-        `/api/gateway/provider-selections/${encodeURIComponent(alias)}`,
-        { profile_id: profileId },
-      );
-      setProviderSelections((current) => current.map((item) => item.alias === alias ? selection : item));
-      await Promise.all([refreshGateway(), refreshDeploymentUsage()]);
-    } catch (reason) {
-      setError(messageFrom(reason));
-    } finally {
-      setPending(null);
-    }
-  };
-
-  if (loading) return <LoadingScreen />;
-
+  if (loading) return <Loading />;
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand" aria-label="ModelDeck">
-          <span className="brand-mark" aria-hidden="true">MD</span>
-          <div><strong>ModelDeck</strong><small>Operator console</small></div>
-        </div>
-        <nav aria-label="Primary navigation">
-          {NAVIGATION.map((item) => (
-            <a
-              className={view === item.view ? "nav-link active" : "nav-link"}
-              href={item.path}
-              key={item.view}
-              aria-current={view === item.view ? "page" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(item.view, item.path);
-              }}
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        <div className="sidebar-policy">
-          <StatusDot state={eventStreamConnected ? "good" : "warn"} />
-          <span>{eventStreamConnected ? "Live events connected" : "Polling worker state"}</span>
-        </div>
+        <div className="brand"><span className="brand-mark">MD</span><div><strong>ModelDeck</strong><small>Operator console</small></div></div>
+        <nav aria-label="Primary navigation">{NAVIGATION.map((item) => (
+          <a className={view === item.view ? "nav-link active" : "nav-link"} href={item.path}
+            key={item.view} onClick={(event) => { event.preventDefault(); navigate(item.view, item.path); }}>
+            {item.label}
+          </a>
+        ))}</nav>
+        <div className="sidebar-policy"><StatusDot state={gateway?.available ? "good" : "warn"} /><span>Local gateway only</span></div>
       </aside>
-
       <main className="main-content">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Framework Desktop · local control plane</p>
-            <h1>{NAVIGATION.find((item) => item.view === view)?.label}</h1>
-          </div>
-          <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}>
-            <StatusDot state={gateway?.available ? "good" : "bad"} />
-            <span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span>
-          </div>
+        <header className="topbar"><div><p className="eyebrow">Framework Desktop · local control plane</p><h1>{NAVIGATION.find((item) => item.view === view)?.label}</h1></div>
+          <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}><StatusDot state={gateway?.available ? "good" : "bad"} /><span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span></div>
         </header>
-
-        {error && (
-          <div className="alert error" role="alert">
-            <strong>Action failed</strong><span>{error}</span>
-            <button className="icon-button" aria-label="Dismiss error" onClick={() => setError(null)}>×</button>
-          </div>
-        )}
-
-        {!health || !hardware || !telemetry || !gateway ? (
-          <UnavailableState retry={load} />
-        ) : view === "overview" ? (
-          <Overview
-            health={health}
-            gateway={gateway}
-            hardware={hardware}
-            telemetry={telemetry}
-            workers={workers}
-            models={models}
-            compatibility={compatibility}
-          />
-        ) : view === "demo-routes" ? (
-          <DemoRoutesView
-            demoSets={demoSets}
-            deployments={deployments}
-            adapters={demoAdapters}
-            openDay={health.open_day}
-            configurationChanged={refreshDemoConfiguration}
-          />
-        ) : view === "workers" ? (
-          <WorkersView
-            workers={workers}
-            deployments={deployments}
-            profiles={profiles}
-            models={models}
-            compatibility={compatibility}
-            providerSelections={providerSelections}
-            pending={pending}
-            operate={operate}
-            stopAll={stopAll}
-            selectProvider={selectProvider}
-          />
-        ) : view === "models" ? (
-          <ModelsView
-            models={models}
-            profiles={profiles}
-            compatibility={compatibility}
-            deploymentUsage={deploymentUsage}
-            runtimeTemplates={runtimeTemplates}
-            configurationChanged={refreshConfiguration}
-          />
-        ) : view === "compatibility" ? (
-          <CompatibilityView tests={compatibility} />
-        ) : (
-          <LogsView workers={workers} />
-        )}
+        {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
+        {!health || !hardware || !telemetry || !gateway ? <Unavailable retry={refresh} />
+          : view === "live" ? <LiveView live={live} workers={workers} models={models} operate={operate} pending={pending} />
+          : view === "events" ? <EventsView events={events} workers={workers} contracts={contracts} openDay={health.open_day} refresh={refresh} />
+          : view === "workers" ? <WorkersView workers={workers} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
+          : view === "models" ? <ModelsView models={models} templates={templates} refresh={refresh} />
+          : <AdvancedView hardware={hardware} telemetry={telemetry} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
     </div>
   );
 }
 
-function LoadingScreen() {
-  return (
-    <main className="loading-screen" aria-busy="true">
-      <div className="brand-mark">MD</div>
-      <h1>Starting operator console</h1>
-      <p>Reading local hardware, workers, and compatibility evidence…</p>
-      <div className="loading-bar"><span /></div>
-    </main>
-  );
-}
-
-function UnavailableState({ retry }: { retry: () => Promise<void> }) {
-  return (
-    <section className="empty-state" role="status">
-      <span className="empty-icon">!</span>
-      <h2>Management data is unavailable</h2>
-      <p>ModelDeck could not assemble the local operator view. No cloud service was contacted.</p>
-      <button onClick={() => void retry()}>Retry local connection</button>
-    </section>
-  );
-}
-
-function Overview({
-  health,
-  gateway,
-  hardware,
-  telemetry,
-  workers,
-  models,
-  compatibility,
-}: {
-  health: ManagementHealth;
-  gateway: GatewayStatus;
-  hardware: HardwareProbe;
-  telemetry: Telemetry;
-  workers: Worker[];
-  models: ModelEntry[];
-  compatibility: CompatibilityTest[];
+function LiveView({ live, workers, models, operate, pending }: {
+  live: LiveState; workers: Worker[]; models: ModelEntry[];
+  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: string | null;
 }) {
-  const ready = workers.filter((worker) => worker.state === "ready" || worker.state === "busy");
-  const failed = workers.filter((worker) => worker.state === "failed");
-  const work = telemetry.filesystems.find((filesystem) => filesystem.path === "/mnt/work");
-  return (
-    <div className="view-stack">
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">System posture</p>
-          <h2>{ready.length ? `${ready.length} local worker${ready.length === 1 ? "" : "s"} ready` : "Local runtimes are standing by"}</h2>
-          <p>Model acquisition is separate. Workers load pinned local snapshots only, with no cloud fallback.</p>
-        </div>
-        <div className="hero-status">
-          <StatusDot state={failed.length ? "bad" : ready.length ? "good" : "neutral"} />
-          <span>{failed.length ? `${failed.length} worker failure${failed.length === 1 ? "" : "s"}` : "Control plane healthy"}</span>
-        </div>
-      </section>
-
-      <div className="metric-grid">
-        <Metric label="Available memory" value={formatBytes(telemetry.memory.available_bytes)} detail={`${telemetry.memory.percent.toFixed(0)}% used`} />
-        <Metric label="Work storage free" value={work?.available ? formatBytes(work.free_bytes ?? 0) : "Unavailable"} detail={work?.available ? `${work.percent?.toFixed(0)}% used` : "/mnt/work missing"} />
-        <Metric label="Cached repositories" value={String(models.length)} detail={`${models.filter((model) => model.download_state === "partial").length} partial`} />
-        <Metric label="Compatibility records" value={String(compatibility.length)} detail={`${compatibility.filter((test) => test.result === "tested-working").length} tested-working`} />
-      </div>
-
-      <div className="two-column">
-        <section className="panel">
-          <PanelHeading title="Machine" detail="Detected, never assumed" />
-          <DefinitionList rows={[
-            ["Configured target", `${hardware.configured.gpu} (${hardware.configured.gpu_architecture})`],
-            ["Detected Fedora", hardware.detected.fedora_release ?? "Not detected"],
-            ["Kernel", hardware.detected.kernel],
-            ["ROCm packages", hardware.detected.rocm_packages.length ? hardware.detected.rocm_packages.join(", ") : "Not detected"],
-            ["GPU device nodes", Object.entries(hardware.detected.gpu_device_nodes).filter(([, found]) => found).map(([path]) => path).join(", ") || "Not visible"],
-          ]} />
-        </section>
-        <section className="panel">
-          <PanelHeading title="Gateway providers" detail={gateway.available ? `${gateway.health?.ready_providers ?? 0} ready` : "Unavailable"} />
-          {gateway.providers?.providers.length ? (
-            <ul className="status-list">
-              {gateway.providers.providers.map((provider) => (
-                <li key={provider.id}><StatusDot state={provider.ready ? "good" : "neutral"} /><span><strong>{provider.alias}</strong><small>{provider.id}</small></span><StateBadge state={provider.ready ? "ready" : "stopped"} /></li>
-              ))}
-            </ul>
-          ) : <p className="muted">No ready gateway providers. Requests return a structured local-unavailable response.</p>}
-        </section>
-      </div>
-
-      <div className="two-column">
-        <section className="panel">
-          <PanelHeading title="Thermals" detail="Live local sensors" />
-          {telemetry.temperatures.length ? <div className="sensor-grid">{telemetry.temperatures.slice(0, 8).map((sensor, index) => <Metric key={`${sensor.source}-${sensor.label}-${index}`} label={sensor.label} value={`${sensor.celsius.toFixed(1)} °C`} detail={sensor.source} compact />)}</div> : <p className="muted">No temperature sensors were exposed to this process.</p>}
-        </section>
-        <section className="panel policy-panel">
-          <PanelHeading title="Runtime policy" detail={health.open_day ? "Open Day mode" : "Normal local mode"} />
-          <Policy label="Loopback binding" value="127.0.0.1 only" />
-          <Policy label="Model downloads" value={health.downloads_allowed ? "Enabled by configuration" : "Disabled"} warning={health.downloads_allowed} />
-          <Policy label="Cloud fallback" value="Never" />
-          <Policy label="Worker inputs" value="Allowlisted manifests only" />
-        </section>
-      </div>
-
-      <div className="two-column">
-        <section className="panel">
-          <PanelHeading title="Memory and filesystems" detail="Modest-interval telemetry" />
-          <DefinitionList rows={[
-            ["Memory", `${formatBytes(telemetry.memory.available_bytes)} available of ${formatBytes(telemetry.memory.total_bytes)}`],
-            ["Swap", `${formatBytes(telemetry.swap.used_bytes)} used of ${formatBytes(telemetry.swap.total_bytes)} (${telemetry.swap.percent.toFixed(0)}%)`],
-            ...telemetry.filesystems.map((filesystem) => [
-              filesystem.path,
-              filesystem.available
-                ? `${formatBytes(filesystem.free_bytes ?? 0)} free of ${formatBytes(filesystem.total_bytes ?? 0)}`
-                : "Unavailable",
-            ] as [string, string]),
-          ]} />
-        </section>
-        <section className="panel">
-          <PanelHeading title="Active model processes" detail={`${telemetry.active_model_processes.length} detected`} />
-          {telemetry.active_model_processes.length ? (
-            <ul className="process-list">
-              {telemetry.active_model_processes.map((process) => (
-                <li key={process.pid}><strong>{process.name ?? "Unknown process"}</strong><span>PID {process.pid}</span><code>{process.command}</code></li>
-              ))}
-            </ul>
-          ) : <p className="muted">No active model processes were detected.</p>}
-        </section>
-      </div>
-
-      <section className="panel">
-        <PanelHeading title="Advertised gateway models" detail={`${gateway.models?.data.length ?? 0} aliases`} />
-        {gateway.models?.data.length ? (
-          <ul className="status-list gateway-model-list">
-            {gateway.models.data.map((model) => (
-              <li key={model.id}><StatusDot state={model.ready ? "good" : "neutral"} /><span><strong>{model.id}</strong><small>{model.effective_provider ?? "No ready provider"}</small></span><StateBadge state={model.ready ? "ready" : "unavailable"} /></li>
-            ))}
-          </ul>
-        ) : <p className="muted">The gateway is not advertising any model aliases.</p>}
-      </section>
-    </div>
-  );
-}
-
-function DemoRoutesView({ demoSets, deployments, adapters, openDay, configurationChanged }: {
-  demoSets: DemoSet[];
-  deployments: Deployment[];
-  adapters: DemoAdapter[];
-  openDay: boolean;
-  configurationChanged: () => Promise<void>;
-}) {
-  const [selectedId, setSelectedId] = useState(demoSets[0]?.id ?? "");
-  const [draft, setDraft] = useState<DemoSet | null>(null);
-  const [newSet, setNewSet] = useState({ id: "", display_name: "" });
-  const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const [validation, setValidation] = useState<DemoSetValidation | null>(null);
-  const [plan, setPlan] = useState<DemoSetPlan | null>(null);
-  const [revisions, setRevisions] = useState<DemoSet[]>([]);
-  const [routeStatuses, setRouteStatuses] = useState<Record<string, DemoRouteStatus>>({});
-  const [activeSnapshot, setActiveSnapshot] = useState<DemoSet | null>(null);
-  const [feedback, setFeedback] = useState<{ tone: "good" | "bad"; message: string } | null>(null);
-  const selected = demoSets.find((item) => item.id === selectedId) ?? demoSets[0];
-  const activeReference = demoSets.find((item) => item.active_revision !== null);
-
-  useEffect(() => {
-    if (!selectedId && demoSets[0]) setSelectedId(demoSets[0].id);
-    if (selectedId && !demoSets.some((item) => item.id === selectedId)) {
-      setSelectedId(demoSets[0]?.id ?? "");
-    }
-  }, [demoSets, selectedId]);
-
-  useEffect(() => {
-    if (!activeReference || activeReference.active_revision === null) {
-      setActiveSnapshot(null);
-      return;
-    }
-    if (activeReference.active_revision === activeReference.revision) {
-      setActiveSnapshot(activeReference);
-      return;
-    }
-    let cancelled = false;
-    void getJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(activeReference.id)}/revisions/${activeReference.active_revision}`)
-      .then((snapshot) => {
-        if (!cancelled) setActiveSnapshot(snapshot);
-      })
-      .catch(() => {
-        if (!cancelled) setActiveSnapshot(null);
-      });
-    return () => { cancelled = true; };
-  }, [activeReference?.active_revision, activeReference?.id, activeReference?.revision]);
-
-  useEffect(() => {
-    if (!selected) {
-      setRevisions([]);
-      setRouteStatuses({});
-      return;
-    }
-    let cancelled = false;
-    void Promise.all([
-      getJson<{ revisions: DemoSet[] }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions`),
-      Promise.all(selected.routes.map((route) => getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(route.id)}/status`))),
-    ]).then(([history, statuses]) => {
-      if (cancelled) return;
-      setRevisions(history.revisions);
-      setRouteStatuses(Object.fromEntries(statuses.map((status) => [status.route_id, status])));
-    }).catch(() => {
-      if (!cancelled) setRouteStatuses({});
-    });
-    return () => { cancelled = true; };
-  }, [selected?.active_revision, selected?.id, selected?.revision]);
-
-  const runAction = async (key: string, action: () => Promise<void>) => {
-    setPendingAction(key);
-    setFeedback(null);
-    try {
-      await action();
-    } catch (reason) {
-      setFeedback({ tone: "bad", message: messageFrom(reason) });
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const createSet = async () => {
-    await runAction("create", async () => {
-      const created = await postJson<DemoSet>("/api/demo-sets", {
-        id: newSet.id,
-        display_name: newSet.display_name,
-        description: "",
-        demos: [],
-        routes: [],
-      });
-      await configurationChanged();
-      setSelectedId(created.id);
-      setNewSet({ id: "", display_name: "" });
-      setFeedback({ tone: "good", message: `Created draft demo set ${created.display_name}.` });
-    });
-  };
-
-  const saveDraft = async () => {
-    if (!draft) return;
-    await runAction("save", async () => {
-      const saved = await putJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(draft.id)}`, demoSetPayload(draft));
-      await configurationChanged();
-      setDraft(null);
-      setValidation(null);
-      setPlan(null);
-      setFeedback({ tone: "good", message: `Saved ${saved.display_name} revision ${saved.revision}.` });
-    });
-  };
-
-  const validateSet = async () => {
-    if (!selected) return;
-    await runAction("validate", async () => {
-      const result = await postJson<DemoSetValidation>(`/api/demo-sets/${encodeURIComponent(selected.id)}/validate`);
-      setValidation(result);
-      setPlan(null);
-      setFeedback({ tone: result.valid ? "good" : "bad", message: result.valid ? "All route bindings are valid." : "Route validation found blocking issues." });
-    });
-  };
-
-  const planSet = async () => {
-    if (!selected) return;
-    await runAction("plan", async () => {
-      const result = await postJson<DemoSetPlan & { validation: DemoSetValidation }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/plan`);
-      setValidation(result.validation);
-      setPlan(result);
-      setFeedback({ tone: result.validation.valid ? "good" : "bad", message: result.validation.valid ? "Activation plan is ready for review." : "Fix validation errors before activation." });
-    });
-  };
-
-  const activateSet = async () => {
-    if (!selected || !window.confirm(`Activate ${selected.display_name} revision ${selected.revision} for gateway routing? This does not start workers.`)) return;
-    await runAction("activate", async () => {
-      const result = await postJson<{ plan: DemoSetPlan }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/activate`);
-      await configurationChanged();
-      setPlan(result.plan);
-      setFeedback({ tone: "good", message: `${selected.display_name} is now the active gateway routing configuration.` });
-    });
-  };
-
-  const removeSet = async () => {
-    if (!selected || !window.confirm(`Delete demo set ${selected.display_name} and all of its revision history?`)) return;
-    await runAction("delete", async () => {
-      await deleteJson(`/api/demo-sets/${encodeURIComponent(selected.id)}`);
-      setSelectedId("");
-      setDraft(null);
-      await configurationChanged();
-      setFeedback({ tone: "good", message: `Deleted demo set ${selected.display_name}.` });
-    });
-  };
-
-  const discardLatestDraft = async () => {
-    const precedingRevision = revisions.find((revision) => revision.revision < (selected?.revision ?? 0));
-    if (!selected || !precedingRevision || !window.confirm(`Discard revision ${selected.revision}? Revision ${precedingRevision.revision} will become the latest configuration.`)) return;
-    await runAction("discard", async () => {
-      const result = await deleteJson<{ current: DemoSet }>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${selected.revision}`);
-      await configurationChanged();
-      setDraft(null);
-      setValidation(null);
-      setPlan(null);
-      setFeedback({ tone: "good", message: `Discarded draft revision ${selected.revision}. Revision ${result.current.revision} is now current.` });
-    });
-  };
-
-  const renameDeployment = async (deployment: Deployment) => {
-    const requested = window.prompt("Deployment name", deployment.display_name);
-    const displayName = requested?.trim();
-    if (!displayName || displayName === deployment.display_name) return;
-    await runAction(`rename:${deployment.id}`, async () => {
-      await putJson(`/api/deployments/${encodeURIComponent(deployment.id)}/display-name`, {
-        display_name: displayName,
-      });
-      await configurationChanged();
-      setFeedback({ tone: "good", message: `Renamed deployment ${deployment.id} to ${displayName}.` });
-    });
-  };
-
-  const restoreRevision = async (revision: number) => {
-    if (!selected || !window.confirm(`Restore revision ${revision} as a new draft revision?`)) return;
-    await runAction(`restore:${revision}`, async () => {
-      const restored = await postJson<DemoSet>(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${revision}/restore`);
-      await configurationChanged();
-      setFeedback({ tone: "good", message: `Restored revision ${revision} as revision ${restored.revision}.` });
-    });
-  };
-
-  const activateRevision = async (revision: number) => {
-    if (!selected || !window.confirm(`Activate historical revision ${revision}? This changes routing only.`)) return;
-    await runAction(`activate-revision:${revision}`, async () => {
-      await postJson(`/api/demo-sets/${encodeURIComponent(selected.id)}/revisions/${revision}/activate`);
-      await configurationChanged();
-      setFeedback({ tone: "good", message: `Revision ${revision} is now the active gateway routing configuration.` });
-    });
-  };
-
-  const refreshRouteStatus = async (routeId: string) => {
-    if (!selected) return;
-    await runAction(`status:${routeId}`, async () => {
-      const status = await getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/status`);
-      setRouteStatuses((current) => ({ ...current, [routeId]: status }));
-      setFeedback({ tone: status.ready ? "good" : "bad", message: status.ready ? `${status.public_model} is ready through the gateway.` : `${status.public_model} is not ready through the gateway.` });
-    });
-  };
-
+  const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
+  const [smokingRoute, setSmokingRoute] = useState<string | null>(null);
   const smokeRoute = async (routeId: string) => {
-    if (!selected || !window.confirm("Run a small generation request through this active gateway route?")) return;
-    await runAction(`smoke:${routeId}`, async () => {
-      const result = await postJson<DemoRouteSmokeResult>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/smoke`);
-      const status = await getJson<DemoRouteStatus>(`/api/demo-sets/${encodeURIComponent(selected.id)}/routes/${encodeURIComponent(routeId)}/status`);
-      setRouteStatuses((current) => ({ ...current, [routeId]: status }));
-      setFeedback({ tone: "good", message: `${result.public_model} passed through ${result.provider ?? "its ready provider"} in ${result.duration_seconds.toFixed(2)} seconds.` });
-    });
+    if (!live.active_event) return;
+    setSmokingRoute(routeId); setRouteFeedback(null);
+    try {
+      await postJson(`/api/events/${live.active_event.id}/routes/${routeId}/smoke`);
+      setRouteFeedback("The published Route responded through the gateway.");
+    } catch (reason) { setRouteFeedback(messageFrom(reason)); }
+    finally { setSmokingRoute(null); }
   };
-
-  return <div className="view-stack">
-    <section className="notice-panel">
-      <strong>Declarative demo compatibility</strong>
-      <p>Define the stable model routes each demo expects, bind them to configured deployments, validate the contracts, then activate one versioned routing snapshot. Activation never starts a large model automatically.</p>
-    </section>
-    {openDay && <div className="configuration-feedback bad" role="status">Open Day mode is locked. Review the active configuration here, but edit and activate revisions before entering booth mode.</div>}
-    {feedback && <div className={`configuration-feedback ${feedback.tone}`} role="status">{feedback.message}</div>}
-    {activeSnapshot ? <ActiveGatewayRoutes demoSet={activeSnapshot} deployments={deployments} adapters={adapters} /> : <section className="notice-panel"><strong>No active gateway routes</strong><p>Activate a validated demo-set revision to publish stable model aliases to applications.</p></section>}
-    <div className="demo-set-layout">
-      <aside className="panel demo-set-list">
-        <PanelHeading title="Demo sets" detail={`${demoSets.length} configured`} />
-        {demoSets.map((item) => <button className={item.id === selected?.id ? "demo-set-select active" : "demo-set-select"} key={item.id} onClick={() => { setSelectedId(item.id); setDraft(null); setValidation(null); setPlan(null); }}><span><strong>{item.display_name}</strong><small>{item.id} · revision {item.revision}{item.active_revision !== null && item.active_revision !== item.revision ? ` · active revision ${item.active_revision}` : ""}</small></span>{item.active && <StateBadge state="ready" />}</button>)}
-        {!openDay && <form className="new-demo-set" onSubmit={(event) => { event.preventDefault(); void createSet(); }}>
-          <label>Identifier<input required pattern="[a-z][a-z0-9-]{1,62}" value={newSet.id} onChange={(event) => setNewSet({ ...newSet, id: event.target.value })} placeholder="open-day-2027" /></label>
-          <label>Display name<input required value={newSet.display_name} onChange={(event) => setNewSet({ ...newSet, display_name: event.target.value })} placeholder="Open Day 2027" /></label>
-          <button disabled={pendingAction !== null}>{pendingAction === "create" ? "Creating…" : "Create demo set"}</button>
-        </form>}
-      </aside>
-      <section className="panel demo-set-detail">
-        {!selected ? <div className="empty-state"><h2>No demo set selected</h2><p>Create a draft to define demo route contracts.</p></div> : draft ? (
-          <DemoSetEditor draft={draft} setDraft={setDraft} deployments={deployments} adapters={adapters} pending={pendingAction !== null} renameDeployment={(deployment) => void renameDeployment(deployment)} save={() => void saveDraft()} cancel={() => setDraft(null)} />
-        ) : <>
-          <div className="demo-set-heading"><div><p className="eyebrow">{selected.active_revision === selected.revision ? "Active routing snapshot" : selected.active ? `Draft revision; revision ${selected.active_revision} remains active` : "Draft routing configuration"}</p><h2>{selected.display_name}</h2><p>{selected.description || "No description."}</p></div><StateBadge state={selected.active_revision === selected.revision ? "ready" : "discovered"} /></div>
-          <div className="button-row demo-set-actions">
-            <button className="secondary" disabled={openDay || pendingAction !== null} onClick={() => setDraft(structuredClone(selected))}>Edit</button>
-            <button className="secondary" disabled={pendingAction !== null} onClick={() => void validateSet()}>{pendingAction === "validate" ? "Validating…" : "Validate"}</button>
-            <button className="secondary" disabled={pendingAction !== null} onClick={() => void planSet()}>{pendingAction === "plan" ? "Planning…" : "Plan activation"}</button>
-            <button disabled={openDay || pendingAction !== null} onClick={() => void activateSet()}>{pendingAction === "activate" ? "Activating…" : "Activate routing"}</button>
-            <button className="secondary danger" disabled={openDay || pendingAction !== null || selected.active_revision === selected.revision || revisions.length < 2} onClick={() => void discardLatestDraft()}>{pendingAction === "discard" ? "Discarding…" : "Discard latest draft"}</button>
-            <button className="secondary danger" disabled={openDay || selected.active || pendingAction !== null} onClick={() => void removeSet()}>Delete demo set</button>
-          </div>
-          {validation && <ValidationSummary validation={validation} />}
-          {plan && <PlanSummary plan={plan} deployments={deployments} />}
-          <details className="revision-history"><summary>Revision history ({revisions.length})</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{formatDate(revision.updated_at)}</small></span>{revision.active_revision === revision.revision ? <StateBadge state="ready" /> : <div className="button-row"><button type="button" className="secondary" disabled={openDay || pendingAction !== null || revision.revision === selected.revision} onClick={() => void restoreRevision(revision.revision)}>{pendingAction === `restore:${revision.revision}` ? "Restoring…" : "Restore as draft"}</button><button type="button" className="secondary" disabled={openDay || pendingAction !== null} onClick={() => void activateRevision(revision.revision)}>{pendingAction === `activate-revision:${revision.revision}` ? "Activating…" : "Activate"}</button></div>}</article>)}</div></details>
-          <div className="demo-route-list">{selected.routes.map((route) => {
-            const demo = selected.demos.find((item) => item.id === route.demo_id);
-            const adapter = adapters.find((item) => item.id === route.adapter_id);
-            const status = routeStatuses[route.id];
-            return <article className="demo-route-card" key={route.id}>
-              <div className="demo-route-heading"><div><p className="worker-id">{demo?.display_name ?? route.demo_id}</p><h3>{route.display_name}</h3></div><code>{route.public_model}</code></div>
-              <p className="worker-summary">{adapter?.display_name ?? route.adapter_id} · {humanise(route.qualification_policy)} · {humanise(route.fallback_policy)}</p>
-              <div className="route-rehearsal"><span><StatusDot state={status?.ready ? "good" : status?.gateway_available ? "warn" : "bad"} /><strong>{status?.ready ? "Gateway ready" : status?.active ? "Gateway unavailable" : "Revision not active"}</strong><small>{status?.effective_provider ?? status?.smoke_unavailable_reason ?? "No effective provider"}</small></span><div className="button-row"><button type="button" className="secondary" disabled={pendingAction !== null} onClick={() => void refreshRouteStatus(route.id)}>{pendingAction === `status:${route.id}` ? "Checking…" : "Check readiness"}</button><button type="button" disabled={pendingAction !== null || !status?.ready || !status.smoke_supported} title={status?.smoke_unavailable_reason ?? undefined} onClick={() => void smokeRoute(route.id)}>{pendingAction === `smoke:${route.id}` ? "Testing…" : "Smoke route"}</button></div></div>
-              <div className="route-provider-list">{route.providers.length ? [...route.providers].sort((left, right) => left.priority - right.priority).map((binding) => {
-                const deployment = deployments.find((item) => item.id === binding.deployment_id);
-                return <div key={binding.deployment_id}><span><strong>{deployment?.display_name ?? binding.deployment_id}</strong><small>{deployment ? `${deployment.id} · ${deployment.model.model_id} · ${deployment.runtime}` : "Missing deployment"}</small></span><StateBadge state={deployment?.worker?.state ?? "incompatible"} /></div>;
-              }) : <p className="muted">No provider deployment; the route is structurally unavailable.</p>}</div>
-            </article>;
-          })}</div>
-        </>}
+  if (!workers.length || !live.active_event) return (
+    <div className="view-stack">
+      <section className="hero-panel"><div><p className="eyebrow">Initial setup</p><h2>Build your first local route</h2><p>ModelDeck starts empty: create a Worker from a discovered Model, create an Event and Route, then publish it.</p></div></section>
+      <section className="panel"><PanelHeading title="Setup checklist" detail={`${models.length} cached Models discovered`} />
+        <ol className="setup-list"><li className={models.length ? "done" : ""}>Discover a cached Model</li><li className={workers.length ? "done" : ""}>Create a Worker</li><li className={live.active_event ? "done" : ""}>Create and publish an Event</li><li>Start and smoke-test the Route’s Worker</li></ol>
       </section>
     </div>
+  );
+  return <div className="view-stack">
+    <section className="hero-panel"><div><p className="eyebrow">Published Event · revision {live.active_event.revision}</p><h2>{live.active_event.name}</h2><p>Publishing controls routing only. Worker processes remain under explicit operator control.</p></div><div className="hero-status"><StatusDot state={live.routes.every((route) => route.ready) ? "good" : "warn"} /><span>{live.routes.filter((route) => route.ready).length} of {live.routes.length} Routes ready</span></div></section>
+    <section className="panel table-panel"><PanelHeading title="Live Routes" detail={`${live.routes.length} published`} />
+      {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
+      {live.routes.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Public route</th><th>Protocol</th><th>Worker order</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
+        {live.routes.map((route) => <tr key={route.id}><td><strong>{route.display_name}</strong><code>{route.public_name}</code></td><td>{route.protocol_contract}</td><td><div className="active-worker-chain">{route.workers.map((worker, index) => <span key={worker.id}>{index === 0 ? "Primary" : `Backup ${index}`}: {worker.name} <StateBadge state={worker.state} /></span>)}</div></td><td>{route.effective_worker?.name ?? "No ready Worker"}</td><td>{route.workers[0] && <div className="button-row"><button disabled={pending !== null || route.workers[0].state === "ready"} onClick={() => void operate(route.workers[0], "start")}>Start primary</button><button className="secondary" disabled={pending !== null || smokingRoute !== null || !route.ready} onClick={() => void smokeRoute(route.id)}>Rehearse Route</button></div>}</td></tr>)}
+      </tbody></table></div> : <p className="muted">This Event publishes no Routes.</p>}
+    </section>
   </div>;
 }
 
-function ActiveGatewayRoutes({ demoSet, deployments, adapters }: {
-  demoSet: DemoSet;
-  deployments: Deployment[];
-  adapters: DemoAdapter[];
+function EventsView({ events, workers, contracts, openDay, refresh }: {
+  events: EventRecord[]; workers: Worker[]; contracts: ProtocolContract[]; openDay: boolean; refresh: () => Promise<void>;
 }) {
-  return <section className="panel active-gateway-routes" aria-label="Active gateway routes">
-    <PanelHeading title="Active gateway routes" detail={`${demoSet.display_name} · revision ${demoSet.revision}`} />
-    <p className="section-description">Applications use the public aliases below. ModelDeck resolves each alias to the first ready deployment in its ordered provider chain.</p>
-    {demoSet.routes.length ? <div className="active-route-table-wrap"><table className="active-route-table">
-      <thead><tr><th>Public alias</th><th>Demo and protocol</th><th>Deployment → worker state</th></tr></thead>
-      <tbody>{demoSet.routes.map((route) => {
-        const demo = demoSet.demos.find((item) => item.id === route.demo_id);
-        const adapter = adapters.find((item) => item.id === route.adapter_id);
-        return <tr key={route.id}>
-          <td><code>{route.public_model}</code><small>{route.display_name}</small></td>
-          <td><strong>{demo?.display_name ?? route.demo_id}</strong><small>{adapter?.display_name ?? route.adapter_id}</small></td>
-          <td>{route.providers.length ? <div className="active-provider-chain">{[...route.providers].sort((left, right) => left.priority - right.priority || left.deployment_id.localeCompare(right.deployment_id)).map((binding) => {
-            const deployment = deployments.find((item) => item.id === binding.deployment_id);
-            const state = deployment?.worker?.state ?? (deployment?.registered ? "stopped" : "unregistered");
-            return <div className="active-provider" key={binding.deployment_id}><span><strong>{deployment?.display_name ?? binding.deployment_id}</strong><small>{deployment ? deployment.id : "Missing deployment"}</small></span><StateBadge state={state} /></div>;
-          })}</div> : <span className="muted">No provider deployment</span>}</td>
-        </tr>;
-      })}</tbody>
-    </table></div> : <p className="muted">The active snapshot contains no gateway routes.</p>}
-  </section>;
-}
+  const [selectedId, setSelectedId] = useState(events[0]?.definition.id ?? "");
+  const selected = events.find((event) => event.definition.id === selectedId) ?? events[0];
+  const [draft, setDraft] = useState<EventDefinition | null>(selected?.definition ?? null);
+  const [saveState, setSaveState] = useState("Saved");
+  const [validation, setValidation] = useState<EventValidation | null>(null);
+  const [revisions, setRevisions] = useState<EventRevision[]>([]);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
-function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, renameDeployment, save, cancel }: {
-  draft: DemoSet;
-  setDraft: (value: DemoSet) => void;
-  deployments: Deployment[];
-  adapters: DemoAdapter[];
-  pending: boolean;
-  renameDeployment: (deployment: Deployment) => void;
-  save: () => void;
-  cancel: () => void;
-}) {
-  const updateRoute = (index: number, updates: Partial<DemoSet["routes"][number]>) => setDraft({ ...draft, routes: draft.routes.map((route, routeIndex) => routeIndex === index ? { ...route, ...updates } : route) });
-  const updateDemoIdentifier = (index: number, nextId: string) => {
-    const previousId = draft.demos[index].id;
-    setDraft({
-      ...draft,
-      demos: draft.demos.map((demo, demoIndex) => demoIndex === index ? { ...demo, id: nextId } : demo),
-      routes: draft.routes.map((route) => route.demo_id === previousId ? { ...route, demo_id: nextId } : route),
-    });
+  useEffect(() => { setDraft(selected?.definition ?? null); setSaveState("Saved"); setValidation(null); }, [selected?.definition]);
+  useEffect(() => {
+    if (!selectedId && events[0]) setSelectedId(events[0].definition.id);
+  }, [events, selectedId]);
+  useEffect(() => {
+    if (!draft || !selected || JSON.stringify(draft) === JSON.stringify(selected.definition) || openDay) return;
+    setSaveState("Saving…");
+    const timer = window.setTimeout(() => {
+      putJson(`/api/events/${draft.id}/draft`, draft).then(() => { setSaveState("Saved"); return refresh(); })
+        .catch((reason) => { setSaveState("Save failed"); setFeedback(messageFrom(reason)); });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [draft, selected, openDay, refresh]);
+
+  const createEvent = async () => {
+    const definition: EventDefinition = { id: crypto.randomUUID(), name: "New Event", description: "", qualification: "compatible", demos: [], routes: [] };
+    const record = await postJson<EventRecord>("/api/events", definition); await refresh(); setSelectedId(record.definition.id);
   };
-  const addDemo = () => {
-    const index = nextAvailableSuffix("demo", draft.demos.map((demo) => demo.id));
-    setDraft({ ...draft, demos: [...draft.demos, { id: `demo-${index}`, display_name: `Demo ${index}` }] });
-  };
-  const addRoute = () => {
-    if (!draft.demos.length || !adapters.length) return;
-    const index = nextAvailableSuffix("route", draft.routes.map((route) => route.id));
-    setDraft({ ...draft, routes: [...draft.routes, { id: `route-${index}`, demo_id: draft.demos[0].id, display_name: `Route ${index}`, adapter_id: adapters[0].id, public_model: `route-${index}`, qualification_policy: "registered", fallback_policy: "structured-unavailable", providers: [] }] });
-  };
-  return <form className="demo-set-editor" onSubmit={(event) => { event.preventDefault(); save(); }}>
-    <div className="demo-set-heading"><div><p className="eyebrow">Editing revision {draft.revision}</p><h2>{draft.display_name}</h2></div></div>
-    <div className="runtime-fields">
-      <label>Display name<input required value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
-      <label className="wide-field">Description<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-    </div>
-    <div className="editor-section-heading"><h3>Demos</h3><button type="button" className="secondary" onClick={addDemo}>Add demo</button></div>
-    <div className="demo-editor-list">{draft.demos.map((demo, index) => <div key={`demo-${index}`}>
-      <label>Identifier<input className="identifier-input" required pattern="[a-z][a-z0-9-]{1,62}" aria-label={`Identifier for ${demo.display_name}`} value={demo.id} onChange={(event) => {
-        const nextId = event.target.value;
-        const duplicate = draft.demos.some((item, demoIndex) => demoIndex !== index && item.id === nextId);
-        event.currentTarget.setCustomValidity(duplicate ? "Demo identifiers must be unique." : "");
-        updateDemoIdentifier(index, nextId);
-      }} /></label>
-      <label>Display name<input required maxLength={80} aria-label={`Display name for ${demo.id}`} value={demo.display_name} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item, demoIndex) => demoIndex === index ? { ...item, display_name: event.target.value } : item) })} /></label>
-      <button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, demos: draft.demos.filter((_, demoIndex) => demoIndex !== index), routes: draft.routes.filter((route) => route.demo_id !== demo.id) })}>Remove</button>
-    </div>)}</div>
-    <div className="editor-section-heading"><h3>Route contracts</h3><button type="button" className="secondary" disabled={!draft.demos.length} onClick={addRoute}>Add route</button></div>
-    <div className="route-editor-list">{draft.routes.map((route, routeIndex) => <article className="route-editor" key={route.id}>
-      <div className="route-editor-title"><strong>{route.id}</strong><button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, routes: draft.routes.filter((_, index) => index !== routeIndex) })}>Remove route</button></div>
-      <div className="runtime-fields">
-        <label>Display name<input required value={route.display_name} onChange={(event) => updateRoute(routeIndex, { display_name: event.target.value })} /></label>
-        <label>Demo<select value={route.demo_id} onChange={(event) => updateRoute(routeIndex, { demo_id: event.target.value })}>{draft.demos.map((demo) => <option value={demo.id} key={demo.id}>{demo.display_name}</option>)}</select></label>
-        <label>Public model alias<input required pattern="[a-z][a-z0-9-]{1,62}" value={route.public_model} onChange={(event) => updateRoute(routeIndex, { public_model: event.target.value })} /></label>
-        <label>Protocol adapter<select value={route.adapter_id} onChange={(event) => updateRoute(routeIndex, { adapter_id: event.target.value })}>{adapters.map((adapter) => <option value={adapter.id} key={adapter.id}>{adapter.display_name}</option>)}</select></label>
-        <label>Qualification<select value={route.qualification_policy} onChange={(event) => updateRoute(routeIndex, { qualification_policy: event.target.value as DemoSet["routes"][number]["qualification_policy"] })}><option value="registered">Registered deployment</option><option value="tested-working-recorded">Recorded tested-working evidence</option></select></label>
-        <label>Fallback policy<select value={route.fallback_policy} onChange={(event) => updateRoute(routeIndex, { fallback_policy: event.target.value as DemoSet["routes"][number]["fallback_policy"] })}><option value="structured-unavailable">Structured unavailable</option><option value="none">No fallback</option><option value="ordered">Ordered providers</option><option value="mock-visible">Visible mock fallback</option></select></label>
-      </div>
-      <div className="editor-section-heading"><div><h4>Provider deployments</h4><p className="provider-priority-help">Lower priorities are tried first. Equal priorities are ordered by deployment ID.</p></div><button type="button" className="secondary" disabled={!deployments.length} onClick={() => { const candidate = deployments.find((deployment) => !route.providers.some((binding) => binding.deployment_id === deployment.id)); if (candidate) updateRoute(routeIndex, { providers: [...route.providers, { deployment_id: candidate.id, priority: route.providers.length * 10 }] }); }}>Add provider</button></div>
-      <div className="provider-editor-list">{route.providers.map((binding, providerIndex) => {
-        const selectedDeployment = deployments.find((deployment) => deployment.id === binding.deployment_id);
-        return <div key={`${binding.deployment_id}-${providerIndex}`}><label className="provider-deployment">Deployment<select aria-label={`Provider ${providerIndex + 1} for ${route.id}`} value={binding.deployment_id} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, deployment_id: event.target.value } : item) })}>{deployments.map((deployment) => <option value={deployment.id} key={deployment.id}>{deployment.display_name}</option>)}</select><small>ID: {binding.deployment_id} · Model: {selectedDeployment?.model.model_id ?? "Unknown model"}</small></label><label className="provider-priority">Priority<input aria-label={`Priority for ${binding.deployment_id}`} type="number" min="0" max="10000" value={binding.priority} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, priority: Number(event.target.value) } : item) })} /></label>{selectedDeployment && <button type="button" className="secondary" disabled={pending} onClick={() => renameDeployment(selectedDeployment)}>Rename</button>}<button type="button" className="secondary danger" onClick={() => updateRoute(routeIndex, { providers: route.providers.filter((_, index) => index !== providerIndex) })}>Remove</button></div>;
-      })}</div>
-    </article>)}</div>
-    <div className="button-row"><button disabled={pending}>Save new revision</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
-  </form>;
-}
+  const validate = async () => { if (!draft) return; setValidation(await postJson(`/api/events/${draft.id}/validate`)); };
+  const publish = async () => { if (!draft) return; await putJson(`/api/events/${draft.id}/draft`, draft); await postJson(`/api/events/${draft.id}/publish`); setFeedback("Routing published. No Workers were started or stopped."); await refresh(); };
+  const discard = async () => { if (!draft) return; await deleteJson(`/api/events/${draft.id}/draft`); await refresh(); };
+  const deleteEvent = async () => { if (!draft || selected?.latest_revision || !window.confirm(`Delete draft-only Event “${draft.name}”?`)) return; await deleteJson(`/api/events/${draft.id}`); setSelectedId(""); await refresh(); };
+  const loadRevisions = async () => { if (!draft) return; const result = await getJson<{ revisions: EventRevision[] }>(`/api/events/${draft.id}/revisions`); setRevisions(result.revisions); };
+  const updateRoute = (id: string, change: Partial<EventDefinition["routes"][number]>) => setDraft((current) => current && ({ ...current, routes: current.routes.map((route) => route.id === id ? { ...route, ...change } : route) }));
+  const removeRoute = (id: string) => setDraft((current) => current && ({ ...current, routes: current.routes.filter((route) => route.id !== id), demos: current.demos.map((demo) => ({ ...demo, route_ids: demo.route_ids.filter((routeId) => routeId !== id) })) }));
 
-function nextAvailableSuffix(prefix: string, identifiers: string[]) {
-  const used = new Set(identifiers);
-  let suffix = 1;
-  while (used.has(`${prefix}-${suffix}`)) suffix += 1;
-  return suffix;
-}
-
-function ValidationSummary({ validation }: { validation: DemoSetValidation }) {
-  return <section className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Valid route configuration" : `${validation.errors.length} validation issue${validation.errors.length === 1 ? "" : "s"}`}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={`${error.route_id}-${error.deployment_id}-${index}`}>{[error.route_id, error.deployment_id].filter(Boolean).join(" / ")}: {error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`${warning.route_id}-${index}`}>{warning.route_id}: {warning.message}</li>)}</ul>}</section>;
-}
-
-function PlanSummary({ plan, deployments }: { plan: DemoSetPlan; deployments: Deployment[] }) {
-  const names = (ids: string[]) => ids.map((id) => deployments.find((deployment) => deployment.id === id)?.display_name ?? id).join(", ") || "None";
-  return <section className="validation-summary"><strong>Activation plan</strong><DefinitionList rows={[["Primary deployments", names(plan.desired_primary_deployments)], ["Start required", names(plan.start_required)], ["Stop required", names(plan.stop_required)], ["Process changes", plan.applies_process_changes ? "Applied automatically" : "Operator controlled"]]} compact />{plan.warnings.length > 0 && <ul>{plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}</section>;
-}
-
-function demoSetPayload(demoSet: DemoSet) {
-  return {
-    id: demoSet.id,
-    display_name: demoSet.display_name,
-    description: demoSet.description,
-    demos: demoSet.demos,
-    routes: demoSet.routes,
-  };
-}
-
-function WorkersView({ workers, deployments, profiles, models, compatibility, providerSelections, pending, operate, stopAll, selectProvider }: {
-  workers: Worker[];
-  deployments: Deployment[];
-  profiles: Profile[];
-  models: ModelEntry[];
-  compatibility: CompatibilityTest[];
-  providerSelections: ProviderSelection[];
-  pending: string | null;
-  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>;
-  stopAll: () => Promise<void>;
-  selectProvider: (alias: string, profileId: string) => Promise<void>;
-}) {
-  const [sort, setSort] = useState<WorkerSort>("name-asc");
-  const [grouping, setGrouping] = useState<WorkerGrouping>("family");
-  const sortedWorkers = useMemo(() => sortWorkers(workers, sort), [workers, sort]);
-  const groups = useMemo(() => groupWorkers(sortedWorkers, grouping), [sortedWorkers, grouping]);
-  return (
-    <div className="view-stack">
-      <div className="view-actions"><p>Start only the runtime you intend to use. Model loading may take several minutes.</p><button className="danger secondary" disabled={pending === "stop-all"} onClick={() => void stopAll()}>{pending === "stop-all" ? "Stopping…" : "Stop all workers"}</button></div>
-      <div className="worker-toolbar" aria-label="Worker display controls">
-        <label>Group workers<select value={grouping} onChange={(event) => setGrouping(event.target.value as WorkerGrouping)}><option value="family">Generation family</option><option value="runtime">Runtime</option><option value="lifecycle">Lifecycle</option><option value="none">No grouping</option></select></label>
-        <label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Worker name A–Z</option><option value="name-desc">Worker name Z–A</option><option value="model-asc">Model name A–Z</option><option value="runtime-asc">Runtime A–Z</option><option value="state">State, then name</option></select></label>
-      </div>
-      {providerSelections.map((selection) => <ProviderControl key={selection.alias} selection={selection} workers={workers} pending={pending === `provider-selection:${selection.alias}`} selectProvider={selectProvider} />)}
-      {groups.length ? groups.map((group) => (
-        <section className="worker-group" key={group.title}>
-          <PanelHeading title={group.title} detail={`${group.workers.length} workers`} />
-          <p className="section-description">{group.description}</p>
-          <div className="worker-grid">
-            {group.workers.map((worker) => {
-              const profile = profiles.find((candidate) => candidate.id === worker.id);
-              const cacheModelId = profile?.artifact_model_id ?? worker.model_id;
-              const cacheRevision = profile?.artifact_revision ?? profile?.revision;
-              const model = models.find((candidate) => candidate.model_id === cacheModelId && (!cacheRevision || candidate.revision === cacheRevision));
-              const displayName = deployments.find((deployment) => deployment.id === worker.id)?.display_name ?? shortModelName(worker.model_id);
-              return <WorkerCard key={worker.id} worker={worker} displayName={displayName} profile={profile} model={model} tests={compatibility} pending={pending} operate={operate} />;
-            })}
-          </div>
-        </section>
-      )) : <section className="empty-state"><h2>No managed workers</h2><p>Configure an allowlisted runtime from the model library first.</p></section>}
-    </div>
-  );
-}
-
-function ProviderControl({ selection, workers, pending, selectProvider }: { selection: ProviderSelection; workers: Worker[]; pending: boolean; selectProvider: (alias: string, profileId: string) => Promise<void> }) {
-  const [chosen, setChosen] = useState(selection.selected_provider);
-  useEffect(() => setChosen(selection.selected_provider), [selection.selected_provider]);
-  const selected = selection.candidates.find((candidate) => candidate.profile_id === selection.selected_provider);
-  const workerState = workers.find((worker) => worker.id === selection.selected_provider)?.state ?? selected?.worker_state ?? "stopped";
-  return <section className="panel provider-selection-panel">
-    <PanelHeading title={selection.display_name} detail={selection.superseded_by_active_demo_set ? "Managed by Demo routes" : `Legacy alias: ${selection.alias}`} />
-    <p className="section-description">Applications keep using <code>{selection.alias}</code>. {selection.superseded_by_active_demo_set ? <>The active demo set is authoritative; change this binding in <a href="/demo-routes">Demo routes</a>.</> : "This compatibility selection changes legacy routing only; start, stop and smoke testing remain separate."}</p>
-    <div className="provider-selection-controls">
-      <label>Physical provider<select disabled={selection.superseded_by_active_demo_set} value={chosen ?? ""} onChange={(event) => setChosen(event.target.value)}>{selection.candidates.map((candidate) => <option key={candidate.profile_id} value={candidate.profile_id}>{candidate.profile_alias} · {candidate.model_id}</option>)}</select></label>
-      <button disabled={selection.superseded_by_active_demo_set || pending || !chosen || chosen === selection.selected_provider || !selection.candidates.some((candidate) => candidate.profile_id === chosen)} onClick={() => { if (chosen) void selectProvider(selection.alias, chosen); }}>{pending ? "Selecting…" : "Select provider"}</button>
-    </div>
-    <DefinitionList rows={[["Stored compatibility selection", selection.selected_provider ?? "None"], ["Routing authority", selection.superseded_by_active_demo_set ? `${selection.active_demo_set_id} revision ${selection.active_demo_set_revision}` : "Legacy provider selection"], ["Worker state", humanise(workerState)], ["Gateway readiness", selection.gateway_ready ? "Ready" : "Not ready"], ["Effective provider", selection.effective_provider ?? "None — no fallback"]]} compact />
-  </section>;
-}
-
-function WorkerCard({ worker, displayName, profile, model, tests, pending, operate }: {
-  worker: Worker;
-  displayName: string;
-  profile?: Profile;
-  model?: ModelEntry;
-  tests: CompatibilityTest[];
-  pending: string | null;
-  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>;
-}) {
-  const compatibility = compatibilityFor(worker, profile, tests, model);
-  const active = ["validating", "starting", "loading", "warming", "ready", "busy", "degraded", "stopping"].includes(worker.state);
-  const canStart = ["stopped", "failed", "incompatible"].includes(worker.state);
-  const canStop = active && worker.state !== "stopping";
-  const canRestart = ["ready", "busy", "degraded", "failed"].includes(worker.state);
-  const canSmoke = worker.state === "ready";
-  const busy = pending?.startsWith(`${worker.id}:`) ?? false;
-  return (
-    <article className={`worker-card state-${worker.state}`}>
-      <div className="worker-card-heading"><div><p className="worker-id">Deployment · {worker.id}</p><h3>{displayName}</h3></div><StateBadge state={worker.state} /></div>
-      <p className="worker-summary"><span>{shortModelName(worker.model_id)}</span> · {worker.generation_family} · {worker.runtime}</p>
-      <div className="compatibility-line"><StatusDot state={compatibility.tone} /><span>{compatibility.label}</span></div>
-      {worker.last_error && <p className="inline-error" role="alert">{worker.last_error}</p>}
-      <DefinitionList rows={[
-        ["Alias", worker.alias], ["Configuration", profile?.source === "seed" ? "Seeded configuration" : profile?.source === "local" ? "Local configuration" : "Unknown"], ["Revision", profile?.revision.slice(0, 12) ?? "Unknown"], ["Lifecycle", worker.lifecycle], ["Endpoint", `127.0.0.1:${worker.port}`], ["Dtype", profile?.dtype ?? "Unknown"], ["Cache snapshot", cacheSnapshotLabel(model)],
-      ]} compact />
-      <details><summary>Capabilities and manifest</summary><div className="tag-list">{capabilityLabels(worker.capabilities).map((label) => <span className="tag" key={label}>{label}</span>)}</div><p className="manifest-note">Local files only · remote code disabled · fixed argument-array launch</p></details>
-      <div className="button-row" aria-label={`Actions for ${worker.id}`}>
-        <button disabled={!canStart || busy} onClick={() => void operate(worker, "start")}>{pending === `${worker.id}:start` ? "Starting…" : "Start"}</button>
-        <button className="secondary" disabled={!canStop || busy} onClick={() => void operate(worker, "stop")}>{pending === `${worker.id}:stop` ? "Stopping…" : "Stop"}</button>
-        <button className="secondary" disabled={!canRestart || busy} onClick={() => void operate(worker, "restart")}>Restart</button>
-        <button className="secondary" disabled={!canSmoke || busy} onClick={() => void operate(worker, "smoke")}>{pending === `${worker.id}:smoke` ? "Testing…" : "Smoke test"}</button>
-      </div>
-    </article>
-  );
-}
-
-function ModelsView({
-  models,
-  profiles,
-  compatibility,
-  deploymentUsage,
-  runtimeTemplates,
-  configurationChanged,
-}: {
-  models: ModelEntry[];
-  profiles: Profile[];
-  compatibility: CompatibilityTest[];
-  deploymentUsage: DeploymentUsage[];
-  runtimeTemplates: RuntimeTemplate[];
-  configurationChanged: () => Promise<void>;
-}) {
-  const [configuring, setConfiguring] = useState<string | null>(null);
-  const [pendingProfile, setPendingProfile] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<{ tone: "good" | "bad"; message: string } | null>(null);
-  const [sort, setSort] = useState<ModelSort>("name-asc");
-  const sortedModels = useMemo(() => {
-    const nameOrder = (left: ModelEntry, right: ModelEntry) =>
-      left.model_id.localeCompare(right.model_id, "en-AU", { sensitivity: "base" }) ||
-      String(left.revision ?? "").localeCompare(String(right.revision ?? ""), "en-AU");
-    return [...models].sort((left, right) => {
-      const leftDetails = modelLibraryDetails(left, profiles, compatibility);
-      const rightDetails = modelLibraryDetails(right, profiles, compatibility);
-      if (sort === "name-desc") return -nameOrder(left, right);
-      if (sort === "size-desc") return right.physical_size_bytes - left.physical_size_bytes || nameOrder(left, right);
-      if (sort === "size-asc") return left.physical_size_bytes - right.physical_size_bytes || nameOrder(left, right);
-      if (sort === "readiness") return modelReadinessRank(leftDetails.state) - modelReadinessRank(rightDetails.state) || nameOrder(left, right);
-      if (sort === "attention") return modelReadinessRank(rightDetails.state) - modelReadinessRank(leftDetails.state) || nameOrder(left, right);
-      if (sort === "compatibility") return compatibilityRank(leftDetails) - compatibilityRank(rightDetails) || nameOrder(left, right);
-      if (sort === "configured-desc") return rightDetails.matchingProfiles.length - leftDetails.matchingProfiles.length || nameOrder(left, right);
-      if (sort === "configured-asc") return leftDetails.matchingProfiles.length - rightDetails.matchingProfiles.length || nameOrder(left, right);
-      if (sort === "family-asc") return modelFamilyLabel(left).localeCompare(modelFamilyLabel(right), "en-AU", { sensitivity: "base" }) || nameOrder(left, right);
-      return nameOrder(left, right);
-    });
-  }, [compatibility, models, profiles, sort]);
-
-  const configure = async (payload: LocalProfileRequest) => {
-    setPendingProfile(`create:${payload.alias}`);
-    setFeedback(null);
-    try {
-      await postJson<Profile>("/api/profiles", payload);
-      await configurationChanged();
-      setConfiguring(null);
-      setFeedback({ tone: "good", message: `Runtime ${payload.alias} is configured and ready to start from Workers.` });
-    } catch (reason) {
-      setFeedback({ tone: "bad", message: messageFrom(reason) });
-    } finally {
-      setPendingProfile(null);
-    }
-  };
-
-  const remove = async (profile: Profile) => {
-    if (!window.confirm(`Remove runtime configuration ${profile.alias}? Cached model files will be kept.`)) return;
-    setPendingProfile(`delete:${profile.id}`);
-    setFeedback(null);
-    try {
-      await deleteJson(`/api/profiles/${encodeURIComponent(profile.id)}`);
-      await configurationChanged();
-      setFeedback({ tone: "good", message: `Runtime ${profile.alias} was removed. Its cached model files were kept.` });
-    } catch (reason) {
-      setFeedback({ tone: "bad", message: messageFrom(reason) });
-    } finally {
-      setPendingProfile(null);
-    }
-  };
-
-  const setModelPolicy = async (model: ModelEntry, allowed: boolean) => {
-    if (!model.revision) return;
-    if (!allowed && !window.confirm(`Disallow ${model.model_id} in ModelDeck? Cached files and runtime configurations will be kept.`)) return;
-    setPendingProfile(`policy:${model.model_id}`);
-    setFeedback(null);
-    try {
-      await postJson("/api/catalogue/policy", {
-        model_id: model.model_id,
-        revision: model.revision,
-        allowed,
-      });
-      await configurationChanged();
-      setConfiguring(null);
-      setFeedback({ tone: "good", message: allowed ? `${model.model_id} is allowed in ModelDeck again.` : `${model.model_id} is disallowed in ModelDeck. Its cached files and configurations were kept.` });
-    } catch (reason) {
-      setFeedback({ tone: "bad", message: messageFrom(reason) });
-    } finally {
-      setPendingProfile(null);
-    }
-  };
-
-  return (
-    <div className="view-stack">
-      <section className="notice-panel"><strong>Cache-backed runtime configuration</strong><p>HuggingFacePull still owns acquisition and cleanup. ModelDeck can configure recognised local snapshots, but never downloads or deletes model files.</p></section>
-      {feedback && <div className={`configuration-feedback ${feedback.tone}`} role="status">{feedback.message}</div>}
-      <section className="panel table-panel">
-        <PanelHeading title="Model library" detail={`${models.length} cached repositories`} />
-        {models.length ? <>
-          <div className="model-library-toolbar">
-            <label htmlFor="model-library-sort">Sort models</label>
-            <select id="model-library-sort" value={sort} onChange={(event) => setSort(event.target.value as ModelSort)}>
-              <option value="name-asc">Name (A–Z)</option>
-              <option value="name-desc">Name (Z–A)</option>
-              <option value="size-desc">Cache size (largest first)</option>
-              <option value="size-asc">Cache size (smallest first)</option>
-              <option value="readiness">Readiness (most ready first)</option>
-              <option value="attention">Readiness (attention first)</option>
-              <option value="compatibility">Compatibility evidence (tested first)</option>
-              <option value="configured-desc">Runtime configurations (most first)</option>
-              <option value="configured-asc">Runtime configurations (fewest first)</option>
-              <option value="family-asc">Model class (A–Z)</option>
-            </select>
-          </div>
-          <div className="model-list">{sortedModels.map((model) => {
-          const { matchingProfiles, latest, state } = modelLibraryDetails(model, profiles, compatibility);
-          const canConfigure = model.modeldeck_allowed && model.download_state !== "partial" && model.configuration_support !== null && Boolean(model.revision);
-          const key = `${model.model_id}-${model.revision}`;
-          return <article className="model-row" key={key}>
-            <div className="model-main"><div><h3>{model.model_id}</h3><p>{modelCapabilitySummary(model)} · {formatBytes(model.physical_size_bytes)}</p><div className="tag-list model-capabilities" aria-label={`Supported uses for ${model.model_id}`}>{model.capability_hints.map((capability) => <span className="tag" key={capability}>{humanise(capability)}</span>)}</div></div><StateBadge state={state} /></div>
-            <p className="model-stage">{modelStageDescription(state)}</p>
-            <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ...(model.base_model_id ? [["Base model", `${model.base_model_id} @ ${model.base_model_revision}`] as [string, string]] : []), ["ModelDeck use", model.modeldeck_allowed ? "Allowed" : "Disallowed"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
-          {matchingProfiles.length > 0 && <div className="configured-runtime-list">{matchingProfiles.map((profile) => {
-              const usage = deploymentUsage.find((candidate) => candidate.deployment_id === profile.id);
-              return <div className="configured-runtime" key={profile.id}><div className="configured-runtime-heading"><span><strong>{profile.alias}</strong><small>{humanise(profile.generation_family)} deployment · {profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" title={usage?.blocking_dependencies.map((dependency) => dependency.remediation).join("; ") || undefined} disabled={pendingProfile !== null || !usage?.removable} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div><DeploymentUsageSummary usage={usage} /></div>;
-            })}</div>}
-            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} runtimeTemplates={runtimeTemplates} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
-          </article>;
-          })}</div>
-        </> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
+  return <div className="view-stack">
+    <div className="view-actions"><p>Events describe what demos expect. Their Routes are shared and publish independently of Worker processes.</p><button disabled={openDay} onClick={() => void createEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Create Event</button></div>
+    {!selected || !draft ? <section className="empty-state"><h2>No Events yet</h2><p>Create an Event after configuring at least one Worker.</p></section> : <div className="event-layout">
+      <aside className="panel event-list">{events.map((event) => <button className={`event-select ${event.definition.id === draft.id ? "active" : ""}`} key={event.definition.id} onClick={() => setSelectedId(event.definition.id)}><span><strong>{event.definition.name}</strong><small>{event.active ? `Live revision ${event.active_revision}` : event.latest_revision ? `Published revision ${event.latest_revision}` : "Draft only"}</small></span></button>)}</aside>
+      <section className="panel event-detail"><div className="event-heading"><div><p className="eyebrow">{selected.active ? `Live revision ${selected.active_revision}` : "Draft"} · {saveState}</p><h2>{draft.name}</h2></div><StateBadge state={selected.active ? "ready" : "stopped"} /></div>
+        {feedback && <div className="configuration-feedback">{feedback}</div>}
+        <div className="button-row event-actions"><button className="secondary" onClick={() => void validate()}>Validate</button><button disabled={openDay || saveState === "Saving…"} onClick={() => void publish().catch((reason) => setFeedback(messageFrom(reason)))}>Publish routing</button><button className="secondary" disabled={openDay || !selected.latest_revision} onClick={() => void discard().catch((reason) => setFeedback(messageFrom(reason)))}>Discard draft</button><button className="secondary" onClick={() => void loadRevisions()}>History</button><button className="secondary danger" disabled={openDay || Boolean(selected.latest_revision)} onClick={() => void deleteEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Delete Event</button></div>
+        {validation && <div className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Ready to publish" : "Validation needs attention"}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`warning-${index}`}>Note: {warning.message}</li>)}</ul>}</div>}
+        {revisions.length > 0 && <details className="revision-history" open><summary>Published revisions</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{new Date(revision.published_at).toLocaleString()}</small></span><button className="secondary" disabled={revision.active || openDay} onClick={() => void postJson(`/api/events/${draft.id}/revisions/${revision.revision}/publish`).then(refresh)}>Make live</button></article>)}</div></details>}
+        <div className="event-editor">
+          <div className="field-grid"><label>Event name<input value={draft.name} disabled={openDay} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>Qualification<select value={draft.qualification} disabled={openDay} onChange={(event) => setDraft({ ...draft, qualification: event.target.value as EventDefinition["qualification"] })}><option value="compatible">Protocol compatible</option><option value="tested-working">Tested working (Open Day)</option></select></label></div>
+          <label>Description<textarea value={draft.description} disabled={openDay} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+          <div className="editor-section-heading"><div><h3>Routes</h3><p className="muted">The first Worker is primary; backups follow in the exact displayed order.</p></div><button disabled={openDay || !workers.length} onClick={() => setDraft({ ...draft, routes: [...draft.routes, { id: crypto.randomUUID(), display_name: "New Route", public_name: `route-${draft.routes.length + 1}`, protocol_contract: contracts[0]?.id ?? "openai-chat-v1", worker_ids: [workers[0].id] }] })}>Add Route</button></div>
+          <div className="route-editor-list">{draft.routes.map((route) => <article className="route-editor" key={route.id}><div className="route-editor-title"><h4>{route.display_name}</h4><button className="secondary danger" disabled={openDay} onClick={() => removeRoute(route.id)}>Remove</button></div><div className="field-grid"><label>Display name<input value={route.display_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { display_name: event.target.value })} /></label><label>Public model name<input value={route.public_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { public_name: event.target.value })} /></label><label>Protocol contract<select value={route.protocol_contract} disabled={openDay} onChange={(event) => updateRoute(route.id, { protocol_contract: event.target.value })}>{contracts.map((contract) => <option value={contract.id} key={contract.id}>{contract.display_name}</option>)}</select></label></div>
+            <h4>Worker order</h4><div className="worker-order-list">{route.worker_ids.map((workerId, index) => <div key={`${workerId}-${index}`}><span className="order-label">{index === 0 ? "Primary" : `Backup ${index}`}</span><select value={workerId} disabled={openDay} onChange={(event) => { const next = [...route.worker_ids]; next[index] = event.target.value; updateRoute(route.id, { worker_ids: next }); }}>{workers.map((worker) => <option key={worker.id} value={worker.id} disabled={route.worker_ids.includes(worker.id) && worker.id !== workerId}>{worker.name} · {worker.model_id}</option>)}</select><button className="secondary" disabled={openDay || index === 0} onClick={() => { const next = [...route.worker_ids]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateRoute(route.id, { worker_ids: next }); }}>↑</button><button className="secondary" disabled={openDay || index === route.worker_ids.length - 1} onClick={() => { const next = [...route.worker_ids]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; updateRoute(route.id, { worker_ids: next }); }}>↓</button><button className="secondary danger" disabled={openDay || index === 0} onClick={() => updateRoute(route.id, { worker_ids: route.worker_ids.filter((_, item) => item !== index) })}>Remove</button></div>)}</div>
+            <button className="secondary" disabled={openDay || workers.every((worker) => route.worker_ids.includes(worker.id))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add backup</button>
+          </article>)}</div>
+          <div className="editor-section-heading"><div><h3>Demos</h3><p className="muted">A Demo can reference any number of the Event’s shared Routes.</p></div><button disabled={openDay} onClick={() => setDraft({ ...draft, demos: [...draft.demos, { id: crypto.randomUUID(), name: "New Demo", route_ids: [] }] })}>Add Demo</button></div>
+          <div className="demo-editor-list">{draft.demos.map((demo) => <article className="route-editor" key={demo.id}><div className="route-editor-title"><label>Demo name<input value={demo.name} disabled={openDay} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item) => item.id === demo.id ? { ...item, name: event.target.value } : item) })} /></label><button className="secondary danger" disabled={openDay} onClick={() => setDraft({ ...draft, demos: draft.demos.filter((item) => item.id !== demo.id) })}>Remove</button></div><div className="route-membership">{draft.routes.map((route) => <label key={route.id}><input type="checkbox" checked={demo.route_ids.includes(route.id)} disabled={openDay} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item) => item.id === demo.id ? { ...item, route_ids: event.target.checked ? [...item.route_ids, route.id] : item.route_ids.filter((id) => id !== route.id) } : item) })} /> {route.display_name}</label>)}</div></article>)}</div>
+        </div>
       </section>
-    </div>
-  );
+    </div>}
+  </div>;
 }
 
-function DeploymentUsageSummary({ usage }: { usage?: DeploymentUsage }) {
-  if (!usage) return <p className="deployment-usage muted">Loading deployment usage…</p>;
-  const references = [
-    ...usage.route_bindings.map((route) => ({ key: `route:${route.demo_set_id}:${route.revision}:${route.route_id}`, label: `${route.demo_set_display_name} / ${route.route_display_name}`, detail: `${humanise(route.state)} route · ${route.public_model}` })),
-    ...usage.legacy_aliases.map((alias) => ({ key: `alias:${alias.alias}`, label: alias.display_name, detail: alias.effective ? "Legacy routing authority" : "Stored legacy selection · superseded" })),
-  ];
-  return <div className="deployment-usage"><strong>Used by</strong>{references.length ? <ul>{references.map((reference) => <li key={reference.key}><span>{reference.label}</span><small>{reference.detail}</small></li>)}</ul> : <p>No demo routes or compatibility aliases reference this deployment.</p>}{usage.blocking_dependencies.length > 0 && <p className="dependency-guidance">Reassign {usage.blocking_dependencies.length} blocking dependenc{usage.blocking_dependencies.length === 1 ? "y" : "ies"} before removal. <a href={usage.blocking_dependencies.some((dependency) => dependency.kind === "demo-route") ? "/demo-routes" : "/workers"}>Open configuration</a></p>}</div>;
+function WorkersView({ workers, pending, operate, refresh, openDay }: { workers: Worker[]; pending: string | null; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+  const [sort, setSort] = useState<WorkerSort>("name-asc");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const sorted = useMemo(() => [...workers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [workers, sort]);
+  const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
+  const archive = async (worker: Worker) => { if (!window.confirm(`Archive Worker “${worker.name}”? Cached Model files will be kept.`)) return; await deleteJson(`/api/workers/${worker.id}`); setFeedback(`Archived Worker “${worker.name}”; its cached Model was kept.`); await refresh(); };
+  return <div className="view-stack"><div className="view-actions"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not.</p><div className="worker-toolbar"><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label></div></div>
+    {feedback && <div className="configuration-feedback">{feedback}</div>}
+    {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => <article className={`worker-card state-${worker.state}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><StateBadge state={worker.state} /></div><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype]]} /></details><div className="button-row"><button className="secondary" disabled={openDay} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button disabled={pending !== null || worker.state === "ready"} onClick={() => void operate(worker, "start")}>Start</button><button className="secondary" disabled={pending !== null || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>Smoke</button><button className="secondary" disabled={pending !== null || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>Stop</button><button className="secondary danger" disabled={openDay || pending !== null || worker.state !== "stopped"} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div></article>)}</div>}
+  </div>;
 }
 
-function RuntimeConfigurationForm({ model, runtimeTemplates, pending, cancel, submit }: { model: ModelEntry; runtimeTemplates: RuntimeTemplate[]; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
-  const support = model.configuration_support;
-  const baseline = runtimeTemplates.find((template) => template.id === support);
-  const compatibleTemplates = runtimeTemplates.filter((template) => baseline && template.generation_family === baseline.generation_family && template.cache_setting === baseline.cache_setting && template.uses_base_model_identity === baseline.uses_base_model_identity);
-  const [runtimeTemplateId, setRuntimeTemplateId] = useState(support ?? "");
-  const selectedTemplate = compatibleTemplates.find((template) => template.id === runtimeTemplateId) ?? baseline;
-  const diffusion = support === "diffusiongemma-transformers" || support === "diffusiongemma-modeldeck-q4";
-  const speech = support === "moshiko-speech";
-  const [profileName, setProfileName] = useState(() => suggestedProfileName(model.model_id));
-  const [alias, setAlias] = useState(() => suggestedAlias(model.model_id));
-  const [dtype, setDtype] = useState<LocalProfileRequest["dtype"]>(support === "autoregressive-transformers" ? "float16" : "bfloat16");
-  const [lifecycle, setLifecycle] = useState<LocalProfileRequest["lifecycle"]>(diffusion || support === "gpt-oss-llama-vulkan" || speech ? "exclusive" : "on-demand");
-  const [contextLength, setContextLength] = useState(support === "scenechat-gemma4" || support === "gpt-oss-llama-vulkan" ? 8192 : 2048);
-  const [maximumNewTokens, setMaximumNewTokens] = useState(support === "autoregressive-transformers" ? 128 : support === "scenechat-gemma4" ? 512 : 256);
-  const [maximumDenoisingSteps, setMaximumDenoisingSteps] = useState(24);
-  const artifact = (model.artifacts ?? [])[0];
-  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, profile_name: profileName, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps, runtime_template_id: runtimeTemplateId, ...(artifact ? { artifact_id: artifact.artifact_id } : {}) }); }}>
-    <div className="runtime-form-heading"><div><strong>Configure {selectedTemplate?.display_name ?? "trusted runtime"}</strong><small>The trusted template selects a reviewed launch implementation; commands, paths and environment remain non-editable.</small></div></div>
-    <div className="runtime-fields">
-      <label>Trusted runtime template<select value={runtimeTemplateId} onChange={(event) => setRuntimeTemplateId(event.target.value)}>{compatibleTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name} · {template.package_display_name} {template.package_version}</option>)}</select></label>
-      <label>Configuration name<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
-      <label>Gateway alias<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={alias} onChange={(event) => setAlias(event.target.value)} /></label>
-      <label>Data type<select disabled={support === "diffusiongemma-modeldeck-q4"} value={dtype} onChange={(event) => setDtype(event.target.value as LocalProfileRequest["dtype"])}><option value="float16">float16</option><option value="bfloat16">bfloat16</option></select></label>
-      <label>Lifecycle<select disabled={diffusion} value={lifecycle} onChange={(event) => setLifecycle(event.target.value as LocalProfileRequest["lifecycle"])}><option value="on-demand">On demand</option><option value="resident">Resident</option><option value="exclusive">Exclusive</option></select></label>
-      {!diffusion && !speech && <label>Context length<input type="number" min={256} max={32768} step={256} value={contextLength} onChange={(event) => setContextLength(event.currentTarget.valueAsNumber)} /></label>}
-      {!speech && <label>Maximum new tokens<input type="number" min={1} max={512} value={maximumNewTokens} onChange={(event) => setMaximumNewTokens(event.currentTarget.valueAsNumber)} /></label>}
-      {diffusion && <label>Maximum denoising steps<input type="number" min={1} max={48} value={maximumDenoisingSteps} onChange={(event) => setMaximumDenoisingSteps(event.currentTarget.valueAsNumber)} /></label>}
-    </div>
-    {artifact && <p className="manifest-note">Artefact: {artifact.format.toUpperCase()} · {artifact.filenames.length} pinned shards</p>}
-    <p className="manifest-note">Local files only · remote code disabled · fixed allowlisted worker · no download · hardware verification required before demo selection</p>
-    <div className="runtime-form-actions"><button type="submit" disabled={pending}>{pending ? "Configuring…" : "Save runtime configuration"}</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
-  </form>;
+function ModelsView({ models, templates, refresh }: { models: ModelEntry[]; templates: RuntimeTemplate[]; refresh: () => Promise<void> }) {
+  const [sort, setSort] = useState<ModelSort>("name-asc");
+  const [configuring, setConfiguring] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [runtime, setRuntime] = useState("");
+  const [artifact, setArtifact] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const sorted = useMemo(() => [...models].sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id)), [models, sort]);
+  const begin = (model: ModelEntry) => { setConfiguring(`${model.model_id}@${model.revision}`); setName(model.model_id.split("/").at(-1)?.replaceAll("-", " ") ?? "New Worker"); setRuntime(model.configuration_support ?? ""); setArtifact(model.artifacts?.[0]?.artifact_id ?? ""); setFeedback(null); };
+  const create = async (model: ModelEntry) => { await postJson("/api/workers", { name, model_id: model.model_id, revision: model.revision, dtype: "float16", lifecycle: "on-demand", context_length: 2048, maximum_new_tokens: 128, maximum_denoising_steps: 24, runtime_template_id: runtime || undefined, artifact_id: artifact || undefined }); setConfiguring(null); setFeedback(`Created Worker “${name}”.`); await refresh(); };
+  return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Create as many Workers as a Model needs.</p><div className="model-library-toolbar"><label>Sort models<select value={sort} onChange={(event) => setSort(event.target.value as ModelSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label></div></div>{feedback && <div className="configuration-feedback good">{feedback}</div>}
+    <section className="panel"><PanelHeading title="Discovered Models" detail={`${models.length} cached`} /><div className="model-list">{sorted.map((model) => { const key = `${model.model_id}@${model.revision}`; const baseline = templates.find((item) => item.id === model.configuration_support); const availableTemplates = templates.filter((item) => baseline && item.generation_family === baseline.generation_family && item.cache_setting === baseline.cache_setting && item.uses_base_model_identity === baseline.uses_base_model_identity); return <article className="model-row" key={key}><div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unclassified"} · {formatBytes(model.physical_size_bytes)} · {model.worker_count} Worker{model.worker_count === 1 ? "" : "s"}</p><div className="tag-list">{model.capability_hints.map((hint) => <span className="tag" key={hint}>{humanise(hint)}</span>)}</div></div><StateBadge state={model.runnable ? "recognised" : model.download_state} /></div><p className="model-stage">{model.runnable_reason}</p>{configuring !== key ? <div className="model-actions"><button disabled={!model.runnable || !model.modeldeck_allowed || !model.revision} onClick={() => begin(model)}>Create Worker</button></div> : <div className="runtime-form"><div className="runtime-form-heading"><strong>Create a Worker</strong><small>The trusted runtime determines the immutable execution identity.</small></div><div className="runtime-fields"><label>Worker name<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div><div className="runtime-form-actions"><button onClick={() => void create(model).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => setConfiguring(null)}>Cancel</button></div></div>}</article>; })}</div></section>
+  </div>;
 }
 
-function CompatibilityView({ tests }: { tests: CompatibilityTest[] }) {
-  return (
-    <div className="view-stack"><section className="panel table-panel"><PanelHeading title="Compatibility evidence" detail={`${tests.length} immutable records`} />
-      {tests.length ? <div className="evidence-list">{tests.map((test) => <details className="evidence-row" key={test.id}><summary><span><StateBadge state={test.result} /><strong>{String(test.evidence.model_id ?? "Unknown model")}</strong><small>{formatDate(test.tested_at)} · {String(test.evidence.runtime ?? "unknown runtime")}</small></span><code>{test.fingerprint.slice(0, 12)}</code></summary><dl className="evidence-grid">{Object.entries(test.evidence).filter(([key]) => !["result", "failure_class", "tested_at"].includes(key)).map(([key, value]) => <div key={key}><dt>{humanise(key)}</dt><dd>{formatEvidence(value)}</dd></div>)}</dl>{test.failure_class && <p className="inline-error">Failure class: {test.failure_class}</p>}</details>)}</div> : <p className="muted">No compatibility evidence has been recorded. A successful or failed smoke test will append a complete fingerprint.</p>}
-    </section></div>
-  );
+function AdvancedView({ hardware, telemetry, contracts, templates, compatibility, workers }: { hardware: HardwareProbe; telemetry: Telemetry; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[] }) {
+  return <div className="view-stack"><section className="panel"><PanelHeading title="Detected hardware" detail="Reported, never assumed" /><DefinitionList rows={[["Configured target", `${hardware.configured.gpu} (${hardware.configured.gpu_architecture})`], ["Detected Fedora", hardware.detected.fedora_release ?? "Not detected"], ["Kernel", hardware.detected.kernel], ["ROCm packages", hardware.detected.rocm_packages.join(", ") || "Not detected"], ["Available memory", formatBytes(telemetry.memory.available_bytes)]]} /></section>
+    <div className="two-column"><section className="panel"><PanelHeading title="Trusted protocol contracts" detail={`${contracts.length} code-owned`} /><ul className="status-list">{contracts.map((contract) => <li key={contract.id}><StatusDot state="good" /><span><strong>{contract.display_name}</strong><small>{contract.id} · {contract.surfaces.join(", ")}</small></span></li>)}</ul></section><section className="panel"><PanelHeading title="Trusted runtimes" detail={`${templates.length} installed`} /><ul className="status-list">{templates.map((template) => <li key={template.id}><StatusDot state="good" /><span><strong>{template.display_name}</strong><small>{template.id} · {template.package_version}</small></span></li>)}</ul></section></div>
+    <section className="panel"><PanelHeading title="Compatibility evidence" detail={`${compatibility.length} records`} /><div className="evidence-list">{compatibility.length ? compatibility.map((test) => <details className="evidence-row" key={test.id}><summary><span><StateBadge state={test.result} /><strong>{String(test.evidence.model_id ?? "Unknown Model")}</strong><small>{new Date(test.tested_at).toLocaleString()}</small></span><code>{test.fingerprint.slice(0, 12)}</code></summary><DefinitionList rows={Object.entries(test.evidence).slice(0, 16).map(([key, value]) => [humanise(key), String(value ?? "—")])} /></details>) : <p className="muted">Smoke-test a Worker to record evidence.</p>}</div></section>
+    <LogsPanel workers={workers} />
+  </div>;
 }
 
-function LogsView({ workers }: { workers: Worker[] }) {
+function LogsPanel({ workers }: { workers: Worker[] }) {
   const [workerId, setWorkerId] = useState(workers[0]?.id ?? "");
   const [logs, setLogs] = useState<WorkerLog[]>([]);
-  const [connected, setConnected] = useState(false);
-
-  useEffect(() => {
-    if (!workerId) return;
-    setLogs([]);
-    void getJson<{ logs: WorkerLog[] }>(`/api/workers/${encodeURIComponent(workerId)}/logs`).then((response) => setLogs(response.logs));
-    const source = new EventSource(`/api/workers/${encodeURIComponent(workerId)}/logs/stream`);
-    source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
-    source.addEventListener("log", (raw) => {
-      try {
-        const entry = JSON.parse((raw as MessageEvent).data) as WorkerLog;
-        setLogs((current) => [...current.slice(-499), entry]);
-      } catch {
-        setConnected(false);
-      }
-    });
-    return () => source.close();
-  }, [workerId]);
-
-  return (
-    <div className="view-stack"><section className="panel log-panel"><div className="log-toolbar"><div><label htmlFor="worker-log-select">Worker log</label><select id="worker-log-select" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.id}</option>)}</select></div><span className="stream-status"><StatusDot state={connected ? "good" : "warn"} />{connected ? "Live stream" : "Reconnecting"}</span></div>
-      <div className="log-view" role="log" aria-live="polite" aria-label={`Logs for ${workerId}`}>{logs.length ? logs.map((entry, index) => <div className={`log-entry ${entry.level}`} key={`${entry.timestamp}-${index}`}><time>{formatTime(entry.timestamp)}</time><span>{entry.level}</span><code>{entry.message}</code></div>) : <p>No log records for this worker session.</p>}</div><p className="privacy-note">Logs are bounded and credential-, prompt-, and generated-content-shaped fields are redacted by the management service.</p>
-    </section></div>
-  );
+  useEffect(() => { if (!workerId) return; getJson<{ logs: WorkerLog[] }>(`/api/workers/${workerId}/logs`).then((value) => setLogs(value.logs)).catch(() => setLogs([])); }, [workerId]);
+  return <section className="panel log-panel"><div className="log-toolbar"><div><label htmlFor="log-worker">Worker logs</label><select id="log-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></div></div><div className="log-view">{logs.length ? logs.map((log, index) => <div className={`log-entry ${log.level}`} key={`${log.timestamp}-${index}`}><time>{new Date(log.timestamp).toLocaleTimeString()}</time><span>{log.source}</span><code>{log.message}</code></div>) : <p>No logs for this Worker.</p>}</div></section>;
 }
 
-function Metric({ label, value, detail, compact = false }: { label: string; value: string; detail: string; compact?: boolean }) {
-  return <article className={compact ? "metric compact" : "metric"}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
-}
-
-function PanelHeading({ title, detail }: { title: string; detail: string }) {
-  return <div className="panel-heading"><h2>{title}</h2><span>{detail}</span></div>;
-}
-
-function DefinitionList({ rows, compact = false }: { rows: Array<[string, string]>; compact?: boolean }) {
-  return <dl className={compact ? "definition-list compact" : "definition-list"}>{rows.map(([term, value]) => <div key={term}><dt>{term}</dt><dd title={value}>{value}</dd></div>)}</dl>;
-}
-
-function Policy({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
-  return <div className="policy-row"><span>{label}</span><strong className={warning ? "warning-text" : ""}>{value}</strong></div>;
-}
-
-function StatusDot({ state }: { state: "good" | "warn" | "bad" | "neutral" }) {
-  return <span className={`status-dot ${state}`} aria-hidden="true" />;
-}
-
-function StateBadge({ state }: { state: string }) {
-  return <span className={`state-badge state-${state}`}>{humanise(state)}</span>;
-}
-
-function compatibilityFor(worker: Worker, profile: Profile | undefined, tests: CompatibilityTest[], model: ModelEntry | undefined): { label: string; tone: "good" | "warn" | "bad" | "neutral" } {
-  const latest = tests.find((test) => test.evidence.model_id === worker.model_id && (!profile || test.evidence.model_revision === profile.revision) && test.evidence.runtime === worker.runtime);
-  if (latest?.result === "tested-working") return { label: "Tested working for recorded fingerprint", tone: "good" };
-  if (latest) return { label: `${humanise(latest.result)} evidence recorded`, tone: "bad" };
-  if (model?.download_state === "partial") return { label: "Partial cache; not runnable", tone: "bad" };
-  if (model) return { label: "Installed, compatibility untested", tone: "warn" };
-  if (worker.runtime === "mock") return { label: "Mock lifecycle fallback", tone: "neutral" };
-  return { label: "Pinned model snapshot not discovered", tone: "bad" };
-}
-
-function sortWorkers(workers: Worker[], sort: WorkerSort): Worker[] {
-  const byName = (left: Worker, right: Worker) => left.id.localeCompare(right.id, "en-AU", { sensitivity: "base" });
-  const stateOrder = ["busy", "ready", "warming", "loading", "starting", "validating", "degraded", "stopping", "failed", "incompatible", "orphaned", "stopped", "discovered"];
-  return [...workers].sort((left, right) => {
-    if (sort === "name-desc") return -byName(left, right);
-    if (sort === "model-asc") return left.model_id.localeCompare(right.model_id, "en-AU", { sensitivity: "base" }) || byName(left, right);
-    if (sort === "runtime-asc") return left.runtime.localeCompare(right.runtime, "en-AU", { sensitivity: "base" }) || byName(left, right);
-    if (sort === "state") return stateOrder.indexOf(left.state) - stateOrder.indexOf(right.state) || byName(left, right);
-    return byName(left, right);
-  });
-}
-
-function groupWorkers(workers: Worker[], grouping: WorkerGrouping): Array<{ title: string; description: string; workers: Worker[] }> {
-  if (grouping === "none") return workers.length ? [{ title: "All workers", description: "Every worker registered by the management API.", workers }] : [];
-  const grouped = new Map<string, Worker[]>();
-  for (const worker of workers) {
-    const key = grouping === "family" ? worker.generation_family : grouping === "runtime" ? worker.runtime : worker.lifecycle;
-    grouped.set(key, [...(grouped.get(key) ?? []), worker]);
-  }
-  return [...grouped.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, "en-AU", { sensitivity: "base" }))
-    .map(([key, members]) => ({
-      title: `${humanise(key)} ${grouping === "family" ? "workers" : grouping}`,
-      description: `${humanise(grouping)}: ${humanise(key)}. Cards are supplied by the management worker registry.`,
-      workers: members,
-    }));
-}
-
-function confirmOperation(worker: Worker, operation: WorkerOperation, workers: Worker[]): boolean {
-  if (operation === "start" && worker.lifecycle === "exclusive") {
-    const active = workers.find((candidate) => candidate.id !== worker.id && candidate.lifecycle === "exclusive" && !["stopped", "failed", "incompatible"].includes(candidate.state));
-    if (active) return window.confirm(`Starting ${worker.id} will stop exclusive worker ${active.id}. Continue?`);
-  }
-  if (operation === "stop") return window.confirm(`Stop ${worker.id} and release its runtime memory?`);
-  if (operation === "restart") return window.confirm(`Restart ${worker.id}? In-flight work will end.`);
-  return true;
-}
-
-function capabilityLabels(capabilities: Worker["capabilities"]): string[] {
-  const labels: string[] = [];
-  if (capabilities.chat) labels.push("Chat");
-  if (capabilities.completions) labels.push("Completions");
-  if (capabilities.streaming) labels.push("Streaming");
-  if (capabilities.cancellation) labels.push("Cancellation");
-  if (capabilities.top_k_trace) labels.push("Top-k trace");
-  if (capabilities.iterative_refinement) labels.push("Iterative refinement");
-  if (capabilities.intermediate_frames) labels.push("Intermediate frames");
-  if (capabilities.seeded_generation) labels.push("Seeded generation");
-  if (capabilities.image_input) labels.push("Image input");
-  if (capabilities.structured_output) labels.push("Structured output");
-  if (capabilities.audio_input) labels.push("Audio input");
-  if (capabilities.audio_output) labels.push("Audio output");
-  if (capabilities.full_duplex) labels.push("Full duplex");
-  return labels;
-}
-
-function modelLibraryDetails(model: ModelEntry, profiles: Profile[], tests: CompatibilityTest[]) {
-  const matchingProfiles = profiles.filter((profile) =>
-    (profile.artifact_model_id ?? profile.model_id) === model.model_id &&
-    (profile.artifact_revision ?? profile.revision) === model.revision
-  );
-  const latest = tests.find((test) => matchingProfiles.some((profile) =>
-    test.evidence.model_id === profile.model_id &&
-    test.evidence.model_revision === profile.revision &&
-    profile.preferred_runtime === test.evidence.runtime
-  ));
-  const state = !model.modeldeck_allowed
-    ? "disallowed"
-    : model.download_state === "partial"
-      ? "partial"
-      : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
-  return { matchingProfiles, latest, state };
-}
-
-function modelReadinessRank(state: string): number {
-  if (state === "tested-working") return 0;
-  if (state === "runtime-configured") return 1;
-  if (state === "recognised") return 2;
-  if (!["unsupported", "partial", "disallowed"].includes(state)) return 3;
-  if (state === "unsupported") return 4;
-  if (state === "partial") return 5;
-  return 6;
-}
-
-function compatibilityRank(details: ReturnType<typeof modelLibraryDetails>): number {
-  if (details.latest?.result === "tested-working") return 0;
-  if (details.latest) return 1;
-  if (details.matchingProfiles.length) return 2;
-  return 3;
-}
-
-function modelFamilyLabel(model: ModelEntry): string {
-  return model.generation_family_hint ?? "\uffffUnknown";
-}
-
-function modelCapabilitySummary(model: ModelEntry): string {
-  if (model.generation_family_hint === "vision-language") return "Multimodal generative model";
-  if (model.generation_family_hint === "autoregressive") return "Text generative model";
-  if (model.generation_family_hint === "text-diffusion") return "Text diffusion model";
-  if (model.generation_family_hint === "speech-conversation") return "Speech conversation model";
-  return "Model capabilities not classified";
-}
-
-function shortModelName(modelId: string): string { return modelId.split("/").at(-1) ?? modelId; }
-function suggestedAlias(modelId: string): string {
-  if (modelId === "ggml-org/gpt-oss-120b-GGUF") return "repartee-strong";
-  if (modelId === "kyutai/moshiko-pytorch-bf16") return "repartee-speech";
-  const candidate = shortModelName(modelId).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
-  return /^[a-z][a-z0-9-]+$/.test(candidate) ? candidate : "local-model";
-}
-function suggestedProfileName(modelId: string): string {
-  if (modelId === "google/gemma-4-12B-it") return "scenechat-gemma-4-12b";
-  if (modelId === "ggml-org/gpt-oss-120b-GGUF") return "repartee-gpt-oss-120b";
-  if (modelId === "kyutai/moshiko-pytorch-bf16") return "repartee-moshiko";
-  return suggestedAlias(modelId);
-}
-function modelStageDescription(state: string): string {
-  if (state === "disallowed") return "Cached files are retained, but this revision is excluded from ModelDeck workers and gateway routes.";
-  if (state === "partial") return "Download is incomplete. Finish or repair it in HuggingFacePull before configuring a runtime.";
-  if (state === "recognised") return "Snapshot recognised. Configure a constrained local runtime to make it available to ModelDeck.";
-  if (state === "runtime-configured") return "Runtime configured. Start the worker and run a smoke test to record compatibility evidence.";
-  if (state === "unsupported") return "Snapshot recognised, but it does not match an allowlisted ModelDeck worker implementation.";
-  if (state === "tested-working") return "Tested working for the recorded hardware, runtime and model fingerprint.";
-  return `${humanise(state)} compatibility evidence is recorded for this snapshot.`;
-}
-function cacheSnapshotLabel(model: ModelEntry | undefined): string { return model ? model.download_state === "partial" ? "Partial" : "Installed" : "Not discovered"; }
-function messageFrom(reason: unknown): string { return reason instanceof Error ? reason.message : "Unexpected local error."; }
-function humanise(value: string): string { return value.replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
-function formatBytes(bytes: number): string { if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** power).toFixed(power > 2 ? 1 : 0)} ${units[power]}`; }
-function formatDate(value: string): string { return new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
-function formatTime(value: string): string { return new Intl.DateTimeFormat("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value)); }
-function formatEvidence(value: unknown): string { return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? "Not recorded"); }
+function Loading() { return <main className="loading-screen"><div className="brand-mark">MD</div><h1>Starting operator console</h1><p>Reading local Events, Routes, Workers and Models…</p><div className="loading-bar"><span /></div></main>; }
+function Unavailable({ retry }: { retry: () => Promise<void> }) { return <section className="empty-state"><span className="empty-icon">!</span><h2>Management data is unavailable</h2><p>No cloud service was contacted.</p><button onClick={() => void retry()}>Retry local connection</button></section>; }
+function PanelHeading({ title, detail }: { title: string; detail: string }) { return <div className="panel-heading"><h2>{title}</h2><span>{detail}</span></div>; }
+function StatusDot({ state }: { state: "good" | "warn" | "bad" | "neutral" }) { return <span className={`status-dot ${state}`} aria-hidden="true" />; }
+function StateBadge({ state }: { state: string }) { return <span className={`state-badge state-${state}`}>{humanise(state)}</span>; }
+function DefinitionList({ rows }: { rows: Array<[string, string]> }) { return <dl className="definition-list compact">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>; }
+function formatBytes(value: number) { if (!Number.isFinite(value) || value <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`; }
+function humanise(value: string) { return value.replaceAll("_", " ").replaceAll("-", " "); }
+function messageFrom(reason: unknown) { return reason instanceof Error ? reason.message : "The operation failed."; }

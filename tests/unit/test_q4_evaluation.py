@@ -34,11 +34,15 @@ def test_q4_evaluation_constraint_checks_are_accent_insensitive() -> None:
     assert result["required_group_results"] == [True, True]
 
 
-def test_q4_evaluation_uses_default_q4_and_explicit_bf16_aliases() -> None:
+def test_q4_evaluation_resolves_editable_worker_names() -> None:
     evaluator = load_evaluator()
+    workers = [
+        {"id": "worker-q4", "name": "Quality Q4"},
+        {"id": "worker-bf16", "name": "Quality BF16"},
+    ]
 
-    assert evaluator.Q4_ALIAS == "text-diffusion"
-    assert evaluator.BF16_ALIAS == "text-diffusion-bf16"
+    assert evaluator.resolve_worker(workers, "Quality Q4")["id"] == "worker-q4"
+    assert evaluator.resolve_worker(workers, "worker-bf16")["name"] == "Quality BF16"
 
 
 def test_q4_evaluation_creative_constraint_accepts_rain_synonyms() -> None:
@@ -168,13 +172,15 @@ def test_q4_evaluation_restores_worker_after_stopping_exclusive_workers(monkeypa
         object(),
         management_url="http://management",
         leave_worker="q4",
+        q4_worker_id="worker-q4",
+        bf16_worker_id="worker-bf16",
         retry_seconds=0,
     )
 
     assert calls == [
-        ("stop", evaluator.Q4_WORKER),
-        ("stop", evaluator.BF16_WORKER),
-        ("start", evaluator.Q4_WORKER),
+        ("stop", "worker-q4"),
+        ("stop", "worker-bf16"),
+        ("start", "worker-q4"),
     ]
 
 
@@ -201,6 +207,8 @@ def test_q4_evaluation_retries_worker_restoration(monkeypatch) -> None:
         object(),
         management_url="http://management",
         leave_worker="q4",
+        q4_worker_id="worker-q4",
+        bf16_worker_id="worker-bf16",
         retry_seconds=0,
     )
 

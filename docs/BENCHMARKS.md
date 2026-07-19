@@ -6,56 +6,47 @@ does not replace compatibility smoke tests or workload-specific quality evaluati
 
 ## Run the suite
 
-Run the standard suite across every physical ROCm profile:
+Run the standard suite across every configured non-mock Worker that has exactly one
+published Route:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1
 ```
 
 Use the quick preset to validate the benchmark setup with two measured requests per
-profile:
+Worker:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1 -Preset Quick
 ```
 
-Select one or more profiles when a full run is unnecessary:
+Select one or more Workers by editable name or UUID when a full run is unnecessary:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1 -Preset Standard `
-    -Models qwen-small-rocm,qwen-1-5b-rocm,qwen-3b-rocm
+    -Workers 'Small Qwen','Medium Qwen','Large Qwen'
 ```
 
-The allowlisted physical profiles are:
-
-- `qwen-small-rocm`, `qwen-1-5b-rocm`, and `qwen-3b-rocm`;
-- `diffusiongemma-q4-rocm` and `diffusiongemma-rocm`;
-- `scenechat-gemma4-e2b-rocm`.
-
-The configured `local-repartee-gpt-oss-120b` profile is also accepted when the pinned
-llama.cpp Vulkan runtime and complete MXFP4 artefact are present. It is deliberately not
-part of the default model list because Repartee profiles are user-configured rather than
-built in. Its workload allows up to 256 generated tokens so GPT-OSS can complete its
-internal reasoning and still return visible output; throughput includes every generated
-token reported by llama.cpp. Run it explicitly:
+Workers created with the autoregressive Transformers, llama.cpp Vulkan, text-diffusion,
+DiffusionGemma Q4 and SceneChat runtimes are accepted. The GPT-OSS workload allows up to
+256 generated tokens so it can complete internal reasoning and still return visible
+output; throughput includes every generated token reported by llama.cpp. Run it by its
+chosen Worker name:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1 `
-    -Models local-repartee-gpt-oss-120b
+    -Workers 'GPT OSS Vulkan'
 ```
 
-The benchmark suite selects its fixed physical profile IDs directly; it does not follow
-the current `scenechat-vision` provider selection. In this phase its vision workload still
-measures `scenechat-gemma4-e2b-rocm`. A configured 26B profile requires a separate physical
-acceptance run until it is explicitly added to the benchmark suite. Benchmarking never
-promotes a provider or alters the persisted selection.
+The suite resolves the selected Worker and its one published public Route before it starts.
+It never changes Event routing or Worker configuration.
 
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
 
 ## Workloads and measurements
 
-Each profile receives one excluded benchmark warm-up followed by two measured requests
+Each Worker receives one excluded benchmark warm-up followed by two measured requests
 for `Quick` or five for `Standard`. Both presets use the same representative workload so
 their measurements remain comparable:
 
@@ -76,15 +67,15 @@ families must not be treated as a common leaderboard.
 
 ## Lifecycle and privacy
 
-Benchmarking is deliberately disruptive. It refuses to start while any managed worker is
+Benchmarking is deliberately disruptive. It refuses to start while any managed Worker is
 busy or transitioning, records which workers are initially ready, stops all managed
-workers, and benchmarks one physical profile at a time. It restores the original ready
-workers after success, failure, or interruption. If the wrapper started ModelDeck, it
+Workers, and benchmarks one physical Worker at a time. It restores the original ready
+Workers after success, failure, or interruption. If the wrapper started ModelDeck, it
 stops the services when the run ends.
 
-The gateway provider header is checked for every benchmark request. A mock fallback is a
-benchmark failure and is never reported as physical ROCm performance. Missing snapshots,
-worker failures, request failures, and unsuccessful lifecycle restoration produce a
+The selected Worker must be physical; a mock Worker is rejected rather than reported as
+physical performance. Missing snapshots, Worker failures, request failures, and
+unsuccessful lifecycle restoration produce a
 non-zero exit after the available report is written. Performance values themselves are
 observational and have no regression thresholds in this version.
 

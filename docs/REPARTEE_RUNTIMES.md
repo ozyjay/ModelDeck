@@ -51,7 +51,6 @@ session is allowed, the voice is fixed to Moshiko, and raw audio is never persis
 
 ## Verification gate
 
-Creating either runtime configuration does not select it for a demo. Start and smoke-test the
-worker, complete lifecycle evidence, then select the compatible profile for its reserved alias.
-The gateway filters profiles marked `hardware_verification_required` until a matching
-`tested-working` fingerprint exists for the exact model revision and runtime.
+Creating either Worker does not publish it for a Demo. Start and smoke-test the Worker,
+then assign it to a compatible Route in an Event. An Event using the tested-working policy
+will not publish until matching evidence exists for the exact Model revision and runtime.

@@ -1,8 +1,11 @@
 param(
-    [int]$MaximumTokens = 128
+    [int]$MaximumTokens = 128,
+    [string]$Worker,
+    [string]$RouteName
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
+Import-Module (Join-Path $PSScriptRoot 'modeldeck_helpers.psm1') -Force
 if (-not (Test-Path '.venv-rocm72/bin/python')) {
     throw 'Run pwsh -NoProfile -File scripts/setup.ps1 first.'
 }
@@ -13,20 +16,23 @@ $WorkerStopped = $false
 $StreamJob = $null
 try {
     try {
-        $Profiles = Invoke-RestMethod -Uri "$ManagementUrl/api/profiles" -TimeoutSec 2
-        if ('qwen-small-rocm' -notin @($Profiles.id)) { throw 'Stale management service.' }
+        Invoke-RestMethod -Uri "$ManagementUrl/api/health" -TimeoutSec 2 | Out-Null
     } catch {
         & (Join-Path $PSScriptRoot 'stop.ps1')
         & (Join-Path $PSScriptRoot 'run.ps1')
         $StartedServices = $true
         Start-Sleep -Seconds 1
     }
-    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/start" -TimeoutSec 360 |
+    $SelectedWorker = Resolve-ModelDeckWorker -ManagementUrl $ManagementUrl -Worker $Worker `
+        -ModelId 'Qwen/Qwen2.5-0.5B-Instruct' -Runtime 'transformers-rocm'
+    $Route = Resolve-ModelDeckRoute -ManagementUrl $ManagementUrl -WorkerId $SelectedWorker.id `
+        -PublicName $RouteName
+    Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/start" -TimeoutSec 360 |
         Out-Null
     $RequestId = [guid]::NewGuid().ToString()
     $Body = @{
         request_id = $RequestId
-        model = 'token-explainer'
+        model = $Route.public_name
         prompt = 'Continue producing short numbered test tokens until the request is cancelled.'
         stream = $true
         max_tokens = $MaximumTokens
@@ -54,16 +60,17 @@ try {
     if ($Response.Content -notmatch 'event: cancelled') {
         throw 'The stream did not report cancellation.'
     }
-    Write-Host "Cancellation passed for request $RequestId via $($Cancelled.providers -join ', ')."
-    $Stopped = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/stop" -TimeoutSec 30
+    Write-Host "Cancellation passed for request $RequestId via $($Cancelled.workers -join ', ')."
+    $Stopped = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 30
     if ($Stopped.state -ne 'stopped') { throw 'Worker did not stop after cancellation smoke.' }
     $WorkerStopped = $true
 } finally {
     if ($StreamJob) { Stop-Job $StreamJob -ErrorAction SilentlyContinue; Remove-Job $StreamJob -Force }
     if (-not $WorkerStopped) {
         try {
-            Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/qwen-small-rocm/stop" -TimeoutSec 30 |
+            if ($SelectedWorker) { Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers/$($SelectedWorker.id)/stop" -TimeoutSec 30 |
                 Out-Null
+            }
         } catch { Write-Warning "Could not request worker shutdown: $_" }
     }
     if ($StartedServices) { & (Join-Path $PSScriptRoot 'stop.ps1') }

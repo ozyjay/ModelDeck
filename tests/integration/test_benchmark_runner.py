@@ -21,7 +21,7 @@ def load_benchmark_module():
 benchmark = load_benchmark_module()
 
 
-def test_autoregressive_profile_runs_through_mocked_management_worker_and_gateway() -> None:
+def test_autoregressive_worker_runs_through_mocked_management_and_gateway() -> None:
     requests = {"start": 0, "stop": 0, "trace": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -84,7 +84,6 @@ def test_autoregressive_profile_runs_through_mocked_management_worker_and_gatewa
             assert payload["min_tokens"] == payload["max_tokens"] == 64
             return httpx.Response(
                 200,
-                headers={"x-modeldeck-provider": "qwen-small-rocm"},
                 json={
                     "prompt_token_ids": [1, 2],
                     "events": [{"text_so_far": "private generated output"}],
@@ -100,11 +99,12 @@ def test_autoregressive_profile_runs_through_mocked_management_worker_and_gatewa
 
     profile = {
         "id": "qwen-small-rocm",
-        "alias": "qwen-0-5b",
+        "name": "Small Qwen",
+        "gateway_model": "qwen-0-5b",
         "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
         "revision": "commit",
         "generation_family": "autoregressive",
-        "preferred_runtime": "transformers-rocm",
+        "runtime": "transformers-rocm",
         "dtype": "float16",
     }
     hardware = {

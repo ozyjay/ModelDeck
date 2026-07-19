@@ -1,9 +1,18 @@
 # ModelDeck
 
-ModelDeck is a local management service for isolated model workers on the Framework
-Desktop. It provides evidence-based cache discovery, hardware diagnostics, explicit
-worker lifecycle states, isolated ROCm autoregressive and text-diffusion workers, useful
-mock/replay fallbacks, and a stable local gateway.
+ModelDeck is a local runtime manager and stable capability gateway for the Framework
+Desktop. Its operator model has four concepts:
+
+- a **Model** is a read-only, pinned snapshot discovered in the local cache;
+- a **Worker** is one operator-created, startable runtime configuration for a Model;
+- a **Route** is a public model name and protocol contract with one primary Worker and
+  ordered backups; and
+- an **Event** is the versioned set of Demos and shared Routes needed for an occasion.
+
+Publishing an Event changes gateway routing atomically. It does not start Workers. Worker
+names, Event names, Demo names, Route display names and public Route names are editable;
+internal UUIDs and trusted execution definitions are deliberately not presented as
+operator-facing names. ModelDeck starts with no configured Workers, Events or Routes.
 
 ROCm workers are core ModelDeck functionality for the target Framework Desktop. They load
 only when explicitly started and never download weights. The management plane, gateway,
@@ -33,8 +42,8 @@ ModelDeck deliberately uses three environments with different responsibilities:
   mock/replay fallbacks, and development tests.
 - `.venv-rocm72` is the primary inference runtime: the pinned ROCm, PyTorch, and
   Transformers stack for Qwen and the DiffusionGemma BF16 baseline.
-- `.venv-rocm72-q4` is the isolated inference runtime for the default Q4 DiffusionGemma
-  provider and its GPTQ dependencies.
+- `.venv-rocm72-q4` is the isolated inference runtime for DiffusionGemma Q4 and its GPTQ
+  dependencies.
 
 All three are part of the target installation. Keeping model libraries outside the control
 plane preserves dependency isolation and makes worker process exit the memory-recovery
@@ -44,68 +53,72 @@ boundary.
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
-The **Demo routes** view defines the applications expected for an event, their stable
-gateway contracts, and the ordered deployments that may serve them. Drafts are saved as
-new revisions, then validated, planned, and explicitly activated. Activation updates
-routing atomically but does not start large workers; use the Workers view to control
-process lifecycle. Open Day mode locks configuration changes server-side.
-Each route card can check the live gateway alias and run a small contract smoke test once
-its active provider is ready. Revision history supports restoring old content as a new
-draft or atomically reactivating an exact historical routing snapshot.
+Use **Models** to create a Worker from a recognised cached revision. Use **Events** to
+define shared Routes, assign the primary and ordered backup Workers, group Routes into
+Demos, validate the draft and publish it. Use **Workers** for lifecycle control and real
+generation smoke tests. Use **Live** to see only the published routing snapshot and
+rehearse a Route end-to-end through the gateway. Open Day mode locks configuration
+changes server-side while leaving explicit Worker lifecycle controls available.
 
-See [Sharing model deployments across demos](docs/DEMO_ROUTE_HOWTO.md) for the complete
-operator workflow, including provider ordering, activation, route rehearsal, reassignment
-and safe runtime-configuration removal.
+Event edits autosave to a mutable draft. Publishing creates an immutable revision;
+historical revisions can be made live again without reconstructing them. An Event can
+require merely protocol-compatible Workers or matching tested-working evidence. A Worker
+smoke test records successful or failed generation evidence against the detected hardware,
+runtime, library and pinned Model fingerprint.
+
+Existing v1 databases are not interpreted as v2 configuration. Back up and replace only
+the configuration database with:
+
+```powershell
+pwsh -NoProfile -File scripts/cutover_v2.ps1
+```
+
+The cut-over script stops ModelDeck, moves the exact SQLite database files under
+`var/backups/`, and creates an empty v2 database. Model caches, logs, benchmark reports and
+trusted runtime manifests are preserved. Use `-WhatIf` to inspect the file operations.
 
 For lightweight development or CI on a machine without the target GPU, run
 `pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
 fallbacks remain usable, but that mode is not a complete target deployment.
 
-Start the selected ROCm worker from the dashboard or through the management API:
+After creating a Worker in the Models view, it can also be started through the API using
+its internal UUID:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/qwen-small-rocm/start `
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/<worker-uuid>/start `
     -TimeoutSec 360
 ```
 
-The installed Qwen workers are `qwen-small-rocm` for 0.5B, `qwen-1-5b-rocm` for 1.5B,
-and `qwen-3b-rocm` for 3B. They use fixed ports 8620, 8623, and 8624 respectively and
-remain stopped until explicitly selected.
-
-The Model library can also turn a recognised, complete Hugging Face snapshot into a local
-ROCm worker configuration when its architecture matches an allowlisted worker. Supported
+The Model library turns a recognised, complete Hugging Face snapshot into a local Worker
+when its architecture matches an installed trusted runtime. Supported
 paths are causal-language-model Transformers, SceneChat Gemma 4, DiffusionGemma block
 diffusion, and self-contained ModelDeck DiffusionGemma Q4 format 2 releases. Q4 releases
 must retain their manifests, quality evidence, complete file inventory, and checksums;
-generic GPTQ repositories are not accepted. Choose **Configure runtime**, assign a
-gateway alias, and select the bounded dtype, lifecycle, context, and output settings.
-ModelDeck derives the model, revision, cache root, runtime, port, capabilities, and safe
-launch manifest itself. The configuration persists in ModelDeck's local SQLite store;
-removing it never removes the cached model. Unsupported architectures remain visible with
-the specific reason that configuration is unavailable.
+generic GPTQ repositories are not accepted. ModelDeck derives the cache root, port,
+capabilities and safe launch argument array. Archiving a Worker never removes the cached
+Model. Unsupported architectures remain visible with the reason Worker creation is
+unavailable.
 
-Reviewed runtime presets can be added as versioned
+Reviewed runtime templates can be added as versioned
 [trusted runtime manifests](docs/TRUSTED_RUNTIME_MANIFESTS.md). Installation requires an
 explicit local SHA-256 trust step and cannot be performed from the browser; manifests may
 select a registered launch implementation but cannot define commands, paths or environment
 variables.
 
 Each complete cached revision can also be **Disallowed in ModelDeck** without deleting it
-from the Hugging Face cache. Disallowing a stopped model removes its cache-backed workers
-and gateway routes while retaining its persisted deployment configuration. Re-allowing
-the revision restores those workers. The seeded Q4 checkpoint is independent
-of this HF-cache policy. A Q4 runtime configured from a downloaded Hugging Face release
-follows the policy of that derivative repository and revision, separately from its
-upstream Google base model.
+from the Hugging Face cache. A revision cannot be disallowed while it has configured
+Workers. A Q4 runtime configured from a downloaded Hugging Face release follows the policy
+of that derivative repository and revision separately from its upstream base Model.
 
-Benchmark all physical ROCm profiles with a repeatable representative workload:
+Benchmark all configured physical Workers that have exactly one published Route:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1
 ```
 
-Use `-Preset Quick` or `-Models qwen-small-rocm,qwen-1-5b-rocm` for a shorter run. The
-suite benchmarks one worker at a time, restores the initial worker state, and writes
+Use `-Preset Quick` or `-Workers 'Qwen small','Qwen medium'` for a shorter run. Worker
+selectors may be editable names or UUIDs. The suite benchmarks one Worker at a time,
+restores the initial Worker state, and writes
 timestamped JSON and Markdown reports under `var/benchmarks/`. See
 [ROCm model benchmarks](docs/BENCHMARKS.md) for workload definitions, privacy guarantees,
 and report interpretation.
@@ -163,30 +176,26 @@ Run the setup script initially and again when either environment's requirements 
 Compatible real GPU workers should share `.venv-rocm72`; add another GPU environment only when recorded
 compatibility evidence demonstrates a dependency conflict.
 
-The Qwen 0.5B, SceneChat Gemma 4 E2B, BF16 DiffusionGemma baseline, and self-contained Q4
-DiffusionGemma paths are compatibility-tested on the target Framework Desktop. Gemma 4
-E2B and Q4 DiffusionGemma also passed simultaneous residency with a structured image
-completion. The Qwen 1.5B and 3B workers are
-registered against complete pinned local snapshots but require their own physical ROCm
-acceptance evidence. The BF16 and Qwen workers use `/mnt/work/models/huggingface/hub`;
-the self-contained Q4 worker reads only its packaged checkpoint. None of the smoke tests
-download model files.
+The setup scripts install the control-plane and trusted runtime dependencies; they do not
+create Worker instances or public Routes. Cached Models are discovered read-only after
+startup. Physical acceptance evidence belongs to the exact Worker fingerprint created on
+the target machine. None of the smoke tests download Model files.
 
 ## DiffusionGemma GPTQ Q4 variant
 
-The default `text-diffusion` provider directly loads a self-contained Q4/BF16 hybrid:
+The Q4 runtime directly loads a self-contained Q4/BF16 hybrid:
 the expert projections use GPTQ Q4 g32 and the packaged non-expert tensors remain BF16.
 It does not materialise BF16 experts or access the upstream model cache at runtime. The
-original model remains available explicitly as `text-diffusion-bf16` for compatibility
-and release evaluation.
+original Model can be configured as a separate BF16 Worker for compatibility and release
+evaluation. Their public Route names are chosen by the operator.
 
 ```powershell
-./scripts/start_diffusiongemma_q4.ps1 -Smoke
+./scripts/start_diffusiongemma_q4.ps1 -Worker 'DiffusionGemma Q4' `
+    -RouteName 'text-diffusion' -Smoke
 ```
 
-The default checkpoint directory is
-`/mnt/work/models/modeldeck/diffusiongemma-26b-a4b-it-gptq-q4-g32`. The worker runs on fixed port 8622,
-reports quantization and Q4 invocation metrics, and remains local-files-only.
+The selected Worker reports quantisation and Q4 invocation metrics and remains
+local-files-only.
 
 Upgrade an existing v1 expert-delta checkpoint to the self-contained v2 format without
 re-quantising its expert weights:
@@ -205,7 +214,9 @@ sequentially, verifies deterministic replay and repeated Q4 requests, then leave
 ready:
 
 ```powershell
-./scripts/evaluate_diffusiongemma_q4.ps1
+./scripts/evaluate_diffusiongemma_q4.ps1 `
+    -Q4Worker 'DiffusionGemma Q4' -Q4Route 'text-diffusion' `
+    -BF16Worker 'DiffusionGemma BF16' -BF16Route 'text-diffusion-bf16'
 ```
 
 The JSON report is written to `var/q4-quality-evaluation.json`. The default gates require

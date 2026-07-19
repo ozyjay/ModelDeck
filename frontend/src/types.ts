@@ -1,125 +1,73 @@
 export type WorkerState =
-  | "discovered"
-  | "stopped"
-  | "validating"
-  | "starting"
-  | "loading"
-  | "warming"
-  | "ready"
-  | "busy"
-  | "degraded"
-  | "stopping"
-  | "failed"
-  | "orphaned"
-  | "incompatible";
+  | "stopped" | "validating" | "starting" | "loading" | "warming" | "ready"
+  | "busy" | "degraded" | "stopping" | "failed" | "incompatible" | "archived";
 
-export interface Capabilities {
-  chat: boolean | "compatibility-only";
-  completions: boolean;
-  streaming: boolean;
-  cancellation: boolean;
-  logits: boolean | "model-specific";
-  top_k_trace: boolean;
-  hidden_states: boolean | "optional";
-  iterative_refinement: boolean;
-  intermediate_frames: boolean;
-  seeded_generation: boolean;
-  image_input: boolean;
-  structured_output: boolean;
-  audio_input: boolean;
-  audio_output: boolean;
-  full_duplex: boolean;
-}
+export interface Capabilities { [name: string]: boolean | string }
 
 export interface Worker {
   id: string;
+  name: string;
   state: WorkerState;
-  model_id: string;
-  generation_family: string;
-  runtime: string;
-  lifecycle: "resident" | "on-demand" | "exclusive";
-  alias: string;
-  endpoint: string;
-  port: number;
-  pid: number | null;
-  started_at: string | null;
-  last_error: string | null;
-  capabilities: Capabilities;
-}
-
-export interface Profile {
-  id: string;
   model_id: string;
   revision: string;
   artifact_model_id: string | null;
   artifact_revision: string | null;
-  alias: string;
   generation_family: string;
-  preferred_runtime: string;
+  runtime: string;
   runtime_template_id: string | null;
   runtime_template_version: string | null;
   lifecycle: "resident" | "on-demand" | "exclusive";
   port: number;
-  local_files_only: boolean;
-  trust_remote_code: boolean;
   dtype: string;
   capabilities: Capabilities;
   settings: Record<string, string | number | boolean>;
-  source: "seed" | "local";
-  modeldeck_allowed: boolean;
+  endpoint: string | null;
+  pid: number | null;
+  started_at: string | null;
+  last_error: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
 }
 
-export interface Deployment {
+export interface Demo { id: string; name: string; route_ids: string[] }
+export interface Route {
   id: string;
   display_name: string;
-  source: "seed" | "local";
-  model: {
-    model_id: string;
-    revision: string;
-    artifact_model_id: string | null;
-    artifact_revision: string | null;
-  };
-  runtime: string;
-  generation_family: string;
-  lifecycle: "resident" | "on-demand" | "exclusive";
-  capabilities: Capabilities;
-  allowed: boolean;
-  registered: boolean;
-  worker: Worker | null;
+  public_name: string;
+  protocol_contract: string;
+  worker_ids: string[];
+}
+export interface EventDefinition {
+  id: string;
+  name: string;
+  description: string;
+  qualification: "compatible" | "tested-working";
+  demos: Demo[];
+  routes: Route[];
+}
+export interface EventRecord {
+  definition: EventDefinition;
+  created_at: string;
+  updated_at: string;
+  active: boolean;
+  active_revision: number | null;
+  latest_revision: number | null;
+}
+export interface EventValidation {
+  valid: boolean;
+  errors: Array<{ route_id?: string; worker_id?: string; message: string }>;
+  warnings: Array<{ route_id?: string; demo_id?: string; message: string }>;
+}
+export interface EventRevision {
+  definition: EventDefinition;
+  revision: number;
+  published_at: string;
+  active: boolean;
 }
 
-export interface DeploymentUsage {
-  deployment_id: string;
-  source: "seed" | "local";
-  worker_state: WorkerState | "unregistered";
-  route_bindings: Array<{
-    demo_set_id: string;
-    demo_set_display_name: string;
-    revision: number;
-    route_id: string;
-    route_display_name: string;
-    public_model: string;
-    state: "active" | "draft";
-    priority: number;
-  }>;
-  legacy_aliases: Array<{
-    alias: string;
-    display_name: string;
-    selected_provider: string;
-    explicit_selection: boolean;
-    effective: boolean;
-  }>;
-  blocking_dependencies: Array<{
-    kind: "demo-route" | "legacy-alias" | "worker";
-    id: string;
-    label: string;
-    authority: string;
-    remediation: string;
-  }>;
-  removable: boolean;
-}
-
-export interface DemoAdapter {
+export interface ProtocolContract {
   id: string;
   display_name: string;
   generation_family: string;
@@ -127,92 +75,15 @@ export interface DemoAdapter {
   surfaces: string[];
 }
 
-export interface DemoApplication {
-  id: string;
-  display_name: string;
-}
-
-export interface DeploymentBinding {
-  deployment_id: string;
-  priority: number;
-}
-
-export interface DemoRouteContract {
-  id: string;
-  demo_id: string;
-  display_name: string;
-  adapter_id: string;
-  public_model: string;
-  qualification_policy: "registered" | "tested-working-recorded";
-  fallback_policy: "none" | "ordered" | "mock-visible" | "structured-unavailable";
-  providers: DeploymentBinding[];
-}
-
-export interface DemoSet {
-  id: string;
-  display_name: string;
-  description: string;
-  demos: DemoApplication[];
-  routes: DemoRouteContract[];
-  revision: number;
-  updated_at: string;
-  active: boolean;
-  active_revision: number | null;
-}
-
-export interface DemoSetValidation {
-  valid: boolean;
-  errors: Array<{ route_id?: string; deployment_id?: string; message: string }>;
-  warnings: Array<{ route_id?: string; message: string }>;
-}
-
-export interface DemoSetPlan {
-  desired_primary_deployments: string[];
-  start_required: string[];
-  stop_required: string[];
-  warnings: string[];
-  applies_process_changes: boolean;
-}
-
-export interface DemoRouteStatus {
-  demo_set_id: string;
-  revision: number;
-  route_id: string;
-  public_model: string;
-  adapter_id: string;
-  active: boolean;
-  gateway_available: boolean;
-  advertised: boolean;
+export interface LiveWorker { id: string; name: string; state: WorkerState }
+export interface LiveRoute extends Route {
+  workers: Worker[];
+  effective_worker: Worker | null;
   ready: boolean;
-  selected_provider: string | null;
-  effective_provider: string | null;
-  providers: Array<{ deployment_id: string; priority: number; worker_state: string }>;
-  smoke_supported: boolean;
-  smoke_unavailable_reason: string | null;
 }
-
-export interface DemoRouteSmokeResult {
-  ok: boolean;
-  route_id: string;
-  public_model: string;
-  adapter_id: string;
-  provider: string | null;
-  evidence: string;
-  duration_seconds: number;
-}
-
-export interface LocalProfileRequest {
-  model_id: string;
-  revision: string;
-  alias: string;
-  profile_name?: string;
-  dtype: "float16" | "bfloat16";
-  lifecycle: "resident" | "on-demand" | "exclusive";
-  context_length: number;
-  maximum_new_tokens: number;
-  maximum_denoising_steps: number;
-  artifact_id?: string;
-  runtime_template_id?: string;
+export interface LiveState {
+  active_event: { id: string; name: string; revision: number } | null;
+  routes: LiveRoute[];
 }
 
 export interface RuntimeTemplate {
@@ -230,13 +101,7 @@ export interface RuntimeTemplate {
   digest: string;
 }
 
-export interface ModelArtifact {
-  artifact_id: string;
-  kind: "gguf";
-  format: string;
-  filenames: string[];
-}
-
+export interface ModelArtifact { artifact_id: string; kind: "gguf"; format: string; filenames: string[] }
 export interface ModelEntry {
   model_id: string;
   revision: string | null;
@@ -253,80 +118,8 @@ export interface ModelEntry {
   base_model_revision: string | null;
   runnable: boolean;
   runnable_reason: string;
+  worker_count: number;
   artifacts?: ModelArtifact[];
-}
-
-export interface HardwareProbe {
-  configured: {
-    profile_id: string;
-    os: string;
-    gpu: string;
-    gpu_architecture: string;
-    rocm_family: string;
-    work_mount: string;
-  };
-  detected: {
-    fedora_release: string | null;
-    kernel: string;
-    python: string;
-    rocm_packages: string[];
-    gpu_device_nodes: Record<string, boolean>;
-    memory: MemoryReading;
-    swap: SwapReading;
-    filesystems: FilesystemReading[];
-    temperatures: TemperatureReading[];
-    fans: FanReading[];
-    active_model_processes: ProcessReading[];
-  };
-  diagnostic_note: string;
-}
-
-export interface MemoryReading {
-  total_bytes: number;
-  available_bytes: number;
-  percent: number;
-}
-
-export interface SwapReading {
-  total_bytes: number;
-  used_bytes: number;
-  percent: number;
-}
-
-export interface FilesystemReading {
-  path: string;
-  available: boolean;
-  total_bytes?: number;
-  used_bytes?: number;
-  free_bytes?: number;
-  percent?: number;
-}
-
-export interface TemperatureReading {
-  source: string;
-  label: string;
-  celsius: number;
-}
-
-export interface FanReading {
-  source: string;
-  label: string;
-  rpm: number;
-}
-
-export interface ProcessReading {
-  pid: number;
-  name: string | null;
-  command: string;
-}
-
-export interface Telemetry {
-  memory: MemoryReading;
-  swap: SwapReading;
-  filesystems: FilesystemReading[];
-  temperatures: TemperatureReading[];
-  fans: FanReading[];
-  active_model_processes: ProcessReading[];
 }
 
 export interface CompatibilityTest {
@@ -340,55 +133,46 @@ export interface CompatibilityTest {
 
 export interface GatewayStatus {
   available: boolean;
-  health: { status: string; ready_providers: number } | null;
-  models: { data: Array<{ id: string; ready: boolean; selected_provider: string | null; effective_provider: string | null }> } | null;
-  providers: { providers: Array<{ id: string; alias: string; ready: boolean }> } | null;
+  health: { status: string; ready_workers: number } | null;
+  models: { data: Array<{ id: string; ready: boolean }> } | null;
+  routes: { routes: Array<{ public_name: string; ready: boolean }> } | null;
   error: string | null;
-}
-
-export interface ProviderCandidate {
-  profile_id: string;
-  profile_alias: string;
-  model_id: string;
-  selected: boolean;
-  worker_state: WorkerState;
-  gateway_ready: boolean;
-}
-
-export interface ProviderSelection {
-  alias: string;
-  display_name: string;
-  default_provider: string | null;
-  explicit_selection: boolean;
-  selected_provider: string | null;
-  effective_provider: string | null;
-  gateway_ready: boolean;
-  routing_authority: "active-demo-set" | "legacy-selection";
-  superseded_by_active_demo_set: boolean;
-  active_demo_set_id: string | null;
-  active_demo_set_revision: number | null;
-  candidates: ProviderCandidate[];
 }
 
 export interface ManagementHealth {
   status: string;
   service: string;
+  schema_version: number;
   open_day: boolean;
   downloads_allowed: boolean;
   gateway_url: string;
 }
 
-export interface WorkerLog {
-  timestamp: string;
-  source: string;
-  level: "info" | "warning" | "error";
-  message: string;
-  session_id?: string;
+export interface MemoryReading { total_bytes: number; available_bytes: number; percent: number }
+export interface SwapReading { total_bytes: number; used_bytes: number; percent: number }
+export interface FilesystemReading {
+  path: string; available: boolean; total_bytes?: number; used_bytes?: number;
+  free_bytes?: number; percent?: number;
+}
+export interface TemperatureReading { source: string; label: string; celsius: number }
+export interface FanReading { source: string; label: string; rpm: number }
+export interface ProcessReading { pid: number; name: string | null; command: string }
+export interface Telemetry {
+  memory: MemoryReading; swap: SwapReading; filesystems: FilesystemReading[];
+  temperatures: TemperatureReading[]; fans: FanReading[]; active_model_processes: ProcessReading[];
+}
+export interface HardwareProbe {
+  configured: { profile_id: string; os: string; gpu: string; gpu_architecture: string; rocm_family: string; work_mount: string };
+  detected: {
+    fedora_release: string | null; kernel: string; python: string; rocm_packages: string[];
+    gpu_device_nodes: Record<string, boolean>; memory: MemoryReading; swap: SwapReading;
+    filesystems: FilesystemReading[]; temperatures: TemperatureReading[]; fans: FanReading[];
+    active_model_processes: ProcessReading[];
+  };
+  diagnostic_note: string;
 }
 
-export interface WorkerEvent {
-  worker_id: string;
-  state: WorkerState;
-  message: string;
-  timestamp: string;
+export interface WorkerLog {
+  timestamp: string; source: string; level: "info" | "warning" | "error";
+  message: string; session_id?: string;
 }
