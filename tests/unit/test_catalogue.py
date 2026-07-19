@@ -27,6 +27,7 @@ def test_discovers_complete_cache_without_claiming_compatibility(tmp_path: Path)
     assert models[0]["model_id"] == "Qwen/Demo"
     assert models[0]["download_state"] == "installed-untested"
     assert models[0]["generation_family_hint"] == "autoregressive"
+    assert models[0]["capability_hints"] == ["text-generation", "chat"]
     assert models[0]["configuration_support"] == "autoregressive-transformers"
     assert models[0]["runnable"] is False
 
@@ -66,6 +67,7 @@ def test_recognises_complete_moshiko_manifest(tmp_path: Path) -> None:
     model = discover_huggingface_models([tmp_path])[0]
 
     assert model["generation_family_hint"] == "speech-conversation"
+    assert model["capability_hints"] == ["audio-input", "audio-output", "full-duplex"]
     assert model["configuration_support"] == "moshiko-speech"
 
 
@@ -108,6 +110,12 @@ def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_pat
     model = discover_huggingface_models([tmp_path])[0]
 
     assert model["generation_family_hint"] == "vision-language"
+    assert model["capability_hints"] == [
+        "text-generation",
+        "chat",
+        "image-input",
+        "structured-output",
+    ]
     assert model["configuration_support"] == "scenechat-gemma4"
     assert model["runnable"] is False
 

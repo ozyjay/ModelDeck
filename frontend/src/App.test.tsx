@@ -112,6 +112,7 @@ const completeModel: ModelEntry = {
   physical_size_bytes: 999_604_710,
   download_state: "installed-untested",
   generation_family_hint: "autoregressive",
+  capability_hints: ["text-generation", "chat"],
   configuration_support: "autoregressive-transformers" as const,
   configuration_support_reason: "Supported by the local Transformers ROCm worker.",
   modeldeck_allowed: true,
@@ -129,6 +130,7 @@ const partialModel: ModelEntry = {
   physical_size_bytes: 40,
   download_state: "partial",
   generation_family_hint: null,
+  capability_hints: [],
   configuration_support: null,
   configuration_support_reason: "Finish the local snapshot before configuring a runtime.",
   snapshot_location: null,
@@ -623,20 +625,31 @@ describe("ModelDeck operator console", () => {
     expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
   });
 
-  it("sorts the model library by name or cache size", async () => {
+  it("sorts the model library by name, size, readiness, compatibility, configuration and family", async () => {
     catalogueModels = [
-      { ...completeModel, model_id: "Zeta/Medium", physical_size_bytes: 20 },
-      { ...completeModel, model_id: "Alpha/Small", physical_size_bytes: 10 },
-      { ...completeModel, model_id: "Middle/Large", physical_size_bytes: 30 },
+      { ...partialModel, model_id: "Zeta/Partial", physical_size_bytes: 20, generation_family_hint: "text-diffusion", capability_hints: ["text-generation", "iterative-refinement"] },
+      { ...completeModel, model_id: "Alpha/Unsupported", physical_size_bytes: 10, generation_family_hint: "vision-language", capability_hints: ["text-generation", "chat", "image-input"], configuration_support: null },
+      { ...completeModel, model_id: profile.model_id, physical_size_bytes: 30, generation_family_hint: "autoregressive" },
     ];
+    compatibilityTests = [{ id: 7, fingerprint: "b".repeat(64), result: "tested-working", failure_class: null, evidence: { model_id: profile.model_id, model_revision: profile.revision, runtime: profile.preferred_runtime }, tested_at: "2026-07-19T10:00:00Z" }];
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
 
     const modelNames = () => screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent);
-    expect(modelNames()).toEqual(["Alpha/Small", "Middle/Large", "Zeta/Medium"]);
+    expect(modelNames()).toEqual(["Alpha/Unsupported", profile.model_id, "Zeta/Partial"]);
 
     fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "size-desc" } });
-    expect(modelNames()).toEqual(["Middle/Large", "Zeta/Medium", "Alpha/Small"]);
+    expect(modelNames()).toEqual([profile.model_id, "Zeta/Partial", "Alpha/Unsupported"]);
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "readiness" } });
+    expect(modelNames()).toEqual([profile.model_id, "Alpha/Unsupported", "Zeta/Partial"]);
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "attention" } });
+    expect(modelNames()).toEqual(["Zeta/Partial", "Alpha/Unsupported", profile.model_id]);
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "compatibility" } });
+    expect(modelNames()[0]).toBe(profile.model_id);
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "configured-desc" } });
+    expect(modelNames()[0]).toBe(profile.model_id);
+    fireEvent.change(screen.getByLabelText("Sort models"), { target: { value: "family-asc" } });
+    expect(modelNames()).toEqual([profile.model_id, "Zeta/Partial", "Alpha/Unsupported"]);
   });
 
   it("configures and removes a constrained cache-backed runtime", async () => {
@@ -660,6 +673,7 @@ describe("ModelDeck operator console", () => {
         ...completeModel,
         model_id: "google/gemma-4-E2B-it",
         generation_family_hint: "vision-language",
+        capability_hints: ["text-generation", "chat", "image-input", "structured-output"],
         configuration_support: "scenechat-gemma4",
         configuration_support_reason: "Supported by the dedicated SceneChat Gemma 4 worker.",
       },
@@ -667,6 +681,7 @@ describe("ModelDeck operator console", () => {
         ...completeModel,
         model_id: "google/diffusiongemma-26B-A4B-it",
         generation_family_hint: "text-diffusion",
+        capability_hints: ["text-generation", "iterative-refinement", "intermediate-frames", "seeded-generation"],
         configuration_support: "diffusiongemma-transformers",
         configuration_support_reason: "Supported by the dedicated DiffusionGemma Transformers worker.",
       },
@@ -675,6 +690,7 @@ describe("ModelDeck operator console", () => {
         model_id: "ozyjay/diffusiongemma-modeldeck-q4",
         revision: "release-revision",
         generation_family_hint: "text-diffusion",
+        capability_hints: ["text-generation", "iterative-refinement", "intermediate-frames", "seeded-generation"],
         configuration_support: "diffusiongemma-modeldeck-q4",
         configuration_support_reason: "Supported by the dedicated ModelDeck DiffusionGemma Q4 runtime.",
         base_model_id: "google/diffusiongemma-26B-A4B-it",
@@ -687,6 +703,10 @@ describe("ModelDeck operator console", () => {
     const scenechatCard = screen.getByRole("heading", { name: "google/gemma-4-E2B-it" }).closest("article")!;
     const diffusionCard = screen.getByRole("heading", { name: "google/diffusiongemma-26B-A4B-it" }).closest("article")!;
     const q4Card = screen.getByRole("heading", { name: "ozyjay/diffusiongemma-modeldeck-q4" }).closest("article")!;
+    expect(within(scenechatCard).getByText("Multimodal generative model · 953 MiB")).toBeInTheDocument();
+    expect(within(scenechatCard).getByText("Text Generation")).toBeInTheDocument();
+    expect(within(scenechatCard).getByText("Chat")).toBeInTheDocument();
+    expect(within(scenechatCard).getByText("Image Input")).toBeInTheDocument();
     fireEvent.click(within(scenechatCard).getByRole("button", { name: "Configure runtime" }));
     expect(within(scenechatCard).getByText("Configure SceneChat Gemma 4 runtime")).toBeInTheDocument();
     fireEvent.click(within(scenechatCard).getByRole("button", { name: "Cancel" }));

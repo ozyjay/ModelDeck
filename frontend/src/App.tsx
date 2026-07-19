@@ -28,7 +28,17 @@ type View = "overview" | "demo-routes" | "workers" | "models" | "compatibility" 
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
 type WorkerGrouping = "family" | "runtime" | "lifecycle" | "none";
-type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc";
+type ModelSort =
+  | "name-asc"
+  | "name-desc"
+  | "size-desc"
+  | "size-asc"
+  | "readiness"
+  | "attention"
+  | "compatibility"
+  | "configured-desc"
+  | "configured-asc"
+  | "family-asc";
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
   { view: "overview", label: "Overview", path: "/" },
@@ -917,12 +927,20 @@ function ModelsView({
       left.model_id.localeCompare(right.model_id, "en-AU", { sensitivity: "base" }) ||
       String(left.revision ?? "").localeCompare(String(right.revision ?? ""), "en-AU");
     return [...models].sort((left, right) => {
+      const leftDetails = modelLibraryDetails(left, profiles, compatibility);
+      const rightDetails = modelLibraryDetails(right, profiles, compatibility);
       if (sort === "name-desc") return -nameOrder(left, right);
       if (sort === "size-desc") return right.physical_size_bytes - left.physical_size_bytes || nameOrder(left, right);
       if (sort === "size-asc") return left.physical_size_bytes - right.physical_size_bytes || nameOrder(left, right);
+      if (sort === "readiness") return modelReadinessRank(leftDetails.state) - modelReadinessRank(rightDetails.state) || nameOrder(left, right);
+      if (sort === "attention") return modelReadinessRank(rightDetails.state) - modelReadinessRank(leftDetails.state) || nameOrder(left, right);
+      if (sort === "compatibility") return compatibilityRank(leftDetails) - compatibilityRank(rightDetails) || nameOrder(left, right);
+      if (sort === "configured-desc") return rightDetails.matchingProfiles.length - leftDetails.matchingProfiles.length || nameOrder(left, right);
+      if (sort === "configured-asc") return leftDetails.matchingProfiles.length - rightDetails.matchingProfiles.length || nameOrder(left, right);
+      if (sort === "family-asc") return modelFamilyLabel(left).localeCompare(modelFamilyLabel(right), "en-AU", { sensitivity: "base" }) || nameOrder(left, right);
       return nameOrder(left, right);
     });
-  }, [models, sort]);
+  }, [compatibility, models, profiles, sort]);
 
   const configure = async (payload: LocalProfileRequest) => {
     setPendingProfile(`create:${payload.alias}`);
@@ -989,21 +1007,25 @@ function ModelsView({
               <option value="name-desc">Name (Z–A)</option>
               <option value="size-desc">Cache size (largest first)</option>
               <option value="size-asc">Cache size (smallest first)</option>
+              <option value="readiness">Readiness (most ready first)</option>
+              <option value="attention">Readiness (attention first)</option>
+              <option value="compatibility">Compatibility evidence (tested first)</option>
+              <option value="configured-desc">Runtime configurations (most first)</option>
+              <option value="configured-asc">Runtime configurations (fewest first)</option>
+              <option value="family-asc">Model class (A–Z)</option>
             </select>
           </div>
           <div className="model-list">{sortedModels.map((model) => {
-          const matchingProfiles = profiles.filter((profile) => (profile.artifact_model_id ?? profile.model_id) === model.model_id && (profile.artifact_revision ?? profile.revision) === model.revision);
-          const latest = compatibility.find((test) => matchingProfiles.some((profile) => test.evidence.model_id === profile.model_id && test.evidence.model_revision === profile.revision && profile.preferred_runtime === test.evidence.runtime));
-          const state = !model.modeldeck_allowed ? "disallowed" : model.download_state === "partial" ? "partial" : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
+          const { matchingProfiles, latest, state } = modelLibraryDetails(model, profiles, compatibility);
           const canConfigure = model.modeldeck_allowed && model.download_state !== "partial" && model.configuration_support !== null && Boolean(model.revision);
           const key = `${model.model_id}-${model.revision}`;
           return <article className="model-row" key={key}>
-            <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unknown generation family"} · {formatBytes(model.physical_size_bytes)}</p></div><StateBadge state={state} /></div>
+            <div className="model-main"><div><h3>{model.model_id}</h3><p>{modelCapabilitySummary(model)} · {formatBytes(model.physical_size_bytes)}</p><div className="tag-list model-capabilities" aria-label={`Supported uses for ${model.model_id}`}>{model.capability_hints.map((capability) => <span className="tag" key={capability}>{humanise(capability)}</span>)}</div></div><StateBadge state={state} /></div>
             <p className="model-stage">{modelStageDescription(state)}</p>
             <DefinitionList rows={[["Revision", model.revision ?? "No resolved snapshot"], ...(model.base_model_id ? [["Base model", `${model.base_model_id} @ ${model.base_model_revision}`] as [string, string]] : []), ["ModelDeck use", model.modeldeck_allowed ? "Allowed" : "Disallowed"], ["Runtime configurations", matchingProfiles.length ? matchingProfiles.map((profile) => profile.alias).join(", ") : "None"], ["Compatibility", latest ? String(latest.result) : "Not tested for a configured runtime"], ["Cache", model.download_state === "partial" ? "Incomplete snapshot" : "Complete local snapshot"]]} compact />
             {matchingProfiles.some((profile) => profile.source === "local") && <div className="configured-runtime-list">{matchingProfiles.filter((profile) => profile.source === "local").map((profile) => {
               const usage = deploymentUsage.find((candidate) => candidate.deployment_id === profile.id);
-              return <div className="configured-runtime" key={profile.id}><div className="configured-runtime-heading"><span><strong>{profile.alias}</strong><small>{profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" title={usage?.blocking_dependencies.map((dependency) => dependency.remediation).join("; ") || undefined} disabled={pendingProfile !== null || !usage?.removable} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div><DeploymentUsageSummary usage={usage} /></div>;
+              return <div className="configured-runtime" key={profile.id}><div className="configured-runtime-heading"><span><strong>{profile.alias}</strong><small>{humanise(profile.generation_family)} deployment · {profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" title={usage?.blocking_dependencies.map((dependency) => dependency.remediation).join("; ") || undefined} disabled={pendingProfile !== null || !usage?.removable} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div><DeploymentUsageSummary usage={usage} /></div>;
             })}</div>}
             {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
           </article>;
@@ -1178,6 +1200,53 @@ function capabilityLabels(capabilities: Worker["capabilities"]): string[] {
   if (capabilities.audio_output) labels.push("Audio output");
   if (capabilities.full_duplex) labels.push("Full duplex");
   return labels;
+}
+
+function modelLibraryDetails(model: ModelEntry, profiles: Profile[], tests: CompatibilityTest[]) {
+  const matchingProfiles = profiles.filter((profile) =>
+    (profile.artifact_model_id ?? profile.model_id) === model.model_id &&
+    (profile.artifact_revision ?? profile.revision) === model.revision
+  );
+  const latest = tests.find((test) => matchingProfiles.some((profile) =>
+    test.evidence.model_id === profile.model_id &&
+    test.evidence.model_revision === profile.revision &&
+    profile.preferred_runtime === test.evidence.runtime
+  ));
+  const state = !model.modeldeck_allowed
+    ? "disallowed"
+    : model.download_state === "partial"
+      ? "partial"
+      : latest?.result ?? (matchingProfiles.length ? "runtime-configured" : model.configuration_support ? "recognised" : "unsupported");
+  return { matchingProfiles, latest, state };
+}
+
+function modelReadinessRank(state: string): number {
+  if (state === "tested-working") return 0;
+  if (state === "runtime-configured") return 1;
+  if (state === "recognised") return 2;
+  if (!["unsupported", "partial", "disallowed"].includes(state)) return 3;
+  if (state === "unsupported") return 4;
+  if (state === "partial") return 5;
+  return 6;
+}
+
+function compatibilityRank(details: ReturnType<typeof modelLibraryDetails>): number {
+  if (details.latest?.result === "tested-working") return 0;
+  if (details.latest) return 1;
+  if (details.matchingProfiles.length) return 2;
+  return 3;
+}
+
+function modelFamilyLabel(model: ModelEntry): string {
+  return model.generation_family_hint ?? "\uffffUnknown";
+}
+
+function modelCapabilitySummary(model: ModelEntry): string {
+  if (model.generation_family_hint === "vision-language") return "Multimodal generative model";
+  if (model.generation_family_hint === "autoregressive") return "Text generative model";
+  if (model.generation_family_hint === "text-diffusion") return "Text diffusion model";
+  if (model.generation_family_hint === "speech-conversation") return "Speech conversation model";
+  return "Model capabilities not classified";
 }
 
 function shortModelName(modelId: string): string { return modelId.split("/").at(-1) ?? modelId; }

@@ -225,6 +225,7 @@ export interface ModelEntry {
   physical_size_bytes: number;
   download_state: "partial" | "installed-untested";
   generation_family_hint: string | null;
+  capability_hints: string[];
   configuration_support:
     | "autoregressive-transformers"
     | "scenechat-gemma4"

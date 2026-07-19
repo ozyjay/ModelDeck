@@ -19,6 +19,12 @@ process state; and a demo route is an application-facing protocol contract bound
 ordered set of deployments. This keeps booth requirements stable while models and
 runtimes change independently.
 
+Catalogue model entries describe a capability envelope rather than assigning the model
+to one exclusive use. For example, a multimodal model may expose text generation, chat,
+image input, and structured-output capabilities. The narrower generation family belongs
+to each configured deployment and records the engine and protocol path ModelDeck has
+actually validated.
+
 ## Runtime environments
 
 `.venv` is ModelDeck's control-plane runtime: API, operator-console assets, supervisor, gateway,

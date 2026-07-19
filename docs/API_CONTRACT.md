@@ -49,6 +49,9 @@ bindings, legacy alias selections and worker-state dependencies. Local deploymen
 removal and cache disallow operations return structured blocking dependencies until
 those references are reassigned or the worker is stopped. `GET /api/demo-adapters`
 lists the allowlisted protocol contracts.
+Catalogue entries include `capability_hints` describing potential model uses; these are
+discovery hints rather than runtime readiness claims. Deployment capabilities and
+compatibility evidence remain authoritative for configured execution paths.
 Demo sets are managed through `GET` and `POST /api/demo-sets` and `GET`, `PUT`, and
 `DELETE /api/demo-sets/{demo_set_id}`. Creation and update append immutable revisions;
 an activated revision cannot be deleted.

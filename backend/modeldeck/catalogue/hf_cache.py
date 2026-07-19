@@ -105,6 +105,20 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
     return None
 
 
+def _capability_hints(generation_family: str | None) -> list[str]:
+    return {
+        "autoregressive": ["text-generation", "chat"],
+        "vision-language": ["text-generation", "chat", "image-input", "structured-output"],
+        "text-diffusion": [
+            "text-generation",
+            "iterative-refinement",
+            "intermediate-frames",
+            "seeded-generation",
+        ],
+        "speech-conversation": ["audio-input", "audio-output", "full-duplex"],
+    }.get(generation_family, [])
+
+
 def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | None, str]:
     if repo_id == "kyutai/moshiko-pytorch-bf16":
         required = {
@@ -186,6 +200,7 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                 q4_release = inspect_modeldeck_q4_release(chosen) if chosen and complete else None
             except Q4ReleaseError:
                 q4_release = None
+            generation_family = _generation_family(chosen, repo_id) if chosen else None
             models.append(
                 {
                     "model_id": repo_id,
@@ -194,7 +209,8 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                     "snapshot_location": str(chosen) if chosen else None,
                     "physical_size_bytes": _physical_size((model_dir,)),
                     "download_state": state,
-                    "generation_family_hint": _generation_family(chosen, repo_id) if chosen else None,
+                    "generation_family_hint": generation_family,
+                    "capability_hints": _capability_hints(generation_family),
                     "configuration_support": support,
                     "configuration_support_reason": support_reason,
                     "base_model_id": q4_release.get("base_model_id") if q4_release else None,
