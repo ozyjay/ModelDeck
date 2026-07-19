@@ -60,6 +60,7 @@ const profile: Profile = {
 
 const deployment: Deployment = {
   id: profile.id,
+  display_name: profile.id,
   source: "packaged",
   model: {
     model_id: profile.model_id,
@@ -274,6 +275,11 @@ function mockFetch() {
       demoSets = demoSets.map((candidate) => candidate.id === updated.id ? updated : candidate);
       return json(updated);
     }
+    if (init?.method === "PUT" && path.endsWith("/display-name")) {
+      const payload = JSON.parse(String(init.body));
+      deployment.display_name = payload.display_name;
+      return json({ ok: true, deployment_id: deployment.id, display_name: payload.display_name });
+    }
     if (init?.method === "POST") {
       if (postFailure) return json({ detail: "Pinned runtime is unavailable" }, 409);
       if (path === "/api/demo-sets") {
@@ -434,10 +440,12 @@ describe("ModelDeck operator console", () => {
       ],
     };
     MockEventSource.instances = [];
+    deployment.display_name = deployment.id;
     window.history.replaceState({}, "", "/");
     vi.stubGlobal("EventSource", MockEventSource);
     vi.stubGlobal("fetch", mockFetch());
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(window, "prompt").mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -464,8 +472,12 @@ describe("ModelDeck operator console", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByText("Lower priorities are tried first. Equal priorities are ordered by deployment ID.")).toBeInTheDocument();
     expect(screen.getByLabelText("Provider 1 for fast-chat")).toHaveValue(worker.id);
-    expect(screen.getByText(`Model: ${worker.model_id}`)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`Model: ${worker.model_id.replaceAll("/", "\\/")}`))).toBeInTheDocument();
     expect(screen.getByLabelText(`Priority for ${worker.id}`)).toHaveValue(10);
+    vi.mocked(window.prompt).mockReturnValueOnce("Visitor Qwen");
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText(`Renamed deployment ${worker.id} to Visitor Qwen.`)).toBeInTheDocument();
+    expect(screen.getByLabelText("Provider 1 for fast-chat")).toHaveDisplayValue("Visitor Qwen");
     fireEvent.change(screen.getByLabelText("Identifier for Chat demo"), { target: { value: "visitor-chat" } });
     fireEvent.change(screen.getByLabelText("Public model alias"), { target: { value: "demo-chat" } });
     fireEvent.click(screen.getByRole("button", { name: "Save new revision" }));
@@ -592,7 +604,7 @@ describe("ModelDeck operator console", () => {
     fireEvent.change(screen.getByLabelText("Group workers"), { target: { value: "none" } });
     fireEvent.change(screen.getByLabelText("Sort workers"), { target: { value: "name-desc" } });
     const workerNames = [...document.querySelectorAll(".worker-card h3")].map((heading) => heading.textContent);
-    expect(workerNames).toEqual(["Qwen2.5-0.5B-Instruct", "gpt-oss-120b-GGUF"]);
+    expect(workerNames).toEqual([worker.id, "gpt-oss-120b-GGUF"]);
   });
 
   it("reports SSE disconnection and falls back to worker polling", async () => {

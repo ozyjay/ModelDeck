@@ -46,6 +46,11 @@ class CompatibilityStore:
                 CREATE TABLE IF NOT EXISTS model_profiles (
                     id TEXT PRIMARY KEY, document_json TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS deployment_metadata (
+                    deployment_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS model_cache_policy (
                     model_id TEXT NOT NULL,
                     revision TEXT NOT NULL,
@@ -101,6 +106,23 @@ class CompatibilityStore:
             }
             if "discarded_at" not in revision_columns:
                 database.execute("ALTER TABLE demo_set_revisions ADD COLUMN discarded_at TEXT")
+
+    def deployment_display_names(self) -> dict[str, str]:
+        if not self.path.exists():
+            return {}
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute("SELECT deployment_id, display_name FROM deployment_metadata").fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def set_deployment_display_name(self, deployment_id: str, display_name: str) -> None:
+        updated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO deployment_metadata (deployment_id, display_name, updated_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(deployment_id) DO UPDATE SET "
+                "display_name = excluded.display_name, updated_at = excluded.updated_at",
+                (deployment_id, display_name, updated_at),
+            )
 
     def list_demo_sets(self) -> list[dict[str, Any]]:
         if not self.path.exists():

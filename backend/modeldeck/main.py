@@ -87,6 +87,10 @@ class GatewayProviderSelectionRequest(BaseModel):
     profile_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
+class DeploymentDisplayNameRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
     built_in_profiles = default_model_profiles()
@@ -395,10 +399,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_deployments(request: Request):
         built_in_ids = request.app.state.built_in_profile_ids
         policy = request.app.state.compatibility_store.list_model_cache_policy()
+        display_names = request.app.state.compatibility_store.deployment_display_names()
         supervisor = request.app.state.supervisor
         return [
             {
                 "id": profile.id,
+                "display_name": display_names.get(profile.id, profile.id),
                 "source": "packaged" if profile.id in built_in_ids else "local",
                 "model": {
                     "model_id": profile.model_id,
@@ -416,6 +422,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             for profile in request.app.state.profiles
         ]
+
+    @app.put("/api/deployments/{deployment_id}/display-name")
+    async def update_deployment_display_name(
+        deployment_id: str, payload: DeploymentDisplayNameRequest, request: Request
+    ):
+        _require_configuration_mutable(request)
+        if not any(profile.id == deployment_id for profile in request.app.state.profiles):
+            raise HTTPException(404, "Unknown deployment")
+        display_name = payload.display_name.strip()
+        if not display_name:
+            raise HTTPException(422, "Deployment display name cannot be blank")
+        request.app.state.compatibility_store.set_deployment_display_name(deployment_id, display_name)
+        return {
+            "ok": True,
+            "deployment_id": deployment_id,
+            "display_name": display_name,
+        }
 
     @app.get("/api/deployments/usage")
     async def list_deployment_usage(request: Request):

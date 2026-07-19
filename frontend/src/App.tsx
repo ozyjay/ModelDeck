@@ -343,6 +343,7 @@ export default function App() {
         ) : view === "workers" ? (
           <WorkersView
             workers={workers}
+            deployments={deployments}
             profiles={profiles}
             models={models}
             compatibility={compatibility}
@@ -649,6 +650,19 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
     });
   };
 
+  const renameDeployment = async (deployment: Deployment) => {
+    const requested = window.prompt("Deployment name", deployment.display_name);
+    const displayName = requested?.trim();
+    if (!displayName || displayName === deployment.display_name) return;
+    await runAction(`rename:${deployment.id}`, async () => {
+      await putJson(`/api/deployments/${encodeURIComponent(deployment.id)}/display-name`, {
+        display_name: displayName,
+      });
+      await configurationChanged();
+      setFeedback({ tone: "good", message: `Renamed deployment ${deployment.id} to ${displayName}.` });
+    });
+  };
+
   const restoreRevision = async (revision: number) => {
     if (!selected || !window.confirm(`Restore revision ${revision} as a new draft revision?`)) return;
     await runAction(`restore:${revision}`, async () => {
@@ -705,7 +719,7 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
       </aside>
       <section className="panel demo-set-detail">
         {!selected ? <div className="empty-state"><h2>No demo set selected</h2><p>Create a draft to define demo route contracts.</p></div> : draft ? (
-          <DemoSetEditor draft={draft} setDraft={setDraft} deployments={deployments} adapters={adapters} pending={pendingAction !== null} save={() => void saveDraft()} cancel={() => setDraft(null)} />
+          <DemoSetEditor draft={draft} setDraft={setDraft} deployments={deployments} adapters={adapters} pending={pendingAction !== null} renameDeployment={(deployment) => void renameDeployment(deployment)} save={() => void saveDraft()} cancel={() => setDraft(null)} />
         ) : <>
           <div className="demo-set-heading"><div><p className="eyebrow">{selected.active_revision === selected.revision ? "Active routing snapshot" : selected.active ? `Draft revision; revision ${selected.active_revision} remains active` : "Draft routing configuration"}</p><h2>{selected.display_name}</h2><p>{selected.description || "No description."}</p></div><StateBadge state={selected.active_revision === selected.revision ? "ready" : "discovered"} /></div>
           <div className="button-row demo-set-actions">
@@ -717,7 +731,7 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
             <button className="secondary danger" disabled={openDay || selected.active || pendingAction !== null} onClick={() => void removeSet()}>Delete demo set</button>
           </div>
           {validation && <ValidationSummary validation={validation} />}
-          {plan && <PlanSummary plan={plan} />}
+          {plan && <PlanSummary plan={plan} deployments={deployments} />}
           <details className="revision-history"><summary>Revision history ({revisions.length})</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{formatDate(revision.updated_at)}</small></span>{revision.active_revision === revision.revision ? <StateBadge state="ready" /> : <div className="button-row"><button type="button" className="secondary" disabled={openDay || pendingAction !== null || revision.revision === selected.revision} onClick={() => void restoreRevision(revision.revision)}>{pendingAction === `restore:${revision.revision}` ? "Restoring…" : "Restore as draft"}</button><button type="button" className="secondary" disabled={openDay || pendingAction !== null} onClick={() => void activateRevision(revision.revision)}>{pendingAction === `activate-revision:${revision.revision}` ? "Activating…" : "Activate"}</button></div>}</article>)}</div></details>
           <div className="demo-route-list">{selected.routes.map((route) => {
             const demo = selected.demos.find((item) => item.id === route.demo_id);
@@ -729,7 +743,7 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
               <div className="route-rehearsal"><span><StatusDot state={status?.ready ? "good" : status?.gateway_available ? "warn" : "bad"} /><strong>{status?.ready ? "Gateway ready" : status?.active ? "Gateway unavailable" : "Revision not active"}</strong><small>{status?.effective_provider ?? status?.smoke_unavailable_reason ?? "No effective provider"}</small></span><div className="button-row"><button type="button" className="secondary" disabled={pendingAction !== null} onClick={() => void refreshRouteStatus(route.id)}>{pendingAction === `status:${route.id}` ? "Checking…" : "Check readiness"}</button><button type="button" disabled={pendingAction !== null || !status?.ready || !status.smoke_supported} title={status?.smoke_unavailable_reason ?? undefined} onClick={() => void smokeRoute(route.id)}>{pendingAction === `smoke:${route.id}` ? "Testing…" : "Smoke route"}</button></div></div>
               <div className="route-provider-list">{route.providers.length ? [...route.providers].sort((left, right) => left.priority - right.priority).map((binding) => {
                 const deployment = deployments.find((item) => item.id === binding.deployment_id);
-                return <div key={binding.deployment_id}><span><strong>{binding.deployment_id}</strong><small>{deployment ? `${deployment.model.model_id} · ${deployment.runtime}` : "Missing deployment"}</small></span><StateBadge state={deployment?.worker?.state ?? "incompatible"} /></div>;
+                return <div key={binding.deployment_id}><span><strong>{deployment?.display_name ?? binding.deployment_id}</strong><small>{deployment ? `${deployment.id} · ${deployment.model.model_id} · ${deployment.runtime}` : "Missing deployment"}</small></span><StateBadge state={deployment?.worker?.state ?? "incompatible"} /></div>;
               }) : <p className="muted">No provider deployment; the route is structurally unavailable.</p>}</div>
             </article>;
           })}</div>
@@ -739,12 +753,13 @@ function DemoRoutesView({ demoSets, deployments, adapters, openDay, configuratio
   </div>;
 }
 
-function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, save, cancel }: {
+function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, renameDeployment, save, cancel }: {
   draft: DemoSet;
   setDraft: (value: DemoSet) => void;
   deployments: Deployment[];
   adapters: DemoAdapter[];
   pending: boolean;
+  renameDeployment: (deployment: Deployment) => void;
   save: () => void;
   cancel: () => void;
 }) {
@@ -797,7 +812,7 @@ function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, save, 
       <div className="editor-section-heading"><div><h4>Provider deployments</h4><p className="provider-priority-help">Lower priorities are tried first. Equal priorities are ordered by deployment ID.</p></div><button type="button" className="secondary" disabled={!deployments.length} onClick={() => { const candidate = deployments.find((deployment) => !route.providers.some((binding) => binding.deployment_id === deployment.id)); if (candidate) updateRoute(routeIndex, { providers: [...route.providers, { deployment_id: candidate.id, priority: route.providers.length * 10 }] }); }}>Add provider</button></div>
       <div className="provider-editor-list">{route.providers.map((binding, providerIndex) => {
         const selectedDeployment = deployments.find((deployment) => deployment.id === binding.deployment_id);
-        return <div key={`${binding.deployment_id}-${providerIndex}`}><label className="provider-deployment">Deployment<select aria-label={`Provider ${providerIndex + 1} for ${route.id}`} value={binding.deployment_id} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, deployment_id: event.target.value } : item) })}>{deployments.map((deployment) => <option value={deployment.id} key={deployment.id}>{deployment.id}</option>)}</select><small>Model: {selectedDeployment?.model.model_id ?? "Unknown model"}</small></label><label className="provider-priority">Priority<input aria-label={`Priority for ${binding.deployment_id}`} type="number" min="0" max="10000" value={binding.priority} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, priority: Number(event.target.value) } : item) })} /></label><button type="button" className="secondary danger" onClick={() => updateRoute(routeIndex, { providers: route.providers.filter((_, index) => index !== providerIndex) })}>Remove</button></div>;
+        return <div key={`${binding.deployment_id}-${providerIndex}`}><label className="provider-deployment">Deployment<select aria-label={`Provider ${providerIndex + 1} for ${route.id}`} value={binding.deployment_id} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, deployment_id: event.target.value } : item) })}>{deployments.map((deployment) => <option value={deployment.id} key={deployment.id}>{deployment.display_name}</option>)}</select><small>ID: {binding.deployment_id} · Model: {selectedDeployment?.model.model_id ?? "Unknown model"}</small></label><label className="provider-priority">Priority<input aria-label={`Priority for ${binding.deployment_id}`} type="number" min="0" max="10000" value={binding.priority} onChange={(event) => updateRoute(routeIndex, { providers: route.providers.map((item, index) => index === providerIndex ? { ...item, priority: Number(event.target.value) } : item) })} /></label>{selectedDeployment && <button type="button" className="secondary" disabled={pending} onClick={() => renameDeployment(selectedDeployment)}>Rename</button>}<button type="button" className="secondary danger" onClick={() => updateRoute(routeIndex, { providers: route.providers.filter((_, index) => index !== providerIndex) })}>Remove</button></div>;
       })}</div>
     </article>)}</div>
     <div className="button-row"><button disabled={pending}>Save new revision</button><button type="button" className="secondary" disabled={pending} onClick={cancel}>Cancel</button></div>
@@ -815,8 +830,9 @@ function ValidationSummary({ validation }: { validation: DemoSetValidation }) {
   return <section className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Valid route configuration" : `${validation.errors.length} validation issue${validation.errors.length === 1 ? "" : "s"}`}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={`${error.route_id}-${error.deployment_id}-${index}`}>{[error.route_id, error.deployment_id].filter(Boolean).join(" / ")}: {error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`${warning.route_id}-${index}`}>{warning.route_id}: {warning.message}</li>)}</ul>}</section>;
 }
 
-function PlanSummary({ plan }: { plan: DemoSetPlan }) {
-  return <section className="validation-summary"><strong>Activation plan</strong><DefinitionList rows={[["Primary deployments", plan.desired_primary_deployments.join(", ") || "None"], ["Start required", plan.start_required.join(", ") || "None"], ["Stop required", plan.stop_required.join(", ") || "None"], ["Process changes", plan.applies_process_changes ? "Applied automatically" : "Operator controlled"]]} compact />{plan.warnings.length > 0 && <ul>{plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}</section>;
+function PlanSummary({ plan, deployments }: { plan: DemoSetPlan; deployments: Deployment[] }) {
+  const names = (ids: string[]) => ids.map((id) => deployments.find((deployment) => deployment.id === id)?.display_name ?? id).join(", ") || "None";
+  return <section className="validation-summary"><strong>Activation plan</strong><DefinitionList rows={[["Primary deployments", names(plan.desired_primary_deployments)], ["Start required", names(plan.start_required)], ["Stop required", names(plan.stop_required)], ["Process changes", plan.applies_process_changes ? "Applied automatically" : "Operator controlled"]]} compact />{plan.warnings.length > 0 && <ul>{plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}</section>;
 }
 
 function demoSetPayload(demoSet: DemoSet) {
@@ -829,8 +845,9 @@ function demoSetPayload(demoSet: DemoSet) {
   };
 }
 
-function WorkersView({ workers, profiles, models, compatibility, providerSelections, pending, operate, stopAll, selectProvider }: {
+function WorkersView({ workers, deployments, profiles, models, compatibility, providerSelections, pending, operate, stopAll, selectProvider }: {
   workers: Worker[];
+  deployments: Deployment[];
   profiles: Profile[];
   models: ModelEntry[];
   compatibility: CompatibilityTest[];
@@ -862,7 +879,8 @@ function WorkersView({ workers, profiles, models, compatibility, providerSelecti
               const cacheModelId = profile?.artifact_model_id ?? worker.model_id;
               const cacheRevision = profile?.artifact_revision ?? profile?.revision;
               const model = models.find((candidate) => candidate.model_id === cacheModelId && (!cacheRevision || candidate.revision === cacheRevision));
-              return <WorkerCard key={worker.id} worker={worker} profile={profile} model={model} tests={compatibility} pending={pending} operate={operate} />;
+              const displayName = deployments.find((deployment) => deployment.id === worker.id)?.display_name ?? shortModelName(worker.model_id);
+              return <WorkerCard key={worker.id} worker={worker} displayName={displayName} profile={profile} model={model} tests={compatibility} pending={pending} operate={operate} />;
             })}
           </div>
         </section>
@@ -887,8 +905,9 @@ function ProviderControl({ selection, workers, pending, selectProvider }: { sele
   </section>;
 }
 
-function WorkerCard({ worker, profile, model, tests, pending, operate }: {
+function WorkerCard({ worker, displayName, profile, model, tests, pending, operate }: {
   worker: Worker;
+  displayName: string;
   profile?: Profile;
   model?: ModelEntry;
   tests: CompatibilityTest[];
@@ -904,8 +923,8 @@ function WorkerCard({ worker, profile, model, tests, pending, operate }: {
   const busy = pending?.startsWith(`${worker.id}:`) ?? false;
   return (
     <article className={`worker-card state-${worker.state}`}>
-      <div className="worker-card-heading"><div><p className="worker-id">{worker.id}</p><h3>{shortModelName(worker.model_id)}</h3></div><StateBadge state={worker.state} /></div>
-      <p className="worker-summary">{worker.generation_family} · {worker.runtime}</p>
+      <div className="worker-card-heading"><div><p className="worker-id">Deployment · {worker.id}</p><h3>{displayName}</h3></div><StateBadge state={worker.state} /></div>
+      <p className="worker-summary"><span>{shortModelName(worker.model_id)}</span> · {worker.generation_family} · {worker.runtime}</p>
       <div className="compatibility-line"><StatusDot state={compatibility.tone} /><span>{compatibility.label}</span></div>
       {worker.last_error && <p className="inline-error" role="alert">{worker.last_error}</p>}
       <DefinitionList rows={[

@@ -69,6 +69,7 @@ export interface Profile {
 
 export interface Deployment {
   id: string;
+  display_name: string;
   source: "packaged" | "local";
   model: {
     model_id: string;

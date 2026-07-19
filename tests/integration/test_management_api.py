@@ -41,6 +41,40 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_deployment_display_names_are_editable_and_persisted(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            renamed = await client.put(
+                "/api/deployments/qwen-small-rocm/display-name",
+                json={"display_name": "Visitor Qwen"},
+            )
+            deployments = await client.get("/api/deployments")
+
+    assert renamed.status_code == 200
+    assert renamed.json()["display_name"] == "Visitor Qwen"
+    assert (
+        next(item for item in deployments.json() if item["id"] == "qwen-small-rocm")["display_name"]
+        == "Visitor Qwen"
+    )
+
+    restarted = create_app(settings)
+    async with restarted.router.lifespan_context(restarted):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restarted), base_url="http://test"
+        ) as client:
+            persisted = await client.get("/api/deployments")
+
+    assert (
+        next(item for item in persisted.json() if item["id"] == "qwen-small-rocm")["display_name"]
+        == "Visitor Qwen"
+    )
+
+
+@pytest.mark.asyncio
 async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):

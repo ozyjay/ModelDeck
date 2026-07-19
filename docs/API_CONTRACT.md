@@ -43,7 +43,9 @@ through to the frontend.
 ### Deployments and demo routes
 
 `GET /api/deployments` presents each registered deployment separately from its current
-worker process state. `GET /api/deployments/usage` and `GET
+worker process state. Operator-facing names are mutable metadata while deployment IDs
+remain stable references; `PUT /api/deployments/{deployment_id}/display-name` updates a
+name without rewriting routes or evidence. `GET /api/deployments/usage` and `GET
 /api/deployments/{deployment_id}/usage` consolidate active and latest-draft route
 bindings, legacy alias selections and worker-state dependencies. Local deployment
 removal and cache disallow operations return structured blocking dependencies until
