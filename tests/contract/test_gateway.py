@@ -75,6 +75,63 @@ async def test_default_text_diffusion_alias_prefers_q4(monkeypatch, tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_gateway_uses_activated_demo_routing_snapshot(monkeypatch, tmp_path) -> None:
+    async def ready_provider(_client, profile):
+        return {"ready": True}, profile.id == "qwen-small-rocm"
+
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    store.save_demo_set(
+        {
+            "id": "custom-routes",
+            "display_name": "Custom routes",
+            "demos": [{"id": "chat-demo", "display_name": "Chat demo"}],
+            "routes": [],
+        }
+    )
+    store.activate_demo_set(
+        "custom-routes",
+        1,
+        {
+            "format": "modeldeck-active-demo-routing",
+            "version": 1,
+            "demo_set_id": "custom-routes",
+            "revision": 1,
+            "routes": [
+                {
+                    "route_id": "custom-chat",
+                    "demo_id": "chat-demo",
+                    "public_model": "custom-chat",
+                    "adapter_id": "openai-chat-v1",
+                    "qualification_policy": "registered",
+                    "fallback_policy": "structured-unavailable",
+                    "providers": ["qwen-small-rocm"],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(gateway_module, "provider_health", ready_provider)
+    app = create_gateway_app(settings=Settings(data_dir=tmp_path))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/models")
+        wrong_adapter = await client.post("/v1/completions", json={"model": "custom-chat", "prompt": "hello"})
+
+    assert response.json()["data"] == [
+        {
+            "id": "custom-chat",
+            "object": "model",
+            "owned_by": "modeldeck-local",
+            "ready": True,
+            "selected_provider": "qwen-small-rocm",
+            "effective_provider": "qwen-small-rocm",
+        }
+    ]
+    assert wrong_adapter.status_code == 503
+    assert wrong_adapter.json()["error"]["code"] == "local_provider_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_default_qwen_aliases_select_their_pinned_workers(monkeypatch, tmp_path) -> None:
     async def ready_provider(_client, profile):
         return {"ready": True}, profile.id.startswith("qwen-")

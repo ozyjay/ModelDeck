@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
+from modeldeck.demo_config import profile_has_recorded_success
 from modeldeck.profile_registry import load_local_profiles, profile_allowed, profile_verified
 from modeldeck.profiles import ModelProfile, default_model_profiles
 from modeldeck.protocol import CapabilitySet
@@ -40,19 +41,37 @@ def create_gateway_app(
             return candidates[0].id if candidates else contract.default_provider
         return store.gateway_provider_selection(alias) or contract.default_provider
 
-    def active_routes() -> dict[str, list[ModelProfile]]:
+    def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
         routes = {alias: list(candidates) for alias, candidates in base_routes.items()}
         all_profiles = dict(defaults)
+        qualification_policies: dict[str, str] = {}
         if alias_routes is None:
             for profile in load_local_profiles(configured.data_dir):
                 all_profiles[profile.id] = profile
-                if profile.alias not in routes:
-                    routes[profile.alias] = [profile]
-            for alias, contract in alias_contracts.items():
-                if contract.selection != "explicit":
-                    continue
-                selected = all_profiles.get(selected_provider_id(alias, contract) or "")
-                routes[alias] = [selected] if selected is not None and contract.accepts(selected) else []
+            active_snapshot = store.active_routing_snapshot()
+            if active_snapshot is not None:
+                routes = {}
+                for route in active_snapshot.get("routes", []):
+                    if adapter_ids is not None and route.get("adapter_id") not in adapter_ids:
+                        continue
+                    alias = str(route.get("public_model", ""))
+                    if not alias:
+                        continue
+                    routes[alias] = [
+                        all_profiles[deployment_id]
+                        for deployment_id in route.get("providers", [])
+                        if deployment_id in all_profiles
+                    ]
+                    qualification_policies[alias] = str(route.get("qualification_policy", "registered"))
+            else:
+                for profile in all_profiles.values():
+                    if profile.id not in defaults and profile.alias not in routes:
+                        routes[profile.alias] = [profile]
+                for alias, contract in alias_contracts.items():
+                    if contract.selection != "explicit":
+                        continue
+                    selected = all_profiles.get(selected_provider_id(alias, contract) or "")
+                    routes[alias] = [selected] if selected is not None and contract.accepts(selected) else []
         policy = store.list_model_cache_policy()
         compatibility_tests = store.list_tests()
         filtered = {}
@@ -60,7 +79,12 @@ def create_gateway_app(
             allowed_candidates = [
                 profile
                 for profile in candidates
-                if profile_allowed(profile, policy) and profile_verified(profile, compatibility_tests)
+                if profile_allowed(profile, policy)
+                and profile_verified(profile, compatibility_tests)
+                and (
+                    qualification_policies.get(alias) != "tested-working-recorded"
+                    or profile_has_recorded_success(profile, compatibility_tests)
+                )
             ]
             contract = alias_contracts.get(alias)
             if allowed_candidates or (contract is not None and contract.selection == "explicit"):
@@ -139,7 +163,7 @@ def create_gateway_app(
     async def chat(request: Request):
         return await proxy_request(
             request,
-            active_routes(),
+            active_routes({"openai-chat-v1", "scene-analysis-v1"}),
             "/v1/chat/completions",
             "fast-chat",
             timeout_seconds=configured.scenechat_timeout_seconds,
@@ -147,19 +171,24 @@ def create_gateway_app(
 
     @app.post("/v1/completions")
     async def completions(request: Request):
-        return await proxy_request(request, active_routes(), "/v1/completions", "fast-chat")
+        return await proxy_request(
+            request, active_routes({"openai-completions-v1"}), "/v1/completions", "fast-chat"
+        )
 
     @app.post("/native/autoregressive/trace")
     async def trace(request: Request):
         return await proxy_request(
-            request, active_routes(), "/native/autoregressive/trace", "token-explainer"
+            request,
+            active_routes({"native-ar-trace-v1"}),
+            "/native/autoregressive/trace",
+            "token-explainer",
         )
 
     @app.post("/v1/refine")
     async def refine(request: Request):
         return await proxy_request(
             request,
-            active_routes(),
+            active_routes({"text-diffusion-v1"}),
             "/v1/refine",
             "text-diffusion",
             timeout_seconds=configured.diffusion_timeout_seconds,
@@ -167,7 +196,7 @@ def create_gateway_app(
 
     @app.post("/v1/diffuse")
     async def diffuse(request: Request):
-        routes = active_routes()
+        routes = active_routes({"text-diffusion-v1"})
         response = await proxy_request(request, routes, "/v1/diffuse", "text-diffusion")
         if isinstance(response, JSONResponse) and response.status_code < 300:
             payload = json_loads(response.body)
@@ -221,7 +250,7 @@ def create_gateway_app(
     async def vision(request: Request):
         return await proxy_request(
             request,
-            active_routes(),
+            active_routes({"scene-analysis-v1"}),
             "/v1/chat/completions",
             SCENECHAT_ALIAS,
             timeout_seconds=configured.scenechat_timeout_seconds,
@@ -234,7 +263,7 @@ def create_gateway_app(
             first = await asyncio.wait_for(client_socket.receive_text(), timeout=5)
             start = json_loads(first.encode())
             alias = str(start.get("model") or "repartee-speech")
-            candidates = route_candidates(active_routes(), alias)
+            candidates = route_candidates(active_routes({"speech-conversation-v1"}), alias)
             if not candidates:
                 await client_socket.send_json({"type": "error", "code": "local_provider_unavailable"})
                 await client_socket.close(code=1013)
@@ -347,7 +376,7 @@ async def proxy_request(
             forward_stream(response, client),
             status_code=response.status_code,
             media_type=response.headers.get("content-type", "text/event-stream"),
-            headers={"x-modeldeck-provider": selected.id},
+            headers=provider_response_headers(selected),
         )
     try:
         payload = await response.aread()
@@ -359,7 +388,7 @@ async def proxy_request(
         return JSONResponse(
             response_payload,
             status_code=response.status_code,
-            headers={"x-modeldeck-provider": selected.id},
+            headers=provider_response_headers(selected),
         )
     finally:
         await response.aclose()
@@ -476,6 +505,13 @@ def upstream_headers(profile: ModelProfile) -> dict[str, str]:
     if profile.generation_family.value != "vision-language":
         return {}
     return {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")}
+
+
+def provider_response_headers(profile: ModelProfile) -> dict[str, str]:
+    headers = {"x-modeldeck-provider": profile.id}
+    if profile.preferred_runtime == "mock":
+        headers["x-modeldeck-fallback"] = "mock"
+    return headers
 
 
 def json_loads(payload: bytes) -> Any:

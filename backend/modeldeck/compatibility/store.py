@@ -79,8 +79,143 @@ class CompatibilityStore:
                 CREATE TABLE IF NOT EXISTS presets (
                     id TEXT PRIMARY KEY, document_json TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS demo_set_revisions (
+                    demo_set_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    document_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (demo_set_id, revision)
+                );
+                CREATE TABLE IF NOT EXISTS active_demo_set (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    demo_set_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    routing_json TEXT NOT NULL,
+                    activated_at TEXT NOT NULL
+                );
                 """
             )
+
+    def list_demo_sets(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT revisions.demo_set_id, revisions.revision, revisions.document_json, "
+                "revisions.created_at, active.demo_set_id IS NOT NULL, active.revision "
+                "FROM demo_set_revisions AS revisions "
+                "JOIN (SELECT demo_set_id, MAX(revision) AS revision FROM demo_set_revisions "
+                "GROUP BY demo_set_id) AS latest "
+                "ON latest.demo_set_id = revisions.demo_set_id AND latest.revision = revisions.revision "
+                "LEFT JOIN active_demo_set AS active ON active.singleton_id = 1 "
+                "AND active.demo_set_id = revisions.demo_set_id "
+                "ORDER BY revisions.demo_set_id"
+            ).fetchall()
+        return [
+            {
+                "definition": json.loads(row[2]),
+                "revision": int(row[1]),
+                "updated_at": row[3],
+                "active": bool(row[4]),
+                "active_revision": int(row[5]) if row[5] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def get_demo_set(self, demo_set_id: str, revision: int | None = None) -> dict[str, Any] | None:
+        if not self.path.exists():
+            return None
+        with sqlite3.connect(self.path) as database:
+            if revision is None:
+                row = database.execute(
+                    "SELECT revision, document_json, created_at FROM demo_set_revisions "
+                    "WHERE demo_set_id = ? ORDER BY revision DESC LIMIT 1",
+                    (demo_set_id,),
+                ).fetchone()
+            else:
+                row = database.execute(
+                    "SELECT revision, document_json, created_at FROM demo_set_revisions "
+                    "WHERE demo_set_id = ? AND revision = ?",
+                    (demo_set_id, revision),
+                ).fetchone()
+            active = database.execute(
+                "SELECT revision FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
+                (demo_set_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "definition": json.loads(row[1]),
+            "revision": int(row[0]),
+            "updated_at": row[2],
+            "active": active is not None,
+            "active_revision": int(active[0]) if active is not None else None,
+        }
+
+    def save_demo_set(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        demo_set_id = str(document["id"])
+        created_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT COALESCE(MAX(revision), 0) FROM demo_set_revisions WHERE demo_set_id = ?",
+                (demo_set_id,),
+            ).fetchone()
+            revision = int(row[0]) + 1
+            database.execute(
+                "INSERT INTO demo_set_revisions "
+                "(demo_set_id, revision, document_json, created_at) VALUES (?, ?, ?, ?)",
+                (demo_set_id, revision, json.dumps(dict(document), sort_keys=True), created_at),
+            )
+        return self.get_demo_set(demo_set_id, revision)  # type: ignore[return-value]
+
+    def delete_demo_set(self, demo_set_id: str) -> bool:
+        with sqlite3.connect(self.path) as database:
+            active = database.execute(
+                "SELECT 1 FROM active_demo_set WHERE singleton_id = 1 AND demo_set_id = ?",
+                (demo_set_id,),
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError("The active demo set cannot be deleted")
+            cursor = database.execute("DELETE FROM demo_set_revisions WHERE demo_set_id = ?", (demo_set_id,))
+        return cursor.rowcount > 0
+
+    def activate_demo_set(
+        self, demo_set_id: str, revision: int, routing: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        activated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            exists = database.execute(
+                "SELECT 1 FROM demo_set_revisions WHERE demo_set_id = ? AND revision = ?",
+                (demo_set_id, revision),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(f"Unknown demo set revision: {demo_set_id}@{revision}")
+            database.execute(
+                "INSERT INTO active_demo_set "
+                "(singleton_id, demo_set_id, revision, routing_json, activated_at) "
+                "VALUES (1, ?, ?, ?, ?) ON CONFLICT(singleton_id) DO UPDATE SET "
+                "demo_set_id = excluded.demo_set_id, revision = excluded.revision, "
+                "routing_json = excluded.routing_json, activated_at = excluded.activated_at",
+                (demo_set_id, revision, json.dumps(dict(routing), sort_keys=True), activated_at),
+            )
+        return {
+            "demo_set_id": demo_set_id,
+            "revision": revision,
+            "routing": dict(routing),
+            "activated_at": activated_at,
+        }
+
+    def active_routing_snapshot(self) -> dict[str, Any] | None:
+        if not self.path.exists():
+            return None
+        try:
+            with sqlite3.connect(self.path) as database:
+                row = database.execute(
+                    "SELECT routing_json FROM active_demo_set WHERE singleton_id = 1"
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return json.loads(row[0]) if row is not None else None
 
     def list_tests(self) -> list[dict[str, Any]]:
         if not self.path.exists():

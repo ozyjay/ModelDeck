@@ -1,5 +1,15 @@
 # Architecture decisions
 
+## ADR-010 — Versioned demo contracts activate immutable routing snapshots
+
+Open Day applications are represented by editable demo sets rather than hard-wired
+worker cards. Demo routes bind stable public aliases and allowlisted protocol adapters to
+ordered deployments; deployments bind models to trusted runtimes, while workers remain
+ephemeral process instances. Saving creates an immutable revision. Validation and an
+advisory plan precede atomic activation, which changes routing only and never starts or
+stops a large model. This makes event configuration auditable, keeps lifecycle decisions
+explicit, and prevents partially edited configuration reaching demo clients.
+
 ## ADR-001 — Transformers-first, provider-neutral management
 
 Custom Transformers workers are preferred on the Framework Desktop; vLLM is optional and
