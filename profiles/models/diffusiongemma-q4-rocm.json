@@ -5,6 +5,8 @@
   "alias": "text-diffusion",
   "generation_family": "text-diffusion",
   "preferred_runtime": "text-diffusion-gptq-rocm",
+  "runtime_template_id": "diffusiongemma-modeldeck-q4",
+  "runtime_template_version": "0.1.0",
   "lifecycle": "exclusive",
   "port": 8622,
   "local_files_only": true,

@@ -56,6 +56,8 @@ export interface Profile {
   alias: string;
   generation_family: string;
   preferred_runtime: string;
+  runtime_template_id: string | null;
+  runtime_template_version: string | null;
   lifecycle: "resident" | "on-demand" | "exclusive";
   port: number;
   local_files_only: boolean;
@@ -210,6 +212,22 @@ export interface LocalProfileRequest {
   maximum_new_tokens: number;
   maximum_denoising_steps: number;
   artifact_id?: string;
+  runtime_template_id?: string;
+}
+
+export interface RuntimeTemplate {
+  id: string;
+  display_name: string;
+  implementation: string;
+  generation_family: string;
+  cache_setting: "cache_root" | "q4_checkpoint_dir" | "artifact_path";
+  uses_base_model_identity: boolean;
+  package_id: string;
+  package_version: string;
+  package_display_name: string;
+  publisher: string;
+  source: "packaged" | "trusted-local";
+  digest: string;
 }
 
 export interface ModelArtifact {
@@ -227,14 +245,7 @@ export interface ModelEntry {
   download_state: "partial" | "installed-untested";
   generation_family_hint: string | null;
   capability_hints: string[];
-  configuration_support:
-    | "autoregressive-transformers"
-    | "scenechat-gemma4"
-    | "diffusiongemma-transformers"
-    | "diffusiongemma-modeldeck-q4"
-    | "gpt-oss-llama-vulkan"
-    | "moshiko-speech"
-    | null;
+  configuration_support: string | null;
   configuration_support_reason: string;
   modeldeck_allowed: boolean;
   snapshot_location: string | null;

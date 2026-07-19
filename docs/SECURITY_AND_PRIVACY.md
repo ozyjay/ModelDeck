@@ -8,6 +8,12 @@ variables, tokens, arbitrary filesystem paths, Docker access, camera data, uploa
 cloud endpoints. Worker IDs select prevalidated manifests. Subprocesses use argument
 arrays without a shell.
 
+Additional runtime template packages require a local PowerShell installation step and an
+exact operator-approved SHA-256; the browser cannot install or trust them. ModelDeck keeps
+the trust record separately, verifies every loaded file, and fails closed after tampering.
+A template can select only a code-registered launch builder and its bounded setting names.
+Adding executable logic remains a reviewed code change, not a JSON or API capability.
+
 The optional repository `.env` is trusted operator configuration, is gitignored, and is
 read only by the PowerShell launch path. Its parser accepts a fixed name allowlist, treats
 values literally without expansion or command execution, does not print values, and fails

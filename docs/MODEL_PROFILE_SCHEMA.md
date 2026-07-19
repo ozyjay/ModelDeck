@@ -7,6 +7,10 @@ to entries in `runtime_templates.json`, while application-facing reserved aliase
 their capability contracts live in `reserved_aliases.json`. JSON data cannot provide a
 command, executable, environment variable, endpoint, or arbitrary filesystem path to the
 worker launcher; each runtime ID must still map to a trusted Python launch builder.
+Locally installed, versioned template packages may add compatible presets for those
+builders after an explicit SHA-256 trust step. See
+[Trusted runtime manifests](TRUSTED_RUNTIME_MANIFESTS.md). Profiles created from a
+template record their template ID and package version for provenance.
 
 Profiles are typed Pydantic documents and reject unknown fields, unsafe identifiers,
 unallowlisted runtimes, invalid ports, and contradictory generation capabilities.

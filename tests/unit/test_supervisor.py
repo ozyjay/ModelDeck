@@ -6,7 +6,9 @@ import sys
 import pytest
 from modeldeck.profiles import default_model_profiles
 from modeldeck.protocol import LifecycleClass
+from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.supervisor.service import (
+    TRUSTED_LAUNCH_BUILDERS,
     WorkerSupervisor,
     build_mock_worker_command,
     build_worker_launch,
@@ -19,6 +21,10 @@ def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_every_trusted_runtime_has_an_explicit_launch_builder() -> None:
+    assert set(TRUSTED_LAUNCH_BUILDERS) == set(TRUSTED_RUNTIME_IDS)
 
 
 def test_worker_command_is_an_argument_array_with_allowlisted_values() -> None:

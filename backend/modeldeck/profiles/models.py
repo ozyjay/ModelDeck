@@ -5,17 +5,10 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from modeldeck.protocol import CapabilitySet, GenerationFamily, LifecycleClass
+from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 
 SAFE_ALIAS = re.compile(r"^[a-z][a-z0-9-]{1,62}$")
-ALLOWED_RUNTIMES = {
-    "mock",
-    "transformers-rocm",
-    "text-diffusion-transformers-rocm",
-    "text-diffusion-gptq-rocm",
-    "vision-language-transformers-rocm",
-    "llama-vulkan",
-    "moshiko-rocm",
-}
+ALLOWED_RUNTIMES = TRUSTED_RUNTIME_IDS
 
 
 class ModelProfile(BaseModel):
@@ -29,6 +22,8 @@ class ModelProfile(BaseModel):
     alias: str
     generation_family: GenerationFamily
     preferred_runtime: str
+    runtime_template_id: str | None = None
+    runtime_template_version: str | None = None
     lifecycle: LifecycleClass
     port: int = Field(ge=1024, le=65535)
     local_files_only: bool = True

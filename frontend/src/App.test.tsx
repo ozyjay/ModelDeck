@@ -47,6 +47,8 @@ const profile: Profile = {
   alias: worker.alias,
   generation_family: worker.generation_family,
   preferred_runtime: worker.runtime,
+  runtime_template_id: "autoregressive-transformers",
+  runtime_template_version: "0.1.0",
   lifecycle: worker.lifecycle,
   port: worker.port,
   local_files_only: true,
@@ -398,6 +400,15 @@ function mockFetch() {
       return json({ demo_set_id: id, revision: demoSet?.revision ?? 0, route_id: routeId, public_model: route?.public_model ?? "", adapter_id: route?.adapter_id ?? "", active, gateway_available: true, advertised: active, ready: active, selected_provider: active ? worker.id : null, effective_provider: active ? worker.id : null, providers: [{ deployment_id: worker.id, priority: 10, worker_state: active ? "ready" : "stopped" }], smoke_supported: true, smoke_unavailable_reason: null });
     }
     if (path === "/api/demo-adapters") return json({ adapters: demoAdapters });
+    if (path === "/api/runtime-templates") return json({ templates: [
+      { id: "autoregressive-transformers", display_name: "Autoregressive Transformers ROCm", implementation: "transformers-rocm", generation_family: "autoregressive", cache_setting: "cache_root", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+      { id: "operator-autoregressive", display_name: "Operator autoregressive preset", implementation: "transformers-rocm", generation_family: "autoregressive", cache_setting: "cache_root", uses_base_model_identity: false, package_id: "operator-presets", package_version: "1.0.0", package_display_name: "Operator presets", publisher: "Local operator", source: "trusted-local", digest: "b".repeat(64) },
+      { id: "scenechat-gemma4", display_name: "SceneChat Gemma 4 ROCm", implementation: "vision-language-transformers-rocm", generation_family: "vision-language", cache_setting: "cache_root", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+      { id: "diffusiongemma-transformers", display_name: "DiffusionGemma Transformers ROCm", implementation: "text-diffusion-transformers-rocm", generation_family: "text-diffusion", cache_setting: "cache_root", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+      { id: "diffusiongemma-modeldeck-q4", display_name: "ModelDeck DiffusionGemma Q4 ROCm", implementation: "text-diffusion-gptq-rocm", generation_family: "text-diffusion", cache_setting: "q4_checkpoint_dir", uses_base_model_identity: true, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+      { id: "gpt-oss-llama-vulkan", display_name: "GPT-OSS llama.cpp Vulkan", implementation: "llama-vulkan", generation_family: "autoregressive", cache_setting: "artifact_path", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+      { id: "moshiko-speech", display_name: "Moshiko speech ROCm", implementation: "moshiko-rocm", generation_family: "speech-conversation", cache_setting: "cache_root", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "0.1.0", package_display_name: "ModelDeck core runtimes", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) },
+    ] });
     if (path === "/api/catalogue") return json({ models: catalogueModels, downloads_started: false });
     if (path === "/api/compatibility") return json({ tests: compatibilityTests });
     if (path.endsWith("/logs")) return json({ logs: [{ timestamp: "2026-07-14T10:00:00Z", source: "stderr", level: "warning", message: "prompt=[redacted]" }] });
@@ -692,7 +703,10 @@ describe("ModelDeck operator console", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Model library" }));
     fireEvent.click(screen.getByRole("button", { name: "Add runtime configuration" }));
-    expect(screen.getByText("Model, revision, cache path, worker implementation and port are fixed from the recognised snapshot.")).toBeInTheDocument();
+    expect(screen.getByText("The trusted template selects a reviewed launch implementation; commands, paths and environment remain non-editable.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Trusted runtime template")).toHaveValue("autoregressive-transformers");
+    fireEvent.change(screen.getByLabelText("Trusted runtime template"), { target: { value: "operator-autoregressive" } });
+    expect(screen.getByText("Configure Operator autoregressive preset")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Gateway alias"), { target: { value: "my-local-qwen" } });
     fireEvent.click(screen.getByRole("button", { name: "Save runtime configuration" }));
 
@@ -744,15 +758,15 @@ describe("ModelDeck operator console", () => {
     expect(within(scenechatCard).getByText("Chat")).toBeInTheDocument();
     expect(within(scenechatCard).getByText("Image Input")).toBeInTheDocument();
     fireEvent.click(within(scenechatCard).getByRole("button", { name: "Configure runtime" }));
-    expect(within(scenechatCard).getByText("Configure SceneChat Gemma 4 runtime")).toBeInTheDocument();
+    expect(within(scenechatCard).getByText("Configure SceneChat Gemma 4 ROCm")).toBeInTheDocument();
     fireEvent.click(within(scenechatCard).getByRole("button", { name: "Cancel" }));
     fireEvent.click(within(diffusionCard).getByRole("button", { name: "Configure runtime" }));
-    expect(within(diffusionCard).getByText("Configure DiffusionGemma runtime")).toBeInTheDocument();
+    expect(within(diffusionCard).getByText("Configure DiffusionGemma Transformers ROCm")).toBeInTheDocument();
     expect(within(diffusionCard).getByLabelText("Lifecycle")).toBeDisabled();
     expect(within(diffusionCard).getByLabelText("Maximum denoising steps")).toBeInTheDocument();
     fireEvent.click(within(diffusionCard).getByRole("button", { name: "Cancel" }));
     fireEvent.click(within(q4Card).getByRole("button", { name: "Configure runtime" }));
-    expect(within(q4Card).getByText("Configure ModelDeck DiffusionGemma Q4 runtime")).toBeInTheDocument();
+    expect(within(q4Card).getByText("Configure ModelDeck DiffusionGemma Q4 ROCm")).toBeInTheDocument();
     expect(within(q4Card).getByLabelText("Lifecycle")).toBeDisabled();
     expect(within(q4Card).getByLabelText("Data type")).toBeDisabled();
   });

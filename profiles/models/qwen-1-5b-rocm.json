@@ -5,6 +5,8 @@
   "alias": "qwen-1-5b",
   "generation_family": "autoregressive",
   "preferred_runtime": "transformers-rocm",
+  "runtime_template_id": "autoregressive-transformers",
+  "runtime_template_version": "0.1.0",
   "lifecycle": "resident",
   "port": 8623,
   "local_files_only": true,

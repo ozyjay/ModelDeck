@@ -5,7 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from modeldeck.registry import reserved_aliases, runtime_templates
+from modeldeck.registry import (
+    RuntimeTemplateRegistration,
+    reserved_aliases,
+    runtime_template_registrations,
+)
 
 from .models import ModelProfile
 
@@ -26,6 +30,10 @@ class LocalProfileRequest(BaseModel):
     maximum_new_tokens: int = Field(default=128, ge=1, le=512)
     maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    runtime_template_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9-]{1,62}$",
+    )
 
 
 def create_local_autoregressive_profile(
@@ -52,10 +60,12 @@ def create_local_profile(
     base_model_id: str | None = None,
     base_model_revision: str | None = None,
     artifact_path: Path | None = None,
+    template_registrations: dict[str, RuntimeTemplateRegistration] | None = None,
 ) -> ModelProfile:
-    template = runtime_templates().get(configuration_support)
-    if template is None:
+    registration = (template_registrations or runtime_template_registrations()).get(configuration_support)
+    if registration is None:
         raise ValueError("No allowlisted local worker supports this model architecture")
+    template = registration.template
     if template.uses_base_model_identity and (
         checkpoint_dir is None or base_model_id is None or base_model_revision is None
     ):
@@ -88,6 +98,8 @@ def create_local_profile(
         alias=request.alias,
         generation_family=template.generation_family,
         preferred_runtime=template.runtime,
+        runtime_template_id=template.id,
+        runtime_template_version=registration.package.version,
         lifecycle=template.lifecycle or request.lifecycle,
         port=port,
         local_files_only=True,

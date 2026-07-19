@@ -43,7 +43,7 @@ from modeldeck.profiles import (
 )
 from modeldeck.provider_selection import provider_compatible, selectable_aliases
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
-from modeldeck.registry import ReservedAlias
+from modeldeck.registry import ReservedAlias, runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
@@ -95,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
+    runtime_registrations = runtime_template_registrations(configured.data_dir)
     profiles = ensure_seeded_profiles(configured.data_dir, default_model_profiles())
     profile_origins = store.model_profile_origins()
 
@@ -120,6 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.supervisor = WorkerSupervisor(profiles, log_dir=configured.log_dir)
     app.state.profiles = list(profiles)
     app.state.profile_origins = profile_origins
+    app.state.runtime_registrations = runtime_registrations
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
@@ -295,6 +297,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for model in models
             ],
             "downloads_started": False,
+        }
+
+    @app.get("/api/runtime-templates")
+    async def list_runtime_templates(request: Request):
+        return {
+            "templates": [
+                {
+                    "id": registration.template.id,
+                    "display_name": registration.template.display_name,
+                    "implementation": registration.template.runtime,
+                    "generation_family": registration.template.generation_family,
+                    "cache_setting": registration.template.cache_setting,
+                    "uses_base_model_identity": registration.template.uses_base_model_identity,
+                    "package_id": registration.package.id,
+                    "package_version": registration.package.version,
+                    "package_display_name": registration.package.display_name,
+                    "publisher": registration.package.publisher,
+                    "source": registration.source,
+                    "digest": registration.digest,
+                }
+                for registration in request.app.state.runtime_registrations.values()
+            ],
+            "installation": "local-admin-only",
         }
 
     @app.post("/api/catalogue/policy")
@@ -657,13 +682,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 409,
                 cached["configuration_support_reason"],
             )
+        registrations = request.app.state.runtime_registrations
+        baseline_registration = registrations.get(configuration_support)
+        selected_template_id = payload.runtime_template_id or configuration_support
+        selected_registration = registrations.get(selected_template_id)
+        if baseline_registration is None or selected_registration is None:
+            raise HTTPException(409, "Select an installed trusted runtime template")
+        baseline_template = baseline_registration.template
+        selected_template = selected_registration.template
+        if (
+            selected_template.generation_family != baseline_template.generation_family
+            or selected_template.cache_setting != baseline_template.cache_setting
+            or selected_template.uses_base_model_identity != baseline_template.uses_base_model_identity
+        ):
+            raise HTTPException(
+                409,
+                "The selected trusted runtime template is not compatible with this model artefact",
+            )
         checkpoint_dir = (
             Path(cached["snapshot_location"])
-            if configuration_support == "diffusiongemma-modeldeck-q4"
+            if selected_template.cache_setting == "q4_checkpoint_dir"
             else None
         )
         artifact_path = None
-        if configuration_support == "gpt-oss-llama-vulkan":
+        if selected_template.cache_setting == "artifact_path":
             artifact = next(
                 (
                     candidate
@@ -701,11 +743,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload,
             cache_root=cache_root,
             port=port,
-            configuration_support=configuration_support,
+            configuration_support=selected_template_id,
             checkpoint_dir=checkpoint_dir,
             base_model_id=cached.get("base_model_id"),
             base_model_revision=cached.get("base_model_revision"),
             artifact_path=artifact_path,
+            template_registrations=registrations,
         )
         if reserved_contract is not None and not provider_compatible(reserved_contract, profile):
             raise HTTPException(409, "The runtime does not satisfy that reserved gateway alias contract")

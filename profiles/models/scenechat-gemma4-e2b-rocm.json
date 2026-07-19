@@ -5,6 +5,8 @@
   "alias": "scenechat-vision",
   "generation_family": "vision-language",
   "preferred_runtime": "vision-language-transformers-rocm",
+  "runtime_template_id": "scenechat-gemma4",
+  "runtime_template_version": "0.1.0",
   "lifecycle": "on-demand",
   "port": 8000,
   "local_files_only": true,

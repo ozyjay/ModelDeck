@@ -1,9 +1,16 @@
 {
   "format": "modeldeck-runtime-templates",
   "version": 1,
+  "package": {
+    "id": "modeldeck-core",
+    "version": "0.1.0",
+    "display_name": "ModelDeck core runtimes",
+    "publisher": "ModelDeck"
+  },
   "templates": [
     {
       "id": "autoregressive-transformers",
+      "display_name": "Autoregressive Transformers ROCm",
       "runtime": "transformers-rocm",
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "logits": true, "top_k_trace": true, "hidden_states": "optional", "seeded_generation": true},
@@ -12,6 +19,7 @@
     },
     {
       "id": "scenechat-gemma4",
+      "display_name": "SceneChat Gemma 4 ROCm",
       "runtime": "vision-language-transformers-rocm",
       "generation_family": "vision-language",
       "capabilities": {"chat": "compatibility-only", "streaming": false, "cancellation": true, "image_input": true, "structured_output": true},
@@ -20,6 +28,7 @@
     },
     {
       "id": "diffusiongemma-transformers",
+      "display_name": "DiffusionGemma Transformers ROCm",
       "runtime": "text-diffusion-transformers-rocm",
       "generation_family": "text-diffusion",
       "capabilities": {"iterative_refinement": true, "intermediate_frames": true, "seeded_generation": true, "logits": "model-specific"},
@@ -29,6 +38,7 @@
     },
     {
       "id": "diffusiongemma-modeldeck-q4",
+      "display_name": "ModelDeck DiffusionGemma Q4 ROCm",
       "runtime": "text-diffusion-gptq-rocm",
       "generation_family": "text-diffusion",
       "capabilities": {"iterative_refinement": true, "intermediate_frames": true, "seeded_generation": true, "logits": "model-specific"},
@@ -41,6 +51,7 @@
     },
     {
       "id": "gpt-oss-llama-vulkan",
+      "display_name": "GPT-OSS llama.cpp Vulkan",
       "runtime": "llama-vulkan",
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
@@ -50,6 +61,7 @@
     },
     {
       "id": "moshiko-speech",
+      "display_name": "Moshiko speech ROCm",
       "runtime": "moshiko-rocm",
       "generation_family": "speech-conversation",
       "capabilities": {"chat": false, "completions": false, "streaming": true, "cancellation": true, "audio_input": true, "audio_output": true, "full_duplex": true},

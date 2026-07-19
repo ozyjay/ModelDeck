@@ -7,6 +7,7 @@ import socket
 import sys
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -363,23 +364,44 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
         "--port",
         str(profile.port),
     ]
-    if profile.preferred_runtime == "mock":
-        command = [
+    builder = TRUSTED_LAUNCH_BUILDERS.get(profile.preferred_runtime)
+    if builder is None:
+        raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
+    return builder(profile, environment, common)
+
+
+LaunchBuilder = Callable[[ModelProfile, dict[str, str], list[str]], WorkerLaunch]
+
+
+def _mock_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
+    return WorkerLaunch(
+        command=[
             sys.executable,
             "-m",
             "modeldeck.workers.mock_worker",
             *common,
             "--family",
             profile.generation_family.value,
-        ]
-        return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime == "transformers-rocm":
-        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
-        if not python.is_file():
-            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
-        if cache_root := profile.settings.get("cache_root"):
-            environment["HF_HUB_CACHE"] = str(cache_root)
-        command = [
+        ],
+        environment=environment,
+    )
+
+
+def _rocm_python() -> Path:
+    python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+    if not python.is_file():
+        raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
+    return python
+
+
+def _autoregressive_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    python = _rocm_python()
+    if cache_root := profile.settings.get("cache_root"):
+        environment["HF_HUB_CACHE"] = str(cache_root)
+    return WorkerLaunch(
+        command=[
             str(python.absolute()),
             "-m",
             "modeldeck.workers.autoregressive_worker",
@@ -390,18 +412,22 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("context_length", 2048)),
             "--maximum-new-tokens",
             str(profile.settings.get("maximum_new_tokens", 128)),
-        ]
-        return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime == "vision-language-transformers-rocm":
-        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
-        if not python.is_file():
-            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
-        cache_root = profile.settings.get("cache_root")
-        if not cache_root:
-            raise ValueError("SceneChat worker requires an allowlisted Hugging Face cache root")
-        environment["HF_HUB_CACHE"] = str(cache_root)
-        environment["MODELDECK_SCENECHAT_API_KEY"] = os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
-        command = [
+        ],
+        environment=environment,
+    )
+
+
+def _vision_language_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    python = _rocm_python()
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("SceneChat worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    environment["MODELDECK_SCENECHAT_API_KEY"] = os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
+    return WorkerLaunch(
+        command=[
             str(python.absolute()),
             "-m",
             "modeldeck.workers.scenechat_worker",
@@ -416,13 +442,19 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_new_tokens", 512)),
             "--generation-timeout-seconds",
             str(profile.settings.get("generation_timeout_seconds", 60)),
-        ]
-        return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime == "llama-vulkan":
-        artifact_path = profile.settings.get("artifact_path")
-        if not artifact_path:
-            raise ValueError("GPT-OSS Vulkan worker requires an allowlisted GGUF artefact")
-        command = [
+        ],
+        environment=environment,
+    )
+
+
+def _llama_vulkan_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    artifact_path = profile.settings.get("artifact_path")
+    if not artifact_path:
+        raise ValueError("GPT-OSS Vulkan worker requires an allowlisted GGUF artefact")
+    return WorkerLaunch(
+        command=[
             sys.executable,
             "-m",
             "modeldeck.workers.llama_vulkan_worker",
@@ -435,21 +467,23 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             str(profile.settings.get("maximum_new_tokens", 256)),
             "--execution-preset",
             str(profile.settings.get("execution_preset", "vulkan-full")),
-        ]
-        return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime == "moshiko-rocm":
-        python = Path(
-            os.environ.get("MODELDECK_MOSHIKO_PYTHON", ".venv-moshi-rocm72/bin/python")
-        ).expanduser()
-        if not python.is_file():
-            raise ValueError(
-                "Moshiko ROCm runtime is missing; run pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1"
-            )
-        cache_root = profile.settings.get("cache_root")
-        if not cache_root:
-            raise ValueError("Moshiko worker requires an allowlisted Hugging Face cache root")
-        environment["HF_HUB_CACHE"] = str(cache_root)
-        command = [
+        ],
+        environment=environment,
+    )
+
+
+def _moshiko_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
+    python = Path(os.environ.get("MODELDECK_MOSHIKO_PYTHON", ".venv-moshi-rocm72/bin/python")).expanduser()
+    if not python.is_file():
+        raise ValueError(
+            "Moshiko ROCm runtime is missing; run pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1"
+        )
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Moshiko worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    return WorkerLaunch(
+        command=[
             str(python.absolute()),
             "-m",
             "modeldeck.workers.moshiko_worker",
@@ -458,59 +492,71 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             profile.alias,
             "--cache-root",
             str(cache_root),
-        ]
-        return WorkerLaunch(command=command, environment=environment)
-    if profile.preferred_runtime in {
-        "text-diffusion-transformers-rocm",
-        "text-diffusion-gptq-rocm",
-    }:
-        is_q4 = profile.preferred_runtime == "text-diffusion-gptq-rocm"
-        if is_q4:
-            configured_python = os.environ.get("MODELDECK_ROCM72_Q4_PYTHON")
-            default_q4_python = Path(".venv-rocm72-q4/bin/python")
-            if configured_python:
-                python = Path(configured_python).expanduser()
-            elif default_q4_python.is_file():
-                python = default_q4_python
-            else:
-                python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", default_q4_python)).expanduser()
+        ],
+        environment=environment,
+    )
+
+
+def _text_diffusion_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    is_q4 = profile.preferred_runtime == "text-diffusion-gptq-rocm"
+    if is_q4:
+        configured_python = os.environ.get("MODELDECK_ROCM72_Q4_PYTHON")
+        default_q4_python = Path(".venv-rocm72-q4/bin/python")
+        if configured_python:
+            python = Path(configured_python).expanduser()
+        elif default_q4_python.is_file():
+            python = default_q4_python
         else:
-            python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
-        if not python.is_file():
-            if is_q4:
-                raise ValueError(
-                    "Q4 ROCm runtime is missing; create .venv-rocm72-q4 and install "
-                    "requirements-rocm72-q4-gptqmodel.txt"
-                )
-            raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
-        environment.pop("LD_PRELOAD", None)
-        if cache_root := profile.settings.get("cache_root"):
-            environment["HF_HUB_CACHE"] = str(cache_root)
-        elif is_q4:
-            environment.pop("HF_HUB_CACHE", None)
-        if profile.settings.get("hsa_preload_evidence"):
-            hsa_runtime = Path("/usr/lib64/libhsa-runtime64.so.1")
-            if not hsa_runtime.is_file():
-                raise ValueError("Evidence-gated HSA runtime preload library is missing")
-            environment["LD_PRELOAD"] = str(hsa_runtime)
-        command = [
-            str(python.absolute()),
-            "-m",
-            "modeldeck.workers.text_diffusion_worker",
-            *common,
-            "--dtype",
-            profile.dtype,
-            "--maximum-new-tokens",
-            str(profile.settings.get("maximum_new_tokens", 256)),
-            "--maximum-denoising-steps",
-            str(profile.settings.get("maximum_denoising_steps", 48)),
-        ]
+            python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", default_q4_python)).expanduser()
+    else:
+        python = Path(os.environ.get("MODELDECK_ROCM72_PYTHON", ".venv-rocm72/bin/python")).expanduser()
+    if not python.is_file():
         if is_q4:
-            if cache_root := profile.settings.get("cache_root"):
-                command.extend(["--cache-root", str(cache_root)])
-            command.extend(["--q4-checkpoint-dir", str(profile.settings["q4_checkpoint_dir"])])
-        return WorkerLaunch(command=command, environment=environment)
-    raise ValueError(f"Runtime launch is not implemented: {profile.preferred_runtime}")
+            raise ValueError(
+                "Q4 ROCm runtime is missing; create .venv-rocm72-q4 and install "
+                "requirements-rocm72-q4-gptqmodel.txt"
+            )
+        raise ValueError("ROCm 7.2 runtime is missing; run pwsh -NoProfile -File scripts/setup.ps1")
+    environment.pop("LD_PRELOAD", None)
+    if cache_root := profile.settings.get("cache_root"):
+        environment["HF_HUB_CACHE"] = str(cache_root)
+    elif is_q4:
+        environment.pop("HF_HUB_CACHE", None)
+    if profile.settings.get("hsa_preload_evidence"):
+        hsa_runtime = Path("/usr/lib64/libhsa-runtime64.so.1")
+        if not hsa_runtime.is_file():
+            raise ValueError("Evidence-gated HSA runtime preload library is missing")
+        environment["LD_PRELOAD"] = str(hsa_runtime)
+    command = [
+        str(python.absolute()),
+        "-m",
+        "modeldeck.workers.text_diffusion_worker",
+        *common,
+        "--dtype",
+        profile.dtype,
+        "--maximum-new-tokens",
+        str(profile.settings.get("maximum_new_tokens", 256)),
+        "--maximum-denoising-steps",
+        str(profile.settings.get("maximum_denoising_steps", 48)),
+    ]
+    if is_q4:
+        if cache_root := profile.settings.get("cache_root"):
+            command.extend(["--cache-root", str(cache_root)])
+        command.extend(["--q4-checkpoint-dir", str(profile.settings["q4_checkpoint_dir"])])
+    return WorkerLaunch(command=command, environment=environment)
+
+
+TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
+    "mock": _mock_launch,
+    "transformers-rocm": _autoregressive_launch,
+    "vision-language-transformers-rocm": _vision_language_launch,
+    "text-diffusion-transformers-rocm": _text_diffusion_launch,
+    "text-diffusion-gptq-rocm": _text_diffusion_launch,
+    "llama-vulkan": _llama_vulkan_launch,
+    "moshiko-rocm": _moshiko_launch,
+}
 
 
 def build_mock_worker_command(profile: ModelProfile) -> list[str]:

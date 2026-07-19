@@ -7,14 +7,18 @@ start/stop/restart/warmup/smoke/logs, SSE events and log streams, compatibility 
 preset listing, stop-all, and same-origin gateway status. `GET /api/gateway/status`
 returns gateway health, advertised models, and providers, or a structured `available:
 false` response when the separate gateway process cannot be reached. Profile mutation
-is limited to `POST /api/profiles` and `DELETE /api/profiles/{profile_id}` for local
+is limited to `POST /api/profiles` and `DELETE /api/profiles/{profile_id}` for
 configurations backed by allowlisted autoregressive, SceneChat Gemma 4, DiffusionGemma
 BF16, or manifest-verified ModelDeck DiffusionGemma Q4 workers. Creation requires an exact complete snapshot already
-returned by cache discovery and accepts only an alias, dtype, lifecycle, context length,
-and output ceiling. ModelDeck derives the cache root, Transformers ROCm runtime, port,
-capabilities, offline policy, and fixed launch arguments. Built-in profiles cannot be
-removed, active local workers must be stopped first, and deleting a profile never deletes
-cache content.
+returned by cache discovery and accepts only an alias, trusted template ID, dtype,
+lifecycle, context length, and output ceiling. ModelDeck derives the cache root, runtime,
+port, capabilities, offline policy, and fixed launch arguments. Active workers must be
+stopped first, routing dependencies must be reassigned, and deleting a profile never
+deletes cache content.
+
+`GET /api/runtime-templates` lists each loaded template with its package identity,
+version, publisher, source, SHA-256 and registered implementation. Installation is a
+local-administrator-only operation and is not exposed through the management API.
 
 `POST /api/catalogue/policy` persists an allow/disallow decision for an exact cached
 `model_id` and `revision`. Disallowing requires every matching cache-backed worker to be

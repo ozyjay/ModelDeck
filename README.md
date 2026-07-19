@@ -84,6 +84,12 @@ launch manifest itself. The configuration persists in ModelDeck's local SQLite s
 removing it never removes the cached model. Unsupported architectures remain visible with
 the specific reason that configuration is unavailable.
 
+Reviewed runtime presets can be added as versioned
+[trusted runtime manifests](docs/TRUSTED_RUNTIME_MANIFESTS.md). Installation requires an
+explicit local SHA-256 trust step and cannot be performed from the browser; manifests may
+select a registered launch implementation but cannot define commands, paths or environment
+variables.
+
 Each complete cached revision can also be **Disallowed in ModelDeck** without deleting it
 from the Hugging Face cache. Disallowing a stopped model removes its cache-backed workers
 and gateway routes while retaining its persisted deployment configuration. Re-allowing

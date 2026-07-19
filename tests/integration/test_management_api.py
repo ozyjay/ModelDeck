@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import modeldeck.main as main_module
 import pytest
 from modeldeck.config import Settings
 from modeldeck.main import create_app
+from modeldeck.registry import install_runtime_manifest
 
 
 def test_management_defaults_to_loopback_only(monkeypatch) -> None:
@@ -26,6 +28,7 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
             health = await client.get("/api/health")
             workers = await client.get("/api/workers")
             profiles = await client.get("/api/profiles")
+            templates = await client.get("/api/runtime-templates")
             selection = await client.get("/api/gateway/provider-selections/scenechat-vision")
     assert health.status_code == 200
     assert health.json()["downloads_allowed"] is False
@@ -37,6 +40,10 @@ async def test_management_api_is_gpu_free_and_does_not_start_workers(tmp_path: P
     }
     assert selection.json()["selected_provider"] == "scenechat-gemma4-e2b-rocm"
     assert selection.json()["explicit_selection"] is False
+    assert templates.json()["installation"] == "local-admin-only"
+    assert {(template["id"], template["source"]) for template in templates.json()["templates"]} >= {
+        ("autoregressive-transformers", "packaged")
+    }
     assert (tmp_path / "modeldeck.sqlite3").exists()
 
 
@@ -396,6 +403,78 @@ async def test_cached_autoregressive_runtime_configuration_is_persistent_and_rem
         "profile_id": "local-local-example",
         "cache_removed": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_cached_model_can_select_a_compatible_trusted_local_template(
+    monkeypatch, tmp_path: Path
+) -> None:
+    model_dir = tmp_path / "cache" / "models--Example--LocalModel"
+    model_dir.mkdir(parents=True)
+    cached = {
+        "model_id": "Example/LocalModel",
+        "revision": "revision-1",
+        "cache_location": str(model_dir),
+        "physical_size_bytes": 1024,
+        "download_state": "installed-untested",
+        "generation_family_hint": "autoregressive",
+        "configuration_support": "autoregressive-transformers",
+        "configuration_support_reason": "Supported by the local Transformers ROCm worker.",
+        "runnable": False,
+        "runnable_reason": "Compatibility has not been tested for the current stack.",
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    data_dir = tmp_path / "data"
+    manifest = tmp_path / "presets.json"
+    content = json.dumps(
+        {
+            "format": "modeldeck-runtime-templates",
+            "version": 1,
+            "package": {
+                "id": "local-presets",
+                "version": "2.0.0",
+                "display_name": "Local presets",
+                "publisher": "Test operator",
+            },
+            "templates": [
+                {
+                    "id": "local-long-context",
+                    "display_name": "Local long context",
+                    "runtime": "transformers-rocm",
+                    "generation_family": "autoregressive",
+                    "capabilities": {"chat": True, "completions": True},
+                    "settings": {"context_length": 8192},
+                    "cache_setting": "cache_root",
+                }
+            ],
+        }
+    ).encode()
+    manifest.write_bytes(content)
+    install_runtime_manifest(manifest, data_dir, hashlib.sha256(content).hexdigest())
+
+    app = create_app(Settings(data_dir=data_dir, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            templates = await client.get("/api/runtime-templates")
+            created = await client.post(
+                "/api/profiles",
+                json={
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "alias": "local-template-model",
+                    "runtime_template_id": "local-long-context",
+                },
+            )
+
+    assert any(
+        template["id"] == "local-long-context" and template["source"] == "trusted-local"
+        for template in templates.json()["templates"]
+    )
+    assert created.status_code == 201
+    assert created.json()["runtime_template_id"] == "local-long-context"
+    assert created.json()["runtime_template_version"] == "2.0.0"
 
 
 @pytest.mark.asyncio

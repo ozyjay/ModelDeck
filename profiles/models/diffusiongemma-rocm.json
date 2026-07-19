@@ -5,6 +5,8 @@
   "alias": "text-diffusion-bf16",
   "generation_family": "text-diffusion",
   "preferred_runtime": "text-diffusion-transformers-rocm",
+  "runtime_template_id": "diffusiongemma-transformers",
+  "runtime_template_version": "0.1.0",
   "lifecycle": "exclusive",
   "port": 8621,
   "local_files_only": true,

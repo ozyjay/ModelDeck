@@ -18,6 +18,7 @@ import type {
   ModelEntry,
   Profile,
   ProviderSelection,
+  RuntimeTemplate,
   Telemetry,
   Worker,
   WorkerEvent,
@@ -68,6 +69,7 @@ export default function App() {
   const [deploymentUsage, setDeploymentUsage] = useState<DeploymentUsage[]>([]);
   const [demoSets, setDemoSets] = useState<DemoSet[]>([]);
   const [demoAdapters, setDemoAdapters] = useState<DemoAdapter[]>([]);
+  const [runtimeTemplates, setRuntimeTemplates] = useState<RuntimeTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [eventStreamConnected, setEventStreamConnected] = useState(false);
@@ -110,7 +112,7 @@ export default function App() {
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse, usageResponse] = await Promise.all([
+    const [nextProfiles, nextWorkers, nextGateway, catalogue, selections, deploymentResponse, demoSetResponse, usageResponse, templateResponse] = await Promise.all([
       getJson<Profile[]>("/api/profiles"),
       getJson<Worker[]>("/api/workers"),
       getJson<GatewayStatus>("/api/gateway/status"),
@@ -119,6 +121,7 @@ export default function App() {
       getJson<Deployment[]>("/api/deployments"),
       getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
       getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
+      getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
     ]);
     setProfiles(nextProfiles);
     setWorkers(nextWorkers);
@@ -128,13 +131,14 @@ export default function App() {
     setDeployments(deploymentResponse);
     setDemoSets(demoSetResponse.demo_sets);
     setDeploymentUsage(usageResponse.deployments);
+    setRuntimeTemplates(templateResponse.templates);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse, usageResponse] =
+      const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextWorkers, nextProfiles, catalogue, tests, selections, deploymentResponse, demoSetResponse, adapterResponse, usageResponse, templateResponse] =
         await Promise.all([
           getJson<ManagementHealth>("/api/health"),
           getJson<GatewayStatus>("/api/gateway/status"),
@@ -149,6 +153,7 @@ export default function App() {
           getJson<{ demo_sets: DemoSet[] }>("/api/demo-sets"),
           getJson<{ adapters: DemoAdapter[] }>("/api/demo-adapters"),
           getJson<{ deployments: DeploymentUsage[] }>("/api/deployments/usage"),
+          getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
         ]);
       setHealth(nextHealth);
       setGateway(nextGateway);
@@ -163,6 +168,7 @@ export default function App() {
       setDemoSets(demoSetResponse.demo_sets);
       setDemoAdapters(adapterResponse.adapters);
       setDeploymentUsage(usageResponse.deployments);
+      setRuntimeTemplates(templateResponse.templates);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -359,6 +365,7 @@ export default function App() {
             profiles={profiles}
             compatibility={compatibility}
             deploymentUsage={deploymentUsage}
+            runtimeTemplates={runtimeTemplates}
             configurationChanged={refreshConfiguration}
           />
         ) : view === "compatibility" ? (
@@ -946,12 +953,14 @@ function ModelsView({
   profiles,
   compatibility,
   deploymentUsage,
+  runtimeTemplates,
   configurationChanged,
 }: {
   models: ModelEntry[];
   profiles: Profile[];
   compatibility: CompatibilityTest[];
   deploymentUsage: DeploymentUsage[];
+  runtimeTemplates: RuntimeTemplate[];
   configurationChanged: () => Promise<void>;
 }) {
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -1063,7 +1072,7 @@ function ModelsView({
               const usage = deploymentUsage.find((candidate) => candidate.deployment_id === profile.id);
               return <div className="configured-runtime" key={profile.id}><div className="configured-runtime-heading"><span><strong>{profile.alias}</strong><small>{humanise(profile.generation_family)} deployment · {profile.dtype} · {humanise(profile.lifecycle)} · port {profile.port}</small></span><button className="secondary danger" title={usage?.blocking_dependencies.map((dependency) => dependency.remediation).join("; ") || undefined} disabled={pendingProfile !== null || !usage?.removable} onClick={() => void remove(profile)}>{pendingProfile === `delete:${profile.id}` ? "Removing…" : "Remove configuration"}</button></div><DeploymentUsageSummary usage={usage} /></div>;
             })}</div>}
-            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
+            {configuring === key && model.revision ? <RuntimeConfigurationForm model={model} runtimeTemplates={runtimeTemplates} pending={pendingProfile?.startsWith("create:") ?? false} cancel={() => setConfiguring(null)} submit={configure} /> : <div className="model-actions"><button disabled={!canConfigure || pendingProfile !== null} onClick={() => { setConfiguring(key); setFeedback(null); }}>{matchingProfiles.length ? "Add runtime configuration" : "Configure runtime"}</button>{model.revision && <button className="secondary" disabled={pendingProfile !== null} onClick={() => void setModelPolicy(model, !model.modeldeck_allowed)}>{pendingProfile === `policy:${model.model_id}` ? "Updating…" : model.modeldeck_allowed ? "Disallow in ModelDeck" : "Allow in ModelDeck"}</button>}{!canConfigure && <span>{model.modeldeck_allowed ? model.configuration_support_reason : "This model is kept in the HF cache but excluded from ModelDeck workers and gateway routes."}</span>}</div>}
           </article>;
           })}</div>
         </> : <p className="muted">No cached models were discovered. Use HuggingFacePull to acquire models.</p>}
@@ -1081,8 +1090,12 @@ function DeploymentUsageSummary({ usage }: { usage?: DeploymentUsage }) {
   return <div className="deployment-usage"><strong>Used by</strong>{references.length ? <ul>{references.map((reference) => <li key={reference.key}><span>{reference.label}</span><small>{reference.detail}</small></li>)}</ul> : <p>No demo routes or compatibility aliases reference this deployment.</p>}{usage.blocking_dependencies.length > 0 && <p className="dependency-guidance">Reassign {usage.blocking_dependencies.length} blocking dependenc{usage.blocking_dependencies.length === 1 ? "y" : "ies"} before removal. <a href={usage.blocking_dependencies.some((dependency) => dependency.kind === "demo-route") ? "/demo-routes" : "/workers"}>Open configuration</a></p>}</div>;
 }
 
-function RuntimeConfigurationForm({ model, pending, cancel, submit }: { model: ModelEntry; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
+function RuntimeConfigurationForm({ model, runtimeTemplates, pending, cancel, submit }: { model: ModelEntry; runtimeTemplates: RuntimeTemplate[]; pending: boolean; cancel: () => void; submit: (payload: LocalProfileRequest) => Promise<void> }) {
   const support = model.configuration_support;
+  const baseline = runtimeTemplates.find((template) => template.id === support);
+  const compatibleTemplates = runtimeTemplates.filter((template) => baseline && template.generation_family === baseline.generation_family && template.cache_setting === baseline.cache_setting && template.uses_base_model_identity === baseline.uses_base_model_identity);
+  const [runtimeTemplateId, setRuntimeTemplateId] = useState(support ?? "");
+  const selectedTemplate = compatibleTemplates.find((template) => template.id === runtimeTemplateId) ?? baseline;
   const diffusion = support === "diffusiongemma-transformers" || support === "diffusiongemma-modeldeck-q4";
   const speech = support === "moshiko-speech";
   const [profileName, setProfileName] = useState(() => suggestedProfileName(model.model_id));
@@ -1093,9 +1106,10 @@ function RuntimeConfigurationForm({ model, pending, cancel, submit }: { model: M
   const [maximumNewTokens, setMaximumNewTokens] = useState(support === "autoregressive-transformers" ? 128 : support === "scenechat-gemma4" ? 512 : 256);
   const [maximumDenoisingSteps, setMaximumDenoisingSteps] = useState(24);
   const artifact = (model.artifacts ?? [])[0];
-  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, profile_name: profileName, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps, ...(artifact ? { artifact_id: artifact.artifact_id } : {}) }); }}>
-    <div className="runtime-form-heading"><div><strong>Configure {runtimeLabel(support)}</strong><small>Model, revision, cache path, worker implementation and port are fixed from the recognised snapshot.</small></div></div>
+  return <form className="runtime-form" onSubmit={(event) => { event.preventDefault(); if (!model.revision) return; void submit({ model_id: model.model_id, revision: model.revision, profile_name: profileName, alias, dtype, lifecycle, context_length: contextLength, maximum_new_tokens: maximumNewTokens, maximum_denoising_steps: maximumDenoisingSteps, runtime_template_id: runtimeTemplateId, ...(artifact ? { artifact_id: artifact.artifact_id } : {}) }); }}>
+    <div className="runtime-form-heading"><div><strong>Configure {selectedTemplate?.display_name ?? "trusted runtime"}</strong><small>The trusted template selects a reviewed launch implementation; commands, paths and environment remain non-editable.</small></div></div>
     <div className="runtime-fields">
+      <label>Trusted runtime template<select value={runtimeTemplateId} onChange={(event) => setRuntimeTemplateId(event.target.value)}>{compatibleTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name} · {template.package_display_name} {template.package_version}</option>)}</select></label>
       <label>Configuration name<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
       <label>Gateway alias<input required pattern="[a-z][a-z0-9-]{1,62}" maxLength={63} value={alias} onChange={(event) => setAlias(event.target.value)} /></label>
       <label>Data type<select disabled={support === "diffusiongemma-modeldeck-q4"} value={dtype} onChange={(event) => setDtype(event.target.value as LocalProfileRequest["dtype"])}><option value="float16">float16</option><option value="bfloat16">bfloat16</option></select></label>
@@ -1297,14 +1311,6 @@ function suggestedProfileName(modelId: string): string {
   if (modelId === "ggml-org/gpt-oss-120b-GGUF") return "repartee-gpt-oss-120b";
   if (modelId === "kyutai/moshiko-pytorch-bf16") return "repartee-moshiko";
   return suggestedAlias(modelId);
-}
-function runtimeLabel(support: ModelEntry["configuration_support"]): string {
-  if (support === "scenechat-gemma4") return "SceneChat Gemma 4 runtime";
-  if (support === "diffusiongemma-transformers") return "DiffusionGemma runtime";
-  if (support === "diffusiongemma-modeldeck-q4") return "ModelDeck DiffusionGemma Q4 runtime";
-  if (support === "gpt-oss-llama-vulkan") return "Repartee GPT-OSS Vulkan runtime";
-  if (support === "moshiko-speech") return "Repartee Moshiko speech runtime";
-  return "autoregressive ROCm runtime";
 }
 function modelStageDescription(state: string): string {
   if (state === "disallowed") return "Cached files are retained, but this revision is excluded from ModelDeck workers and gateway routes.";

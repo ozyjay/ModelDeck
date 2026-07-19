@@ -58,6 +58,11 @@ SQLite is the source of truth for deployments, display-name metadata, cache poli
 compatibility evidence, explicit provider selections, and immutable demo-set revisions.
 Runtime implementations, protocol adapters and validation constraints remain packaged
 because they form the trusted execution boundary rather than operator configuration.
+Runtime template packages can also be installed by a local administrator using an exact
+reviewed SHA-256. These packages are versioned configuration, not executable plugins: they
+may select only a code-registered launch builder and implementation-specific bounded
+settings. Their provenance is visible through the management API and Model library. See
+[Trusted runtime manifests](TRUSTED_RUNTIME_MANIFESTS.md).
 
 ## Process and failure model
 
