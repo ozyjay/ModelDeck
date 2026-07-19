@@ -147,7 +147,9 @@ nav { display: grid; gap: 0.3rem; }
 .editor-section-heading { align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--line-soft); }
 .route-editor { display: grid; gap: 0.8rem; }
 .provider-priority-help { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.78rem; font-weight: 400; text-transform: none; }
-.provider-editor-list select { min-width: 0; flex: 1 1 auto; }
+.provider-editor-list .provider-deployment { min-width: 0; flex: 1 1 auto; }
+.provider-editor-list .provider-deployment select { width: 100%; }
+.provider-editor-list .provider-deployment small { overflow-wrap: anywhere; color: var(--muted); font-size: 0.74rem; font-weight: 400; text-transform: none; }
 .provider-editor-list .provider-priority { width: 7rem; flex: 0 0 auto; }
 .provider-editor-list .provider-priority input { width: 100%; }
 .provider-selection-panel { border-color: #315744; }
