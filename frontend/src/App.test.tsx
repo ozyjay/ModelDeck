@@ -2,9 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ProviderSelection } from "./types";
+import type { CompatibilityTest, GatewayStatus, ModelEntry, Profile, ProviderSelection, Worker } from "./types";
 
-const capabilities = {
+const capabilities: Worker["capabilities"] = {
   chat: true,
   completions: true,
   streaming: true,
@@ -17,9 +17,12 @@ const capabilities = {
   seeded_generation: true,
   image_input: false,
   structured_output: false,
+  audio_input: false,
+  audio_output: false,
+  full_duplex: false,
 };
 
-const worker = {
+const worker: Worker = {
   id: "qwen-small-rocm",
   state: "stopped",
   model_id: "Qwen/Qwen2.5-0.5B-Instruct",
@@ -35,7 +38,7 @@ const worker = {
   capabilities,
 };
 
-const profile = {
+const profile: Profile = {
   id: worker.id,
   model_id: worker.model_id,
   revision: "7ae557604adf67be50417f59c2c2f167def9a775",
@@ -51,7 +54,7 @@ const profile = {
   dtype: "float16",
   capabilities,
   settings: { cache_root: "/mnt/work/models/huggingface/hub" },
-  source: "built-in" as const,
+  source: "built-in",
   modeldeck_allowed: true,
 };
 
@@ -126,6 +129,7 @@ let catalogueModels: ModelEntry[] = [completeModel, partialModel];
 let compatibilityTests: CompatibilityTest[] = [];
 let managementFailure = false;
 let localProfiles: Profile[] = [];
+let additionalWorkers: Worker[] = [];
 let scenechatSelection: ProviderSelection = {
   alias: "scenechat-vision",
   display_name: "SceneChat provider",
@@ -251,7 +255,7 @@ function mockFetch() {
     if (path === "/api/gateway/provider-selections") return json({ selections: [scenechatSelection] });
     if (path === "/api/hardware") return json(hardware);
     if (path === "/api/telemetry") return json(telemetry);
-    if (path === "/api/workers") return json([currentWorker]);
+    if (path === "/api/workers") return json([currentWorker, ...additionalWorkers]);
     if (path === "/api/profiles") return json([profile, ...localProfiles]);
     if (path === "/api/catalogue") return json({ models: catalogueModels, downloads_started: false });
     if (path === "/api/compatibility") return json({ tests: compatibilityTests });
@@ -269,6 +273,7 @@ describe("ModelDeck operator console", () => {
     compatibilityTests = [];
     managementFailure = false;
     localProfiles = [];
+    additionalWorkers = [];
     scenechatSelection = {
       alias: "scenechat-vision",
       display_name: "SceneChat provider",
@@ -363,6 +368,45 @@ describe("ModelDeck operator console", () => {
     expect(within(card).getByText("Stopped")).toBeInTheDocument();
     MockEventSource.instances.find((source) => source.url === "/api/events")?.emit("worker", { worker_id: worker.id, state: "ready", message: "Ready", timestamp: "2026-07-14T10:00:00Z" });
     await waitFor(() => expect(within(card).getByText("Ready")).toBeInTheDocument());
+  });
+
+  it("shows every API worker and allows data-driven grouping and sorting", async () => {
+    const gptOssWorker: Worker = {
+      ...worker,
+      id: "local-repartee-gpt-oss-120b",
+      model_id: "ggml-org/gpt-oss-120b-GGUF",
+      runtime: "llama-vulkan",
+      lifecycle: "exclusive",
+      alias: "repartee-strong",
+      port: 8630,
+    };
+    additionalWorkers = [gptOssWorker];
+    localProfiles = [{
+      ...profile,
+      id: gptOssWorker.id,
+      model_id: gptOssWorker.model_id,
+      alias: gptOssWorker.alias,
+      preferred_runtime: gptOssWorker.runtime,
+      lifecycle: gptOssWorker.lifecycle,
+      port: gptOssWorker.port,
+      source: "local",
+    }];
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    expect(screen.getByRole("heading", { name: "gpt-oss-120b-GGUF" })).toBeInTheDocument();
+    expect(screen.getByLabelText(`Actions for ${gptOssWorker.id}`)).toBeInTheDocument();
+    expect(screen.getByText("Local profile")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Group workers"), { target: { value: "runtime" } });
+    expect(screen.getByRole("heading", { name: "Llama Vulkan runtime" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Transformers Rocm runtime" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Group workers"), { target: { value: "none" } });
+    fireEvent.change(screen.getByLabelText("Sort workers"), { target: { value: "name-desc" } });
+    const workerNames = [...document.querySelectorAll(".worker-card h3")].map((heading) => heading.textContent);
+    expect(workerNames).toEqual(["Qwen2.5-0.5B-Instruct", "gpt-oss-120b-GGUF"]);
   });
 
   it("reports SSE disconnection and falls back to worker polling", async () => {

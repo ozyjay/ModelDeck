@@ -18,6 +18,8 @@ import type {
 
 type View = "overview" | "workers" | "models" | "compatibility" | "logs";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
+type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
+type WorkerGrouping = "family" | "runtime" | "lifecycle" | "none";
 type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc";
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
@@ -455,17 +457,19 @@ function WorkersView({ workers, profiles, models, compatibility, providerSelecti
   stopAll: () => Promise<void>;
   selectProvider: (alias: string, profileId: string) => Promise<void>;
 }) {
-  const groups = [
-    { title: "Qwen autoregressive", description: "Pinned Transformers workers for chat, completions, and token traces.", workers: workers.filter((worker) => worker.model_id.startsWith("Qwen/")) },
-    { title: "SceneChat vision language", description: "Pinned Gemma 4 worker for local image-and-text scene analysis through the stable gateway.", workers: workers.filter((worker) => worker.generation_family === "vision-language") },
-    { title: "DiffusionGemma text diffusion", description: "Separate Q4 default and BF16 evaluation runtimes using the native refinement protocol.", workers: workers.filter((worker) => worker.generation_family === "text-diffusion" && worker.runtime !== "mock") },
-    { title: "Mock and recovery", description: "Lifecycle fallbacks for development and demonstrated recovery only.", workers: workers.filter((worker) => worker.runtime === "mock") },
-  ];
+  const [sort, setSort] = useState<WorkerSort>("name-asc");
+  const [grouping, setGrouping] = useState<WorkerGrouping>("family");
+  const sortedWorkers = useMemo(() => sortWorkers(workers, sort), [workers, sort]);
+  const groups = useMemo(() => groupWorkers(sortedWorkers, grouping), [sortedWorkers, grouping]);
   return (
     <div className="view-stack">
       <div className="view-actions"><p>Start only the runtime you intend to use. Model loading may take several minutes.</p><button className="danger secondary" disabled={pending === "stop-all"} onClick={() => void stopAll()}>{pending === "stop-all" ? "Stopping…" : "Stop all workers"}</button></div>
+      <div className="worker-toolbar" aria-label="Worker display controls">
+        <label>Group workers<select value={grouping} onChange={(event) => setGrouping(event.target.value as WorkerGrouping)}><option value="family">Generation family</option><option value="runtime">Runtime</option><option value="lifecycle">Lifecycle</option><option value="none">No grouping</option></select></label>
+        <label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Worker name A–Z</option><option value="name-desc">Worker name Z–A</option><option value="model-asc">Model name A–Z</option><option value="runtime-asc">Runtime A–Z</option><option value="state">State, then name</option></select></label>
+      </div>
       {providerSelections.map((selection) => <ProviderControl key={selection.alias} selection={selection} workers={workers} pending={pending === `provider-selection:${selection.alias}`} selectProvider={selectProvider} />)}
-      {groups.map((group) => (
+      {groups.length ? groups.map((group) => (
         <section className="worker-group" key={group.title}>
           <PanelHeading title={group.title} detail={`${group.workers.length} workers`} />
           <p className="section-description">{group.description}</p>
@@ -479,7 +483,7 @@ function WorkersView({ workers, profiles, models, compatibility, providerSelecti
             })}
           </div>
         </section>
-      ))}
+      )) : <section className="empty-state"><h2>No managed workers</h2><p>Configure an allowlisted runtime from the model library first.</p></section>}
     </div>
   );
 }
@@ -522,7 +526,7 @@ function WorkerCard({ worker, profile, model, tests, pending, operate }: {
       <div className="compatibility-line"><StatusDot state={compatibility.tone} /><span>{compatibility.label}</span></div>
       {worker.last_error && <p className="inline-error" role="alert">{worker.last_error}</p>}
       <DefinitionList rows={[
-        ["Alias", worker.alias], ["Revision", profile?.revision.slice(0, 12) ?? "Unknown"], ["Lifecycle", worker.lifecycle], ["Endpoint", `127.0.0.1:${worker.port}`], ["Dtype", profile?.dtype ?? "Unknown"], ["Cache snapshot", cacheSnapshotLabel(model)],
+        ["Alias", worker.alias], ["Configuration", profile?.source === "built-in" ? "Packaged profile" : profile?.source === "local" ? "Local profile" : "Unknown"], ["Revision", profile?.revision.slice(0, 12) ?? "Unknown"], ["Lifecycle", worker.lifecycle], ["Endpoint", `127.0.0.1:${worker.port}`], ["Dtype", profile?.dtype ?? "Unknown"], ["Cache snapshot", cacheSnapshotLabel(model)],
       ]} compact />
       <details><summary>Capabilities and manifest</summary><div className="tag-list">{capabilityLabels(worker.capabilities).map((label) => <span className="tag" key={label}>{label}</span>)}</div><p className="manifest-note">Local files only · remote code disabled · fixed argument-array launch</p></details>
       <div className="button-row" aria-label={`Actions for ${worker.id}`}>
@@ -748,6 +752,34 @@ function compatibilityFor(worker: Worker, profile: Profile | undefined, tests: C
   if (model) return { label: "Installed, compatibility untested", tone: "warn" };
   if (worker.runtime === "mock") return { label: "Mock lifecycle fallback", tone: "neutral" };
   return { label: "Pinned model snapshot not discovered", tone: "bad" };
+}
+
+function sortWorkers(workers: Worker[], sort: WorkerSort): Worker[] {
+  const byName = (left: Worker, right: Worker) => left.id.localeCompare(right.id, "en-AU", { sensitivity: "base" });
+  const stateOrder = ["busy", "ready", "warming", "loading", "starting", "validating", "degraded", "stopping", "failed", "incompatible", "orphaned", "stopped", "discovered"];
+  return [...workers].sort((left, right) => {
+    if (sort === "name-desc") return -byName(left, right);
+    if (sort === "model-asc") return left.model_id.localeCompare(right.model_id, "en-AU", { sensitivity: "base" }) || byName(left, right);
+    if (sort === "runtime-asc") return left.runtime.localeCompare(right.runtime, "en-AU", { sensitivity: "base" }) || byName(left, right);
+    if (sort === "state") return stateOrder.indexOf(left.state) - stateOrder.indexOf(right.state) || byName(left, right);
+    return byName(left, right);
+  });
+}
+
+function groupWorkers(workers: Worker[], grouping: WorkerGrouping): Array<{ title: string; description: string; workers: Worker[] }> {
+  if (grouping === "none") return workers.length ? [{ title: "All workers", description: "Every worker registered by the management API.", workers }] : [];
+  const grouped = new Map<string, Worker[]>();
+  for (const worker of workers) {
+    const key = grouping === "family" ? worker.generation_family : grouping === "runtime" ? worker.runtime : worker.lifecycle;
+    grouped.set(key, [...(grouped.get(key) ?? []), worker]);
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, "en-AU", { sensitivity: "base" }))
+    .map(([key, members]) => ({
+      title: `${humanise(key)} ${grouping === "family" ? "workers" : grouping}`,
+      description: `${humanise(grouping)}: ${humanise(key)}. Cards are supplied by the management worker registry.`,
+      workers: members,
+    }));
 }
 
 function confirmOperation(worker: Worker, operation: WorkerOperation, workers: Worker[]): boolean {
