@@ -28,7 +28,7 @@ from modeldeck.demo_config import (
 )
 from modeldeck.hardware import probe_environment
 from modeldeck.profile_registry import (
-    load_local_profiles,
+    ensure_seeded_profiles,
     profile_allowed,
     profile_cache_identity,
     profile_uses_huggingface_cache,
@@ -93,22 +93,17 @@ class DeploymentDisplayNameRequest(BaseModel):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
-    built_in_profiles = default_model_profiles()
+    configured.data_dir.mkdir(parents=True, exist_ok=True)
+    store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
+    profiles = ensure_seeded_profiles(configured.data_dir, default_model_profiles())
+    profile_origins = store.model_profile_origins()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        configured.data_dir.mkdir(parents=True, exist_ok=True)
-        store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-        store.initialise()
-        app.state.compatibility_store = store
         policy = store.list_model_cache_policy()
-        for profile in built_in_profiles:
+        for profile in list(app.state.profiles):
             if not profile_allowed(profile, policy):
                 await app.state.supervisor.remove_profile(profile.id)
-        for profile in load_local_profiles(configured.data_dir):
-            app.state.profiles.append(profile)
-            if profile_allowed(profile, policy):
-                app.state.supervisor.register_profile(profile)
         if not store.list_demo_sets():
             store.save_demo_set(default_demo_set(app.state.profiles).model_dump(mode="json"))
         yield
@@ -121,9 +116,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
-    app.state.supervisor = WorkerSupervisor(built_in_profiles, log_dir=configured.log_dir)
-    app.state.profiles = list(built_in_profiles)
-    app.state.built_in_profile_ids = {profile.id for profile in built_in_profiles}
+    app.state.compatibility_store = store
+    app.state.supervisor = WorkerSupervisor(profiles, log_dir=configured.log_dir)
+    app.state.profiles = list(profiles)
+    app.state.profile_origins = profile_origins
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
@@ -384,12 +380,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/profiles")
     async def list_profiles(request: Request):
-        built_in_ids = request.app.state.built_in_profile_ids
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         return [
             {
                 **profile.model_dump(mode="json"),
-                "source": "built-in" if profile.id in built_in_ids else "local",
+                "source": request.app.state.profile_origins.get(profile.id, "local"),
                 "modeldeck_allowed": profile_allowed(profile, policy),
             }
             for profile in request.app.state.profiles
@@ -397,7 +392,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/deployments")
     async def list_deployments(request: Request):
-        built_in_ids = request.app.state.built_in_profile_ids
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         display_names = request.app.state.compatibility_store.deployment_display_names()
         supervisor = request.app.state.supervisor
@@ -405,7 +399,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "id": profile.id,
                 "display_name": display_names.get(profile.id, profile.id),
-                "source": "packaged" if profile.id in built_in_ids else "local",
+                "source": request.app.state.profile_origins.get(profile.id, "local"),
                 "model": {
                     "model_id": profile.model_id,
                     "revision": profile.revision,
@@ -717,19 +711,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "The runtime does not satisfy that reserved gateway alias contract")
         store = request.app.state.compatibility_store
         store.save_model_profile(profile.model_dump(mode="json"))
+        store.set_deployment_display_name(profile.id, payload.profile_name or payload.alias)
         try:
             request.app.state.supervisor.register_profile(profile)
         except ValueError as error:
             store.delete_model_profile(profile.id)
+            store.delete_deployment_display_name(profile.id)
             raise HTTPException(409, str(error)) from error
         profiles.append(profile)
+        request.app.state.profile_origins[profile.id] = "local"
         return {**profile.model_dump(mode="json"), "source": "local"}
 
     @app.delete("/api/profiles/{profile_id}")
     async def delete_profile(profile_id: str, request: Request):
         _require_configuration_mutable(request)
-        if profile_id in request.app.state.built_in_profile_ids:
-            raise HTTPException(409, "Built-in runtime configurations cannot be removed")
         profile = next(
             (candidate for candidate in request.app.state.profiles if candidate.id == profile_id),
             None,
@@ -753,7 +748,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(409, str(error)) from error
         request.app.state.compatibility_store.delete_gateway_provider_selections_for_profile(profile_id)
         request.app.state.compatibility_store.delete_model_profile(profile_id)
+        request.app.state.compatibility_store.delete_deployment_display_name(profile_id)
         request.app.state.profiles.remove(profile)
+        request.app.state.profile_origins.pop(profile_id, None)
         return {
             "ok": True,
             "profile_id": profile_id,
@@ -1141,7 +1138,6 @@ async def _smoke_demo_route(route: DemoRouteContract, settings: Settings) -> dic
 def _deployment_usage_map(request: Request) -> dict[str, dict]:
     store = request.app.state.compatibility_store
     supervisor = request.app.state.supervisor
-    built_in_ids = request.app.state.built_in_profile_ids
     active_snapshot = store.active_routing_snapshot()
     active_key = (
         (active_snapshot.get("demo_set_id"), active_snapshot.get("revision"))
@@ -1151,7 +1147,7 @@ def _deployment_usage_map(request: Request) -> dict[str, dict]:
     usage = {
         profile.id: {
             "deployment_id": profile.id,
-            "source": "packaged" if profile.id in built_in_ids else "local",
+            "source": request.app.state.profile_origins.get(profile.id, "local"),
             "worker_state": (
                 supervisor.get_worker(profile.id)["state"]
                 if profile.id in supervisor.workers
@@ -1252,11 +1248,7 @@ def _deployment_usage_map(request: Request) -> dict[str, dict]:
                     "remediation": "Stop the worker before removal",
                 }
             )
-        record["removable"] = (
-            record["source"] == "local"
-            and not record["blocking_dependencies"]
-            and not request.app.state.settings.open_day
-        )
+        record["removable"] = not record["blocking_dependencies"] and not request.app.state.settings.open_day
     return usage
 
 

@@ -5,6 +5,20 @@ from pathlib import Path
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.profiles import ModelProfile
 
+DEPLOYMENT_SEED_VERSION = "1"
+
+
+def ensure_seeded_profiles(data_dir: Path, seeds: list[ModelProfile]) -> list[ModelProfile]:
+    store = CompatibilityStore(data_dir / "modeldeck.sqlite3")
+    store.initialise()
+    if store.configuration_value("deployment_seed_version") is None:
+        existing_ids = {str(document.get("id")) for document in store.list_model_profiles()}
+        for profile in seeds:
+            if profile.id not in existing_ids:
+                store.save_model_profile(profile.model_dump(mode="json"), origin="seed")
+        store.set_configuration_value("deployment_seed_version", DEPLOYMENT_SEED_VERSION)
+    return load_local_profiles(data_dir)
+
 
 def load_local_profiles(data_dir: Path) -> list[ModelProfile]:
     store = CompatibilityStore(data_dir / "modeldeck.sqlite3")

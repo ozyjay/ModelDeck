@@ -75,6 +75,42 @@ async def test_deployment_display_names_are_editable_and_persisted(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_seeded_deployments_become_removable_persisted_configuration(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    app = create_app(settings)
+    empty_set = {
+        "id": "empty-routing",
+        "display_name": "Empty routing",
+        "description": "No deployment dependencies.",
+        "demos": [],
+        "routes": [],
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            profiles = await client.get("/api/profiles")
+            await client.post("/api/demo-sets", json=empty_set)
+            await client.post("/api/demo-sets/empty-routing/activate")
+            await client.delete("/api/demo-sets/open-day-demos")
+            usage = await client.get("/api/deployments/qwen-small-rocm/usage")
+            removed = await client.delete("/api/profiles/qwen-small-rocm")
+
+    assert next(item for item in profiles.json() if item["id"] == "qwen-small-rocm")["source"] == "seed"
+    assert usage.json()["removable"] is True
+    assert removed.status_code == 200
+
+    restarted = create_app(settings)
+    async with restarted.router.lifespan_context(restarted):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restarted), base_url="http://test"
+        ) as client:
+            persisted = await client.get("/api/deployments")
+
+    assert "qwen-small-rocm" not in {item["id"] for item in persisted.json()}
+
+
+@pytest.mark.asyncio
 async def test_unknown_worker_is_not_interpreted_as_a_command(tmp_path: Path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):

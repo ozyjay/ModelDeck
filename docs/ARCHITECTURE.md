@@ -39,21 +39,25 @@ registry storage when inspected. ModelDeck owns profiles, runtime process lifecy
 scheduling, evidence, fixed local routing, and management presentation. Demos retain
 public wording, interaction state, reset, and prepared replay assets.
 
-## Packaged registries
+## Runtime registries and deployment seeds
 
-Built-in configuration is packaged as three versioned, validated JSON registries under
-`backend/modeldeck/registry_data`: runtime templates, model-profile seeds, and reserved
-gateway aliases. The profile seeds replace Python-constructed built-ins. Runtime templates
-describe the bounded profile fields ModelDeck may derive for a recognised cache model;
-they select, but cannot define, a trusted Python worker launch implementation. Reserved
-alias contracts define packaged provider order or explicit selection, display wording,
-generation family, and required capabilities. Registry loading rejects unknown versions,
-duplicate IDs, missing seed references, invalid capabilities, and runtime implementations
-without a trusted launch builder.
+Three versioned, validated JSON registries under `backend/modeldeck/registry_data` provide
+runtime templates, first-run deployment seeds, and reserved gateway contracts. Runtime
+templates describe the bounded fields ModelDeck may derive for a recognised cache model;
+they select, but cannot define, a trusted worker launch implementation. Registry loading
+rejects unknown versions, duplicate IDs, invalid capabilities, and implementations without
+a trusted launch builder.
 
-SQLite remains the home for operator-created profiles, cache policy, compatibility
-evidence, explicit provider selections, and immutable demo-set revisions. Packaged seed data is read-only and versioned
-with the application, so upgrades are deterministic and do not overwrite local choices.
+Deployment seeds are imported into SQLite exactly once. After import they are ordinary
+operator-owned deployment records: their names can change and they can be removed after
+routing dependencies and running workers are cleared. A seed-completion marker prevents a
+removed deployment from reappearing on restart. The gateway and management service both
+load deployments from SQLite; packaged JSON is not a live deployment registry.
+
+SQLite is the source of truth for deployments, display-name metadata, cache policy,
+compatibility evidence, explicit provider selections, and immutable demo-set revisions.
+Runtime implementations, protocol adapters and validation constraints remain packaged
+because they form the trusted execution boundary rather than operator configuration.
 
 ## Process and failure model
 

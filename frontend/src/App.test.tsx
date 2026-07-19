@@ -54,14 +54,14 @@ const profile: Profile = {
   dtype: "float16",
   capabilities,
   settings: { cache_root: "/mnt/work/models/huggingface/hub" },
-  source: "built-in",
+  source: "seed",
   modeldeck_allowed: true,
 };
 
 const deployment: Deployment = {
   id: profile.id,
   display_name: profile.id,
-  source: "packaged",
+  source: "seed",
   model: {
     model_id: profile.model_id,
     revision: profile.revision,
@@ -240,7 +240,7 @@ function deploymentUsages(): DeploymentUsage[] {
       ...routeBindings.map((route) => ({ kind: "demo-route" as const, id: `${route.demo_set_id}@${route.revision}:${route.route_id}`, label: `${route.demo_set_display_name} / ${route.route_display_name}`, authority: route.state, remediation: "Reassign or remove this provider in Demo routes" })),
       ...legacyAliases.filter((alias) => alias.effective).map((alias) => ({ kind: "legacy-alias" as const, id: alias.alias, label: alias.display_name, authority: "legacy-selection", remediation: "Select a different provider in Workers" })),
     ];
-    return { deployment_id: deploymentId, source: deploymentId.startsWith("local-") ? "local" as const : "packaged" as const, worker_state: "stopped" as const, route_bindings: routeBindings, legacy_aliases: legacyAliases, blocking_dependencies: blockingDependencies, removable: deploymentId.startsWith("local-") && blockingDependencies.length === 0 };
+    return { deployment_id: deploymentId, source: deploymentId.startsWith("local-") ? "local" as const : "seed" as const, worker_state: "stopped" as const, route_bindings: routeBindings, legacy_aliases: legacyAliases, blocking_dependencies: blockingDependencies, removable: blockingDependencies.length === 0 };
   });
 }
 
@@ -595,7 +595,7 @@ describe("ModelDeck operator console", () => {
 
     expect(screen.getByRole("heading", { name: "gpt-oss-120b-GGUF" })).toBeInTheDocument();
     expect(screen.getByLabelText(`Actions for ${gptOssWorker.id}`)).toBeInTheDocument();
-    expect(screen.getByText("Local profile")).toBeInTheDocument();
+    expect(screen.getByText("Local configuration")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Group workers"), { target: { value: "runtime" } });
     expect(screen.getByRole("heading", { name: "Llama Vulkan runtime" })).toBeInTheDocument();
@@ -697,8 +697,8 @@ describe("ModelDeck operator console", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save runtime configuration" }));
 
     expect(await screen.findByText("Runtime my-local-qwen is configured and ready to start from Workers.")).toBeInTheDocument();
-    expect(screen.getByText("my-local-qwen")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Remove configuration" }));
+    const configuredRuntime = screen.getByText("my-local-qwen").closest(".configured-runtime") as HTMLElement;
+    fireEvent.click(within(configuredRuntime).getByRole("button", { name: "Remove configuration" }));
     expect(await screen.findByText("Runtime my-local-qwen was removed. Its cached model files were kept.")).toBeInTheDocument();
     expect(window.confirm).toHaveBeenCalledWith("Remove runtime configuration my-local-qwen? Cached model files will be kept.");
   });

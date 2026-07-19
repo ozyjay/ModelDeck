@@ -86,8 +86,8 @@ the specific reason that configuration is unavailable.
 
 Each complete cached revision can also be **Disallowed in ModelDeck** without deleting it
 from the Hugging Face cache. Disallowing a stopped model removes its cache-backed workers
-and gateway routes while retaining built-in or local profile configuration. Re-allowing
-the revision restores those workers. The built-in packaged Q4 checkpoint is independent
+and gateway routes while retaining its persisted deployment configuration. Re-allowing
+the revision restores those workers. The seeded Q4 checkpoint is independent
 of this HF-cache policy. A Q4 runtime configured from a downloaded Hugging Face release
 follows the policy of that derivative repository and revision, separately from its
 upstream Google base model.

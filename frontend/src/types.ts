@@ -63,14 +63,14 @@ export interface Profile {
   dtype: string;
   capabilities: Capabilities;
   settings: Record<string, string | number | boolean>;
-  source: "built-in" | "local";
+  source: "seed" | "local";
   modeldeck_allowed: boolean;
 }
 
 export interface Deployment {
   id: string;
   display_name: string;
-  source: "packaged" | "local";
+  source: "seed" | "local";
   model: {
     model_id: string;
     revision: string;
@@ -88,7 +88,7 @@ export interface Deployment {
 
 export interface DeploymentUsage {
   deployment_id: string;
-  source: "packaged" | "local";
+  source: "seed" | "local";
   worker_state: WorkerState | "unregistered";
   route_bindings: Array<{
     demo_set_id: string;

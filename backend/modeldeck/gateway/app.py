@@ -13,7 +13,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.demo_config import profile_has_recorded_success
-from modeldeck.profile_registry import load_local_profiles, profile_allowed, profile_verified
+from modeldeck.profile_registry import (
+    ensure_seeded_profiles,
+    load_local_profiles,
+    profile_allowed,
+    profile_verified,
+)
 from modeldeck.profiles import ModelProfile, default_model_profiles
 from modeldeck.protocol import CapabilitySet
 from modeldeck.provider_selection import SCENECHAT_ALIAS
@@ -26,12 +31,9 @@ def create_gateway_app(
 ) -> FastAPI:
     configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
-    defaults = {profile.id: profile for profile in default_model_profiles()}
+    ensure_seeded_profiles(configured.data_dir, default_model_profiles())
     alias_contracts = reserved_aliases()
-    base_routes = alias_routes or {
-        alias: [defaults[profile_id] for profile_id in contract.providers]
-        for alias, contract in alias_contracts.items()
-    }
+    base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
 
@@ -42,12 +44,22 @@ def create_gateway_app(
         return store.gateway_provider_selection(alias) or contract.default_provider
 
     def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
-        routes = {alias: list(candidates) for alias, candidates in base_routes.items()}
-        all_profiles = dict(defaults)
+        all_profiles = {profile.id: profile for profile in load_local_profiles(configured.data_dir)}
+        routes = (
+            {alias: list(candidates) for alias, candidates in base_routes.items()}
+            if alias_routes is not None
+            else {
+                alias: [
+                    all_profiles[profile_id]
+                    for profile_id in contract.providers
+                    if profile_id in all_profiles
+                ]
+                for alias, contract in alias_contracts.items()
+            }
+        )
         qualification_policies: dict[str, str] = {}
         if alias_routes is None:
-            for profile in load_local_profiles(configured.data_dir):
-                all_profiles[profile.id] = profile
+            profile_origins = store.model_profile_origins()
             active_snapshot = store.active_routing_snapshot()
             if active_snapshot is not None:
                 routes = {}
@@ -65,7 +77,7 @@ def create_gateway_app(
                     qualification_policies[alias] = str(route.get("qualification_policy", "registered"))
             else:
                 for profile in all_profiles.values():
-                    if profile.id not in defaults and profile.alias not in routes:
+                    if profile_origins.get(profile.id) == "local" and profile.alias not in routes:
                         routes[profile.alias] = [profile]
                 for alias, contract in alias_contracts.items():
                     if contract.selection != "explicit":
@@ -150,8 +162,9 @@ def create_gateway_app(
     @app.get("/v1/capabilities")
     async def capabilities():
         routes = active_routes()
+        profiles = {profile.id: profile for profile in load_local_profiles(configured.data_dir)}
         return {
-            alias: alias_capabilities(alias, candidates, alias_contracts, defaults)
+            alias: alias_capabilities(alias, candidates, alias_contracts, profiles)
             for alias, candidates in routes.items()
         }
 
@@ -328,7 +341,7 @@ def alias_capabilities(
     if candidates:
         return candidates[0].capabilities.model_dump()
     contract = contracts[alias]
-    if contract.default_provider:
+    if contract.default_provider and contract.default_provider in defaults:
         return defaults[contract.default_provider].capabilities.model_dump()
     capabilities = CapabilitySet()
     return capabilities.model_copy(

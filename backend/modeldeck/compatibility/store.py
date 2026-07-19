@@ -44,7 +44,13 @@ class CompatibilityStore:
                 """
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS model_profiles (
-                    id TEXT PRIMARY KEY, document_json TEXT NOT NULL, updated_at TEXT NOT NULL
+                    id TEXT PRIMARY KEY,
+                    document_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    origin TEXT NOT NULL DEFAULT 'local'
+                );
+                CREATE TABLE IF NOT EXISTS configuration_metadata (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS deployment_metadata (
                     deployment_id TEXT PRIMARY KEY,
@@ -106,6 +112,30 @@ class CompatibilityStore:
             }
             if "discarded_at" not in revision_columns:
                 database.execute("ALTER TABLE demo_set_revisions ADD COLUMN discarded_at TEXT")
+            profile_columns = {
+                row[1] for row in database.execute("PRAGMA table_info(model_profiles)").fetchall()
+            }
+            if "origin" not in profile_columns:
+                database.execute("ALTER TABLE model_profiles ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+
+    def configuration_value(self, key: str) -> str | None:
+        if not self.path.exists():
+            return None
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT value FROM configuration_metadata WHERE key = ?", (key,)
+            ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def set_configuration_value(self, key: str, value: str) -> None:
+        updated_at = datetime.now(UTC).isoformat()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO configuration_metadata (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (key, value, updated_at),
+            )
 
     def deployment_display_names(self) -> dict[str, str]:
         if not self.path.exists():
@@ -123,6 +153,10 @@ class CompatibilityStore:
                 "display_name = excluded.display_name, updated_at = excluded.updated_at",
                 (deployment_id, display_name, updated_at),
             )
+
+    def delete_deployment_display_name(self, deployment_id: str) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute("DELETE FROM deployment_metadata WHERE deployment_id = ?", (deployment_id,))
 
     def list_demo_sets(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -337,15 +371,22 @@ class CompatibilityStore:
                 profiles.append(document)
         return profiles
 
-    def save_model_profile(self, profile: Mapping[str, Any]) -> None:
+    def model_profile_origins(self) -> dict[str, str]:
+        if not self.path.exists():
+            return {}
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute("SELECT id, origin FROM model_profiles").fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def save_model_profile(self, profile: Mapping[str, Any], *, origin: str = "local") -> None:
         profile_id = str(profile["id"])
         updated_at = datetime.now(UTC).isoformat()
         with sqlite3.connect(self.path) as database:
             database.execute(
-                "INSERT INTO model_profiles (id, document_json, updated_at) VALUES (?, ?, ?) "
+                "INSERT INTO model_profiles (id, document_json, updated_at, origin) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET document_json = excluded.document_json, "
                 "updated_at = excluded.updated_at",
-                (profile_id, json.dumps(dict(profile), sort_keys=True), updated_at),
+                (profile_id, json.dumps(dict(profile), sort_keys=True), updated_at, origin),
             )
 
     def delete_model_profile(self, profile_id: str) -> bool:

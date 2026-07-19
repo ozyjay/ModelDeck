@@ -334,7 +334,7 @@ def test_scenechat_gateway_translation_uses_exact_model_and_internal_credential(
 
 
 @pytest.mark.asyncio
-async def test_dedicated_vision_route_uses_scenechat_alias_and_timeout(monkeypatch) -> None:
+async def test_dedicated_vision_route_uses_scenechat_alias_and_timeout(monkeypatch, tmp_path) -> None:
     captured = {}
 
     async def capture_proxy(request, routes, path, default_alias, *, timeout_seconds):
@@ -349,7 +349,13 @@ async def test_dedicated_vision_route_uses_scenechat_alias_and_timeout(monkeypat
         return JSONResponse({"ok": True})
 
     monkeypatch.setattr(gateway_module, "proxy_request", capture_proxy)
-    app = create_gateway_app(settings=Settings(scenechat_timeout_seconds=81))
+    app = create_gateway_app(
+        settings=Settings(
+            data_dir=tmp_path / "data",
+            log_dir=tmp_path / "logs",
+            scenechat_timeout_seconds=81,
+        )
+    )
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/v1/vision/analyse", json={})
