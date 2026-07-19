@@ -30,25 +30,28 @@ both contracts. A text-diffusion deployment cannot serve either route.
 3. Open **Model library** and configure the recognised model artefact once. ModelDeck
    creates a deployment and its corresponding stopped worker.
 4. Open **Demo routes**, select the required demo set, then choose **Edit**.
-5. Create or select a route for each demo requirement. Give every route:
+5. Add or rename demos as required. A demo's identifier is the stable internal reference
+   used by its routes, while its display name is operator-facing. Renaming an identifier
+   in the editor updates every route in that draft that refers to it.
+6. Create or select a route for each demo requirement. Give every route:
 
    - a unique public model alias;
    - the adapter expected by the demo client;
    - an explicit qualification and fallback policy;
    - one or more ordered provider deployments.
 
-6. Add the same deployment as a provider on every compatible route that should share it.
+7. Add the same deployment as a provider on every compatible route that should share it.
    Provider priority is local to each route, so the deployment can be primary for one
    route and a fallback for another.
-7. Save the draft as a new revision, then run **Validate**. Resolve every family,
+8. Save the draft as a new revision, then run **Validate**. Resolve every family,
    capability, cache-policy or evidence error before continuing.
-8. Run **Plan activation**. The plan reports required worker transitions but does not
+9. Run **Plan activation**. The plan reports required worker transitions but does not
    start or stop anything.
-9. Choose **Activate routing**. Activation atomically changes gateway routing; it still
+10. Choose **Activate routing**. Activation atomically changes gateway routing; it still
    does not load a model.
-10. Open **Workers** and start the shared deployment once. Every compatible active route
+11. Open **Workers** and start the shared deployment once. Every compatible active route
     can then use that one worker process.
-11. Return to **Demo routes**, choose **Check readiness** for each route, then run
+12. Return to **Demo routes**, choose **Check readiness** for each route, then run
     **Smoke route** where supported. Speech routes require an interactive WebSocket client.
 
 ## Change or remove a deployment safely

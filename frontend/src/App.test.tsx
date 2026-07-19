@@ -448,9 +448,16 @@ describe("ModelDeck operator console", () => {
     expect(screen.getByRole("heading", { name: "Fast chat" })).toBeInTheDocument();
     expect(screen.getByText(worker.id)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Identifier for Chat demo"), { target: { value: "visitor-chat" } });
     fireEvent.change(screen.getByLabelText("Public model alias"), { target: { value: "demo-chat" } });
     fireEvent.click(screen.getByRole("button", { name: "Save new revision" }));
     expect(await screen.findByText("Saved Open Day demos revision 2.")).toBeInTheDocument();
+    const revisionRequest = vi.mocked(fetch).mock.calls.find(
+      ([path, init]) => String(path) === "/api/demo-sets/open-day-demos" && init?.method === "PUT",
+    );
+    const revisionPayload = JSON.parse(String(revisionRequest?.[1]?.body));
+    expect(revisionPayload.demos[0].id).toBe("visitor-chat");
+    expect(revisionPayload.routes[0].demo_id).toBe("visitor-chat");
 
     fireEvent.click(screen.getByRole("button", { name: "Validate" }));
     expect(await screen.findByText("Valid route configuration")).toBeInTheDocument();

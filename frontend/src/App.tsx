@@ -725,6 +725,14 @@ function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, save, 
   cancel: () => void;
 }) {
   const updateRoute = (index: number, updates: Partial<DemoSet["routes"][number]>) => setDraft({ ...draft, routes: draft.routes.map((route, routeIndex) => routeIndex === index ? { ...route, ...updates } : route) });
+  const updateDemoIdentifier = (index: number, nextId: string) => {
+    const previousId = draft.demos[index].id;
+    setDraft({
+      ...draft,
+      demos: draft.demos.map((demo, demoIndex) => demoIndex === index ? { ...demo, id: nextId } : demo),
+      routes: draft.routes.map((route) => route.demo_id === previousId ? { ...route, demo_id: nextId } : route),
+    });
+  };
   const addDemo = () => {
     const index = nextAvailableSuffix("demo", draft.demos.map((demo) => demo.id));
     setDraft({ ...draft, demos: [...draft.demos, { id: `demo-${index}`, display_name: `Demo ${index}` }] });
@@ -741,7 +749,16 @@ function DemoSetEditor({ draft, setDraft, deployments, adapters, pending, save, 
       <label className="wide-field">Description<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
     </div>
     <div className="editor-section-heading"><h3>Demos</h3><button type="button" className="secondary" onClick={addDemo}>Add demo</button></div>
-    <div className="demo-editor-list">{draft.demos.map((demo, index) => <div key={demo.id}><code>{demo.id}</code><input aria-label={`Display name for ${demo.id}`} value={demo.display_name} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item, demoIndex) => demoIndex === index ? { ...item, display_name: event.target.value } : item) })} /><button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, demos: draft.demos.filter((_, demoIndex) => demoIndex !== index), routes: draft.routes.filter((route) => route.demo_id !== demo.id) })}>Remove</button></div>)}</div>
+    <div className="demo-editor-list">{draft.demos.map((demo, index) => <div key={`demo-${index}`}>
+      <label>Identifier<input className="identifier-input" required pattern="[a-z][a-z0-9-]{1,62}" aria-label={`Identifier for ${demo.display_name}`} value={demo.id} onChange={(event) => {
+        const nextId = event.target.value;
+        const duplicate = draft.demos.some((item, demoIndex) => demoIndex !== index && item.id === nextId);
+        event.currentTarget.setCustomValidity(duplicate ? "Demo identifiers must be unique." : "");
+        updateDemoIdentifier(index, nextId);
+      }} /></label>
+      <label>Display name<input required maxLength={80} aria-label={`Display name for ${demo.id}`} value={demo.display_name} onChange={(event) => setDraft({ ...draft, demos: draft.demos.map((item, demoIndex) => demoIndex === index ? { ...item, display_name: event.target.value } : item) })} /></label>
+      <button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, demos: draft.demos.filter((_, demoIndex) => demoIndex !== index), routes: draft.routes.filter((route) => route.demo_id !== demo.id) })}>Remove</button>
+    </div>)}</div>
     <div className="editor-section-heading"><h3>Route contracts</h3><button type="button" className="secondary" disabled={!draft.demos.length} onClick={addRoute}>Add route</button></div>
     <div className="route-editor-list">{draft.routes.map((route, routeIndex) => <article className="route-editor" key={route.id}>
       <div className="route-editor-title"><strong>{route.id}</strong><button type="button" className="secondary danger" onClick={() => setDraft({ ...draft, routes: draft.routes.filter((_, index) => index !== routeIndex) })}>Remove route</button></div>
