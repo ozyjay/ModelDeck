@@ -54,11 +54,17 @@ The recorded Q4 DiffusionGemma run lasted 1,802.171 seconds and completed 111 ga
 requests with zero failures. Peak whole-device GTT use was 21.8561 GiB, post-stop GTT
 recovered below its baseline within 1.003 seconds, and process exit was confirmed.
 
-The fixed selected-preset burn-in is prepared as
+The fixed selected-preset burn-in is
 `pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1`. It runs the
 same accepted Q4 workload for two hours and writes distinct privacy-safe reports. Use
 `-ValidateOnly` to check the fixed profile, duration, and output paths without starting
 services or the worker. This gate does not use the mock-only `open-day-minimum` API preset.
+
+The recorded two-hour Q4 DiffusionGemma burn-in lasted 7,207.125 seconds and completed 444
+gateway requests with zero failures. Median request time was 11.231349 seconds and p95 was
+11.244656 seconds. Peak whole-device GTT use was 21.242 GiB, post-stop GTT recovered to
+within 0.024 GiB of baseline in 0.002 seconds, and process exit was confirmed. The report
+is `var/benchmarks/diffusiongemma-selected-preset-burn-in-20260719T023716Z.json`.
 
 The cross-profile physical performance suite is
 `pwsh -NoProfile -File scripts/benchmark_models.ps1`. It runs one excluded benchmark

@@ -62,7 +62,9 @@ mode. Never change precision, attention implementation, model, or provider autom
   service is absent; it never terminates an unknown process merely because it owns a port.
 
 Logs are under `var/log`. They must not contain visitor prompts or generated content.
-Before final readiness, pin every dependency/model revision, run
-`pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1`, rehearse with
-another operator, and document real preset transitions. Validate the fixed two-hour gate
-without starting hardware first by adding `-ValidateOnly`.
+The fixed Q4 workload passed its two-hour burn-in on 19 July 2026 with 444 requests and no
+failures. Before final readiness, pin every dependency and model revision, rehearse with
+another operator, and document real management-preset transitions. Re-run
+`pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1` only when the
+hardware or pinned inference stack changes materially. Validate its configuration without
+starting hardware by adding `-ValidateOnly`.

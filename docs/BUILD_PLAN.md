@@ -67,9 +67,10 @@ served by FastAPI; Node.js remains a build-time dependency only.
    behind the native job/frame API, draft frames, seeded generation, cancellation, mock
    fallback, and evidence-gated HSA preload. The default self-contained Q4 worker passed
    its physical smoke, comparative release gate, and 30-minute stability and whole-device
-   memory-recovery gate; the BF16 worker remains the explicit compatibility and quality
-   baseline. The selected-preset two-hour burn-in remains a separate Open Day gate rather
-   than an implementation blocker.
+   memory-recovery gate and its fixed-workload two-hour burn-in; the BF16 worker remains
+   the explicit compatibility and quality baseline. Real management-preset transitions
+   and operator rehearsal remain separate Open Day gates rather than implementation
+   blockers.
 5. **Scheduler and compatibility execution:** measured memory/reserve/conflicts, lifecycle
    classes, preset transition approval, append-only tests.
 6. **Gateway completion:** streaming proxy, cancellation, aliases and explicit local
@@ -116,7 +117,6 @@ structured no-cloud gateway failure.
 ## Unresolved assumptions
 
 - The approved project-local PyTorch/ROCm 7.2 wheel set and exact Transformers version.
-- The final result of the Q4 DiffusionGemma selected-preset two-hour burn-in.
 - Whether HuggingFacePull will expose transport-requested/used evidence through its API or
   a read-only marker.
 - Final shared Open Day port registry and compatibility path for existing `8600` clients.
