@@ -462,6 +462,8 @@ describe("ModelDeck operator console", () => {
     expect(screen.getByRole("heading", { name: "Fast chat" })).toBeInTheDocument();
     expect(screen.getByText(worker.id)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Lower priorities are tried first. Equal priorities are ordered by deployment ID.")).toBeInTheDocument();
+    expect(screen.getByLabelText(`Priority for ${worker.id}`)).toHaveValue(10);
     fireEvent.change(screen.getByLabelText("Identifier for Chat demo"), { target: { value: "visitor-chat" } });
     fireEvent.change(screen.getByLabelText("Public model alias"), { target: { value: "demo-chat" } });
     fireEvent.click(screen.getByRole("button", { name: "Save new revision" }));

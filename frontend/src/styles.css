@@ -146,8 +146,10 @@ nav { display: grid; gap: 0.3rem; }
 .demo-set-editor textarea { min-height: 5rem; resize: vertical; }
 .editor-section-heading { align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--line-soft); }
 .route-editor { display: grid; gap: 0.8rem; }
+.provider-priority-help { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.78rem; font-weight: 400; text-transform: none; }
 .provider-editor-list select { min-width: 0; flex: 1 1 auto; }
-.provider-editor-list input { width: 6rem; flex: 0 0 auto; }
+.provider-editor-list .provider-priority { width: 7rem; flex: 0 0 auto; }
+.provider-editor-list .provider-priority input { width: 100%; }
 .provider-selection-panel { border-color: #315744; }
 .provider-selection-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.8rem; margin: 1rem 0; }
 .provider-selection-controls label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.82rem; }
@@ -282,6 +284,7 @@ select { min-width: 250px; padding: 0.62rem 2.4rem 0.62rem 0.7rem; border: 1px s
   .route-rehearsal, .revision-history article { align-items: stretch; flex-direction: column; }
   .demo-route-heading code { max-width: 100%; }
   .provider-editor-list > div, .demo-editor-list > div { align-items: stretch; flex-direction: column; }
+  .provider-editor-list .provider-priority { width: 100%; }
   .configured-runtime-heading, .deployment-usage li { align-items: stretch; flex-direction: column; }
   .provider-selection-controls { grid-template-columns: 1fr; }
   .evidence-grid { grid-template-columns: 1fr; }
