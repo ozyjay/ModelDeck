@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -212,7 +212,40 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("textbox", { name: "Route Label" })).toHaveValue("Token trace");
     expect(screen.getByRole("textbox", { name: "API Model ID" })).toHaveValue("qwen-0-5b");
     expect(screen.getByText(/Sent by clients in the/)).toHaveTextContent("Sent by clients in the model field.");
+    const demo = screen.getByRole("article", { name: "Demo Token Trails" });
+    expect(within(demo).getByRole("checkbox", { name: /Token trace/ })).toBeChecked();
+    expect(screen.getByRole("heading", { name: "Shared Route Definitions" })).toBeInTheDocument();
+    expect(screen.getByText("Every shared Route is used by at least one Demo.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
+  });
+
+  it("shows Routes outside every Demo as unassigned until they are included", async () => {
+    const unassignedRoute = {
+      ...eventRecord.definition.routes[0],
+      id: "f50dcfc1-b0b5-460c-94bd-bfc0933145fd",
+      display_name: "Unassigned experiment",
+      public_name: "experimental-model",
+    };
+    const record = {
+      ...eventRecord,
+      definition: {
+        ...eventRecord.definition,
+        routes: [...eventRecord.definition.routes, unassignedRoute],
+      },
+    };
+    const payloads = responses(true);
+    payloads["/api/events"] = { events: [record] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const unassigned = await screen.findByRole("region", { name: "Unassigned Routes" });
+    expect(within(unassigned).getByText("Unassigned experiment")).toBeInTheDocument();
+    const demo = screen.getByRole("article", { name: "Demo Token Trails" });
+    fireEvent.click(within(demo).getByRole("checkbox", { name: /Unassigned experiment/ }));
+
+    expect(within(unassigned).queryByText("Unassigned experiment")).not.toBeInTheDocument();
+    expect(within(unassigned).getByText("Every shared Route is used by at least one Demo.")).toBeInTheDocument();
   });
 
   it("preserves Event description input while autosaving", async () => {

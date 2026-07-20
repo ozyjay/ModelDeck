@@ -151,6 +151,24 @@ nav { display: grid; gap: 0.3rem; }
 .demo-editor-list > div { align-items: end; }
 .demo-editor-list label { flex: 1; min-width: 0; }
 .demo-editor-list .identifier-input { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.demo-editor { border-color: #315744; background: #101a1a; }
+.demo-route-section { min-width: 0; padding: 0.8rem; border: 1px solid #294439; border-radius: 0.65rem; background: #0c1617; }
+.demo-route-section h4 { margin: 0 0 0.65rem; }
+.demo-route-reference-list { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 0.55rem; }
+.event-editor .demo-route-reference { min-width: 0; display: flex; align-items: center; gap: 0.65rem; padding: 0.7rem; border: 1px solid var(--line); border-radius: 0.55rem; background: #111b27; color: var(--muted); text-transform: none; cursor: pointer; }
+.event-editor .demo-route-reference.selected { border-color: #3f725c; background: #14281f; color: var(--text); }
+.demo-route-reference input { width: auto; flex: 0 0 auto; }
+.demo-route-reference span { min-width: 0; }
+.demo-route-reference strong, .demo-route-reference code { display: block; overflow-wrap: anywhere; }
+.demo-route-reference code { margin-top: 0.18rem; color: var(--muted); font-size: 0.72rem; }
+.unassigned-routes { min-width: 0; padding: 0.85rem; border: 1px dashed #3b4a5e; border-radius: 0.7rem; background: #0d1520; }
+.unassigned-routes > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.unassigned-routes h4, .unassigned-routes p { margin: 0; }
+.unassigned-routes small { color: var(--muted); }
+.compact-route-reference-list { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 0.5rem; margin-top: 0.7rem; }
+.compact-route-reference { min-width: 0; padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.5rem; background: #111b27; }
+.compact-route-reference strong, .compact-route-reference code { display: block; overflow-wrap: anywhere; }
+.compact-route-reference code { margin-top: 0.18rem; color: var(--muted); font-size: 0.72rem; }
 .route-provider-list strong, .route-provider-list small { display: block; }
 .route-provider-list small { margin-top: 0.15rem; color: var(--muted); overflow-wrap: anywhere; }
 .route-rehearsal { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0.85rem 0; padding: 0.75rem; border: 1px solid var(--line-soft); border-radius: 0.7rem; background: #0d1621; }
