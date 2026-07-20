@@ -214,7 +214,8 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText(/Sent by clients in the/)).toHaveTextContent("Sent by clients in the model field.");
     const demo = screen.getByRole("article", { name: "Demo Token Trails" });
     expect(within(demo).getByRole("checkbox", { name: /Token trace/ })).toBeChecked();
-    expect(screen.getByRole("heading", { name: "Shared Route Definitions" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Routes" })).toBeInTheDocument();
+    expect(screen.getByText("Configure the Routes available to this Event. A Route can be used by multiple Demos or remain unassigned.")).toBeInTheDocument();
     expect(screen.getByText("Every shared Route is used by at least one Demo.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
   });
