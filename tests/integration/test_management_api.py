@@ -226,16 +226,41 @@ async def test_scenechat_worker_uses_trusted_runtime_creation_defaults(tmp_path,
                     "runtime_template_id": "scenechat-gemma4",
                 },
             )
+            created_140 = await client.post(
+                "/api/workers",
+                json={
+                    "name": "SceneChat Gemma 4 E2B 140",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "scenechat-gemma4",
+                    "visual_token_budget": 140,
+                },
+            )
+            rejected_budget = await client.post(
+                "/api/workers",
+                json={
+                    "name": "SceneChat invalid budget",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "scenechat-gemma4",
+                    "visual_token_budget": 141,
+                },
+            )
 
     template = next(item for item in templates.json()["templates"] if item["id"] == "scenechat-gemma4")
     assert template["dtype"] == "bfloat16"
     assert template["settings"]["context_length"] == 8192
     assert template["settings"]["maximum_new_tokens"] == 512
+    assert template["settings"]["visual_token_budget"] == 280
     assert created.status_code == 201, created.text
     payload = created.json()
     assert payload["dtype"] == "bfloat16"
     assert payload["settings"]["context_length"] == 8192
     assert payload["settings"]["maximum_new_tokens"] == 512
+    assert payload["settings"]["visual_token_budget"] == 280
+    assert created_140.status_code == 201, created_140.text
+    assert created_140.json()["settings"]["visual_token_budget"] == 140
+    assert rejected_budget.status_code == 422
 
 
 @pytest.mark.asyncio

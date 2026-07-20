@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.registry import (
     RuntimeTemplateRegistration,
     runtime_template_registrations,
@@ -27,6 +28,7 @@ class LocalProfileRequest(BaseModel):
     context_length: int = Field(default=2048, ge=256, le=32768)
     maximum_new_tokens: int = Field(default=128, ge=1, le=512)
     maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
+    visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     runtime_template_id: str | None = Field(
         default=None,
@@ -77,6 +79,7 @@ def create_local_profile(
         settings["context_length"] = request.context_length
     elif template.generation_family.value == "vision-language":
         settings["context_length"] = request.context_length
+        settings["visual_token_budget"] = request.visual_token_budget
     elif template.generation_family.value == "text-diffusion":
         settings["maximum_denoising_steps"] = request.maximum_denoising_steps
     if template.cache_setting == "artifact_path" and artifact_path is None:

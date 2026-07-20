@@ -95,6 +95,7 @@ def test_scenechat_runtime_declares_safe_creation_defaults() -> None:
     assert template.dtype == "bfloat16"
     assert template.settings["context_length"] == 8192
     assert template.settings["maximum_new_tokens"] == 512
+    assert template.settings["visual_token_budget"] == 280
 
 
 def test_unknown_runtime_template_cannot_create_a_profile(tmp_path) -> None:

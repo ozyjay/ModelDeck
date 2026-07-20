@@ -159,6 +159,8 @@ def test_local_family_profiles_use_dedicated_allowlisted_workers(
     assert profile.lifecycle == lifecycle
     assert profile.trust_remote_code is False
     assert profile.settings["cache_root"] == str(tmp_path)
+    if family == "vision-language":
+        assert profile.settings["visual_token_budget"] == 280
 
 
 def test_local_q4_profile_separates_release_and_base_model_identity(tmp_path) -> None:

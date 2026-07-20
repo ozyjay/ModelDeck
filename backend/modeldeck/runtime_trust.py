@@ -58,6 +58,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                     "context_length",
                     "maximum_new_tokens",
                     "generation_timeout_seconds",
+                    "visual_token_budget",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "hardware_verification_required",

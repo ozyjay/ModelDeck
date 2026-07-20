@@ -134,14 +134,29 @@ nav { display: grid; gap: 0.3rem; }
 .event-actions { margin-bottom: 1rem; }
 .active-gateway-routes { border-color: #315744; }
 .active-route-table-wrap { overflow-x: auto; }
-.active-route-table { width: 100%; min-width: 680px; border-collapse: collapse; }
+.active-route-table { width: 100%; min-width: 960px; border-collapse: collapse; }
 .active-route-table th { padding: 0.55rem 0.7rem; color: var(--muted); font-size: 0.72rem; text-align: left; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); }
-.active-route-table td { padding: 0.7rem; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+.active-route-table td { padding: 0.8rem 0.7rem; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+.active-route-table tr.route-ready { background: #10201955; }
+.active-route-table tr.route-unavailable { background: #211b1055; }
 .active-route-table tbody tr:last-child td { border-bottom: 0; }
 .active-route-table td > code { color: var(--blue); font-size: 0.9rem; }
 .active-route-table td > strong, .active-route-table td > small { display: block; }
 .active-route-table td > small { margin-top: 0.15rem; color: var(--muted); overflow-wrap: anywhere; }
-.active-worker-chain { display: grid; gap: 0.4rem; }
+.route-readiness { min-width: 138px; display: flex; align-items: center; gap: 0.55rem; padding: 0.55rem 0.65rem; border: 1px solid; border-radius: 0.6rem; }
+.route-readiness.ready { color: #b7f7df; border-color: #285844; background: #0d211a; }
+.route-readiness.unavailable { color: #ffe0ac; border-color: #6a5431; background: #2a2114; }
+.route-readiness strong, .route-readiness small { display: block; }
+.route-readiness strong { font-size: 0.82rem; }
+.route-readiness small { margin-top: 0.12rem; color: var(--muted); font-size: 0.68rem; white-space: nowrap; }
+.active-worker-chain { min-width: 230px; display: grid; gap: 0.45rem; }
+.active-worker-item { display: flex; align-items: center; justify-content: space-between; gap: 0.65rem; padding: 0.55rem 0.6rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; background: #0c141e; }
+.active-worker-item > span { min-width: 0; }
+.active-worker-item small, .active-worker-item strong { display: block; }
+.active-worker-item small { color: var(--muted); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.active-worker-item strong { margin-top: 0.15rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.effective-worker { font-weight: 700; }
+.effective-worker.unavailable { color: #ffe0ac; }
 .demo-route-list, .route-editor-list { display: grid; gap: 0.8rem; }
 .demo-route-card, .route-editor { width: 100%; max-width: 100%; padding: 1rem; border: 1px solid var(--line-soft); border-radius: 0.75rem; background: #0e1621; }
 .worker-order-list, .demo-editor-list { display: grid; gap: 0.5rem; }
@@ -236,6 +251,18 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .model-main h3 { margin: 0; overflow-wrap: anywhere; }
 .model-main p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
 .model-main .model-capabilities { margin-top: 0.5rem; }
+.model-worker-summary { margin-top: 0.8rem; padding: 0.75rem; border: 1px solid var(--line-soft); border-radius: 0.65rem; background: #0b121b; }
+.model-worker-summary.has-workers { border-color: #315744; background: #101e1a; }
+.model-worker-summary-heading, .model-worker-item { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.model-worker-summary-heading > strong { font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.model-worker-summary-heading > span { color: var(--muted); font-size: 0.75rem; }
+.model-worker-summary > p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.8rem; }
+.model-worker-list { display: grid; gap: 0.45rem; margin-top: 0.6rem; }
+.model-worker-item { padding: 0.6rem 0.65rem; border: 1px solid #294439; border-radius: 0.55rem; background: #0d1816; }
+.model-worker-item > div { min-width: 0; }
+.model-worker-item strong, .model-worker-item small { display: block; }
+.model-worker-item strong { overflow-wrap: anywhere; }
+.model-worker-item small { margin-top: 0.18rem; color: var(--muted); font-size: 0.75rem; }
 .model-stage { margin: 0.65rem 0; color: #c5d0df; font-size: 0.82rem; line-height: 1.45; }
 .model-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
 .model-actions span { color: var(--muted); font-size: 0.77rem; }

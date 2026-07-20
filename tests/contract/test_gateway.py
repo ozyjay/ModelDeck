@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -10,11 +12,13 @@ from modeldeck.domain import WorkerDefinition
 from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
     invalid_trace_metadata,
+    proxy_request,
     route_candidates,
     trace_token_metadata_error,
     upstream_headers,
     upstream_model,
 )
+from starlette.requests import Request
 
 
 def worker() -> WorkerDefinition:
@@ -139,3 +143,104 @@ def test_route_candidates_accept_only_public_route_or_vision_model_identity() ->
     routes = {"visitor-trace": [profile]}
     assert route_candidates(routes, "visitor-trace") == [profile]
     assert route_candidates(routes, profile.model_id) is None
+
+
+def gateway_request(payload: dict) -> Request:
+    encoded = json.dumps(payload).encode()
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": encoded, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    app = SimpleNamespace(state=SimpleNamespace(last_request_diagnostics=None))
+    return Request({"type": "http", "method": "POST", "headers": [], "app": app}, receive)
+
+
+class FakeGatewayClient:
+    def __init__(self, health: dict, *, timeout: bool = False) -> None:
+        self.health = health
+        self.timeout = timeout
+
+    async def get(self, _url: str):
+        return SimpleNamespace(
+            json=lambda: self.health,
+            is_success=True,
+        )
+
+    def build_request(self, method: str, url: str, **kwargs):
+        return httpx.Request(method, url, **kwargs)
+
+    async def send(self, request: httpx.Request, *, stream: bool = False):
+        if self.timeout:
+            raise httpx.ReadTimeout("benchmark deadline", request=request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_gateway_distinguishes_busy_worker_from_unavailable(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "generation_family": "vision-language",
+                "capabilities": {"image_input": True, "structured_output": True},
+            }
+        )
+        .to_profile()
+    )
+    fake = FakeGatewayClient({"ready": False, "busy": True})
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request({"model": "scenechat-vision"})
+
+    response = await proxy_request(
+        request,
+        {"scenechat-vision": [profile]},
+        "/v1/chat/completions",
+        None,
+    )
+
+    assert response.status_code == 429
+    assert json.loads(response.body)["error"]["code"] == "worker_busy"
+    assert request.app.state.last_request_diagnostics["error_code"] == "worker_busy"
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "generation_family": "vision-language",
+                "capabilities": {"image_input": True, "structured_output": True},
+            }
+        )
+        .to_profile()
+    )
+    fake = FakeGatewayClient({"ready": True, "busy": False}, timeout=True)
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request({"model": "scenechat-vision"})
+
+    response = await proxy_request(
+        request,
+        {"scenechat-vision": [profile]},
+        "/v1/chat/completions",
+        None,
+        timeout_seconds=120,
+    )
+
+    assert response.status_code == 504
+    assert json.loads(response.body)["error"]["code"] == "gateway_timeout"
+    diagnostic = request.app.state.last_request_diagnostics
+    assert diagnostic["error_code"] == "gateway_timeout"
+    assert diagnostic["total_gateway_seconds"] >= 0

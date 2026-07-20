@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.domain import EventDefinition, WorkerDefinition, routing_snapshot, validate_event
+from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.hardware import probe_environment
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
@@ -29,6 +30,7 @@ class WorkerCreateRequest(BaseModel):
     context_length: int | None = Field(default=None, ge=256, le=32768)
     maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
     maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
+    visual_token_budget: VisualTokenBudget | None = None
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
@@ -48,6 +50,7 @@ class WorkerReplacementRequest(BaseModel):
     context_length: int | None = Field(default=None, ge=256, le=32768)
     maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
     maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
+    visual_token_budget: VisualTokenBudget | None = None
     rebind_drafts: bool = True
 
 
@@ -150,6 +153,12 @@ def create_v2_router() -> APIRouter:
             or _integer_template_default(selected.template.settings, "maximum_new_tokens", 128),
             maximum_denoising_steps=payload.maximum_denoising_steps
             or _integer_template_default(selected.template.settings, "maximum_denoising_steps", 24),
+            visual_token_budget=payload.visual_token_budget
+            or _integer_template_default(
+                selected.template.settings,
+                "visual_token_budget",
+                DEFAULT_VISUAL_TOKEN_BUDGET,
+            ),
             artifact_id=payload.artifact_id,
             runtime_template_id=payload.runtime_template_id,
         )
@@ -225,6 +234,8 @@ def create_v2_router() -> APIRouter:
                 or _worker_integer_setting(definition, "maximum_new_tokens"),
                 maximum_denoising_steps=payload.maximum_denoising_steps
                 or _worker_integer_setting(definition, "maximum_denoising_steps"),
+                visual_token_budget=payload.visual_token_budget
+                or _worker_integer_setting(definition, "visual_token_budget"),
                 artifact_id=artifact_id,
                 runtime_template_id=definition.runtime_template_id,
             ),

@@ -23,6 +23,7 @@ from modeldeck.workers.scenechat_worker import (
     GenerationResult,
     SceneChatRequestError,
     TransformersSceneChatEngine,
+    _configure_image_processor,
     _decode_image,
     _run_generation,
     create_app,
@@ -234,6 +235,18 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
     assert capabilities.json()["structured_output"] is True
     assert capabilities.json()["streaming"] is False
     assert metrics.json()["successful_requests"] == 1
+    assert metrics.json()["effective_settings"] == {
+        "visual_token_budget": 280,
+        "image_patch_size": 16,
+        "image_pooling_kernel_size": 3,
+    }
+    diagnostic = metrics.json()["last_request"]
+    assert diagnostic["input_width"] == 32
+    assert diagnostic["input_height"] == 24
+    assert diagnostic["completion_tokens"] == 42
+    assert diagnostic["outcome"] == "success"
+    assert "choices" not in diagnostic
+    assert "messages" not in diagnostic
     assert engine.closed is True
 
 
@@ -679,6 +692,8 @@ async def test_concurrent_request_is_rejected_without_queueing_and_slot_recovers
     assert second.status_code == 429
     assert second.json()["error"]["code"] == "worker_busy"
     assert health.json()["state"] == "busy"
+    assert health.json()["ready"] is False
+    assert health.json()["busy"] is True
     assert first.status_code == 200
     assert recovered.json()["state"] == "ready"
 
@@ -713,6 +728,47 @@ async def test_timeout_cancels_generation_and_releases_the_slot() -> None:
     assert response.json()["error"]["message"] == "The local generation exceeded 0.05 seconds."
     assert metrics.json()["busy"] is False
     assert metrics.json()["timed_out_requests"] == 1
+    assert metrics.json()["last_request"]["error_code"] == "generation_timeout"
+
+
+def test_visual_token_budget_is_allowlisted_and_applied_to_processor() -> None:
+    processor = SimpleNamespace(patch_size=16, pooling_kernel_size=3, max_soft_tokens=280)
+
+    _configure_image_processor(processor, 140)
+
+    assert processor.max_soft_tokens == 140
+    with pytest.raises(ValueError, match="visual_token_budget"):
+        EngineConfig(model_id="google/gemma-4-12B-it", revision="pinned", visual_token_budget=141)
+    with pytest.raises(RuntimeError, match="patch size 16"):
+        _configure_image_processor(
+            SimpleNamespace(patch_size=14, pooling_kernel_size=3, max_soft_tokens=280),
+            280,
+        )
+
+
+@pytest.mark.asyncio
+async def test_request_cannot_override_trusted_visual_token_budget() -> None:
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(model_id="google/gemma-4-E2B-it", revision="pinned"),
+        engine=FakeVisionEngine(),
+    )
+    payload = request_payload()
+    payload["visual_token_budget"] = 140
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json=payload,
+            )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,29 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText("ModelDeck starts empty: create a Worker from a discovered Model, create an Event and Route, then publish it.")).toBeInTheDocument();
   });
 
+  it("makes Live Route and Worker readiness independently scannable", async () => {
+    const payloads = responses(true);
+    payloads["/api/live"] = {
+      active_event: { id: eventRecord.definition.id, name: eventRecord.definition.name, revision: 1 },
+      routes: [{
+        ...eventRecord.definition.routes[0],
+        workers: [worker],
+        effective_worker: null,
+        ready: false,
+      }],
+    };
+    mockFetch(payloads);
+    render(<App />);
+
+    const routeStatus = await screen.findByRole("status", { name: "Token trace Route status" });
+    expect(within(routeStatus).getByText("Not serving")).toBeInTheDocument();
+    expect(within(routeStatus).getByText("Start a Worker")).toBeInTheDocument();
+    const primary = screen.getByLabelText("Primary Worker Qwen token trace");
+    expect(within(primary).getByText("Primary")).toBeInTheDocument();
+    expect(within(primary).getByText("stopped")).toBeInTheDocument();
+    expect(screen.getByText("No ready Worker")).toHaveClass("unavailable");
+  });
+
   it("shows editable Worker names without exposing an alias concept", async () => {
     mockFetch(responses(true));
     render(<App />);
@@ -189,6 +212,37 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("heading", { name: "Qwen/Qwen2.5-1.5B-Instruct" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Example/Vision-Model" })).not.toBeInTheDocument();
     expect(screen.getByText("1 of 2 cached")).toBeInTheDocument();
+  });
+
+  it("shows configured Worker identities and states prominently on Model cards", async () => {
+    const sceneWorker: Worker = {
+      ...worker,
+      id: "f5eaeff6-7142-4bbb-b1ba-869549602cd2",
+      name: "SceneChat Gemma visual 140",
+      model_id: "google/gemma-4-12B-it",
+      generation_family: "vision-language",
+      runtime: "vision-language-transformers-rocm",
+      settings: { visual_token_budget: 140 },
+    };
+    const model = {
+      ...catalogueModel("google/gemma-4-12B-it", ["image-input", "structured-output"]),
+      generation_family_hint: "vision-language",
+      configuration_support: "scenechat-gemma4",
+      worker_count: 1,
+    };
+    const payloads = responses();
+    payloads["/api/workers"] = [sceneWorker];
+    payloads["/api/catalogue"] = { models: [model], downloads_started: false };
+    mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    const summary = screen.getByRole("region", { name: "Workers for google/gemma-4-12B-it" });
+    expect(within(summary).getByText("Configured Workers")).toBeInTheDocument();
+    expect(within(summary).getByText("1 configured")).toBeInTheDocument();
+    expect(within(summary).getByText("SceneChat Gemma visual 140")).toBeInTheDocument();
+    expect(within(summary).getByText("stopped")).toBeInTheDocument();
+    expect(within(summary).getByText(/140 visual tokens/)).toBeInTheDocument();
   });
 
   it("explains and disables Worker creation while Open Day mode is active", async () => {
@@ -276,7 +330,7 @@ describe("ModelDeck v2 operator console", () => {
       implementation: "vision-language-transformers-rocm", generation_family: "vision-language",
       cache_setting: "cache_root", uses_base_model_identity: false,
       lifecycle: "on-demand", dtype: "bfloat16",
-      settings: { context_length: 8192, maximum_new_tokens: 512 },
+      settings: { context_length: 8192, maximum_new_tokens: 512, visual_token_budget: 280 },
       package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
       publisher: "ModelDeck", source: "packaged", digest: "digest",
     }] };
@@ -292,8 +346,10 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("combobox", { name: "Lifecycle" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "Context length" })).toHaveValue(8192);
     expect(screen.getByRole("spinbutton", { name: "Maximum output" })).toHaveValue(512);
+    expect(screen.getByRole("combobox", { name: "Visual token budget" })).toHaveValue("280");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Context length" }), { target: { value: "4096" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Maximum output" }), { target: { value: "256" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Visual token budget" }), { target: { value: "140" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
 
     await waitFor(() => {
@@ -309,6 +365,7 @@ describe("ModelDeck v2 operator console", () => {
         lifecycle: "on-demand",
         context_length: 4096,
         maximum_new_tokens: 256,
+        visual_token_budget: 140,
       });
     });
   });

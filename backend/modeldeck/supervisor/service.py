@@ -442,6 +442,8 @@ def _vision_language_launch(
             str(profile.settings.get("maximum_new_tokens", 512)),
             "--generation-timeout-seconds",
             str(profile.settings.get("generation_timeout_seconds", 60)),
+            "--visual-token-budget",
+            str(profile.settings.get("visual_token_budget", 280)),
         ],
         environment=environment,
     )

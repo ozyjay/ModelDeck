@@ -33,6 +33,13 @@ from modeldeck.contracts.scenechat import (
     extract_curated_question,
     system_messages,
 )
+from modeldeck.gemma4_settings import (
+    ALLOWED_VISUAL_TOKEN_BUDGETS,
+    DEFAULT_VISUAL_TOKEN_BUDGET,
+    GEMMA4_PATCH_SIZE,
+    GEMMA4_POOLING_KERNEL_SIZE,
+    VisualTokenBudget,
+)
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 
 LOGGER = logging.getLogger("modeldeck.scenechat")
@@ -68,6 +75,14 @@ class EngineConfig:
     context_length: int = 8192
     maximum_new_tokens: int = DEFAULT_MAXIMUM_NEW_TOKENS
     generation_timeout_seconds: float = 60.0
+    visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
+
+    def __post_init__(self) -> None:
+        if self.visual_token_budget not in ALLOWED_VISUAL_TOKEN_BUDGETS:
+            raise ValueError(
+                "visual_token_budget must be one of "
+                + ", ".join(str(value) for value in ALLOWED_VISUAL_TOKEN_BUDGETS)
+            )
 
 
 @dataclass(frozen=True)
@@ -76,6 +91,9 @@ class GenerationResult:
     prompt_tokens: int
     completion_tokens: int
     cancelled: bool = False
+    preprocessing_seconds: float = 0.0
+    inference_seconds: float = 0.0
+    visual_tokens: int | None = None
 
 
 def _log_output_validation_failure(
@@ -191,6 +209,8 @@ class TransformersSceneChatEngine:
         }
         if processor_class not in allowed_pairs:
             raise RuntimeError("Expected an allowlisted Gemma 4 processor, received " + processor_class)
+        image_processor = getattr(processor, "image_processor", None)
+        _configure_image_processor(image_processor, self.config.visual_token_budget)
         model = AutoModelForMultimodalLM.from_pretrained(
             snapshot,
             local_files_only=True,
@@ -218,6 +238,9 @@ class TransformersSceneChatEngine:
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
+            "visual_token_budget": self.config.visual_token_budget,
+            "image_patch_size": GEMMA4_PATCH_SIZE,
+            "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
             **placement_details,
             "load_seconds": round(time.perf_counter() - started, 4),
             "snapshot_path": str(snapshot),
@@ -324,8 +347,11 @@ class TransformersSceneChatEngine:
             add_generation_prompt=True,
             enable_thinking=False,
         )
+        preprocessing_started = time.perf_counter()
         inputs = self.processor(text=rendered, images=[image], return_tensors="pt")
+        preprocessing_seconds = time.perf_counter() - preprocessing_started
         prompt_tokens = int(inputs["input_ids"].shape[-1])
+        visual_tokens = _visual_token_count(inputs)
         if prompt_tokens + max_tokens > self.config.context_length:
             raise ValueError(
                 f"Processed input plus requested output exceeds {self.config.context_length} tokens"
@@ -333,6 +359,7 @@ class TransformersSceneChatEngine:
         inputs = inputs.to(self.device, dtype=self.dtype)
         self.torch.cuda.reset_peak_memory_stats(0)
         try:
+            inference_started = time.perf_counter()
             with self.torch.inference_mode():
                 output = self.model.generate(
                     **inputs,
@@ -341,6 +368,7 @@ class TransformersSceneChatEngine:
                     use_cache=True,
                     stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
                 )
+            inference_seconds = time.perf_counter() - inference_started
             generated = output[0, prompt_tokens:]
             completion_tokens = int(generated.shape[-1])
             decoded = self.processor.decode(
@@ -355,6 +383,9 @@ class TransformersSceneChatEngine:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cancelled=cancellation.is_set(),
+                preprocessing_seconds=preprocessing_seconds,
+                inference_seconds=inference_seconds,
+                visual_tokens=visual_tokens,
             )
         finally:
             del inputs
@@ -460,6 +491,7 @@ def create_app(
         app.state.timed_out_requests = 0
         app.state.concurrent_rejections = 0
         app.state.total_latency_seconds = 0.0
+        app.state.last_request_diagnostics = None
         app.state.load_task = asyncio.create_task(_load_engine(app, runtime))
         try:
             yield
@@ -495,7 +527,9 @@ def create_app(
     @app.exception_handler(Exception)
     async def unexpected_error(_request: Request, error: Exception) -> JSONResponse:
         LOGGER.error("Request failed category=%s", type(error).__name__)
-        return _error_response(502, "worker_error", "The local vision worker could not complete the request.")
+        return _error_response(
+            502, "internal_error", "The local vision worker could not complete the request."
+        )
 
     @app.get("/health")
     async def health(request: Request) -> dict[str, Any]:
@@ -511,7 +545,8 @@ def create_app(
             "device": details.get("device", "cuda:0"),
             "device_name": details.get("device_name", "AMD GPU"),
             "rocm_version": details.get("hip_version"),
-            "ready": request.app.state.ready,
+            "ready": request.app.state.ready and request.app.state.active_request_id is None,
+            "busy": request.app.state.active_request_id is not None,
             "error": request.app.state.load_error,
         }
 
@@ -546,6 +581,12 @@ def create_app(
             "aggregate_latency_seconds": round(state.total_latency_seconds, 4),
             "average_latency_seconds": round(average, 4) if average is not None else None,
             "busy": state.active_request_id is not None,
+            "effective_settings": {
+                "visual_token_budget": config.visual_token_budget,
+                "image_patch_size": GEMMA4_PATCH_SIZE,
+                "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+            },
+            "last_request": state.last_request_diagnostics,
         }
 
     @app.get("/model")
@@ -558,6 +599,9 @@ def create_app(
             "trust_remote_code": False,
             "dtype": config.dtype,
             "contract_version": CONTRACT_VERSION,
+            "visual_token_budget": config.visual_token_budget,
+            "image_patch_size": GEMMA4_PATCH_SIZE,
+            "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
         }
 
     @app.post("/load")
@@ -627,10 +671,8 @@ def create_app(
             raise SceneChatRequestError(422, "invalid_model", "The model identifier is not allowlisted.")
         image_data_url, prompt = _validate_message(body.messages[0])
         question = _approved_question(prompt)
-        image = _decode_image(image_data_url)
         supplied_request_id = request.headers.get("x-request-id")
         if supplied_request_id and not SAFE_REQUEST_ID.fullmatch(supplied_request_id):
-            image.close()
             raise SceneChatRequestError(
                 422,
                 "invalid_request_id",
@@ -638,9 +680,10 @@ def create_app(
             )
         request_id = supplied_request_id or f"chatcmpl-{uuid.uuid4().hex}"
         cancellation = threading.Event()
+        admission_started = time.perf_counter()
         claimed = await _claim_slot(request, request_id, cancellation)
+        queue_seconds = time.perf_counter() - admission_started
         if not claimed:
-            image.close()
             request.app.state.concurrent_rejections += 1
             LOGGER.info("Concurrent request rejected")
             raise SceneChatRequestError(
@@ -649,10 +692,34 @@ def create_app(
                 "The vision worker is already processing a request.",
             )
         started = time.perf_counter()
+        image: Image.Image | None = None
+        diagnostic: dict[str, Any] = {
+            "visual_token_budget": config.visual_token_budget,
+            "image_patch_size": GEMMA4_PATCH_SIZE,
+            "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+            "queue_seconds": round(queue_seconds, 6),
+            "preprocessing_seconds": None,
+            "inference_seconds": None,
+            "validation_seconds": None,
+            "total_worker_seconds": None,
+            "completion_tokens": None,
+            "outcome": "internal_error",
+            "error_code": "internal_error",
+        }
         request.app.state.requests += 1
         request.app.state.worker_state = WorkerState.BUSY
         effective_token_limit = min(body.max_tokens, config.maximum_new_tokens)
         try:
+            decode_started = time.perf_counter()
+            image, encoded_bytes = _decode_image_with_metadata(image_data_url)
+            diagnostic.update(
+                {
+                    "input_width": image.width,
+                    "input_height": image.height,
+                    "input_bytes": encoded_bytes,
+                    "decode_seconds": round(time.perf_counter() - decode_started, 6),
+                }
+            )
             result = await _run_generation(
                 request,
                 runtime,
@@ -664,9 +731,19 @@ def create_app(
             )
             if result.cancelled:
                 raise SceneChatRequestError(504, "request_cancelled", "The local generation was cancelled.")
+            diagnostic.update(
+                {
+                    "preprocessing_seconds": round(result.preprocessing_seconds, 6),
+                    "inference_seconds": round(result.inference_seconds, 6),
+                    "visual_tokens": result.visual_tokens,
+                    "completion_tokens": result.completion_tokens,
+                }
+            )
+            validation_started = time.perf_counter()
             try:
                 content, _analysis = canonicalise_model_output(result.text)
             except ModelOutputValidationError as error:
+                diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
                 _log_output_validation_failure(
                     request_id=request_id,
                     error=error,
@@ -679,9 +756,17 @@ def create_app(
                     "invalid_model_output",
                     "The model returned output that did not satisfy the SceneChat contract.",
                 ) from error
+            diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
             latency = time.perf_counter() - started
             request.app.state.successes += 1
             request.app.state.total_latency_seconds += latency
+            diagnostic.update(
+                {
+                    "total_worker_seconds": round(latency, 6),
+                    "outcome": "success",
+                    "error_code": None,
+                }
+            )
             LOGGER.info(
                 "Request completed request_id=%s duration_seconds=%.4f category=success",
                 request_id,
@@ -707,11 +792,24 @@ def create_app(
                     "total_tokens": result.prompt_tokens + result.completion_tokens,
                 }
             return JSONResponse(payload)
-        except SceneChatRequestError:
+        except SceneChatRequestError as error:
             request.app.state.failures += 1
+            diagnostic.update(
+                {
+                    "total_worker_seconds": round(time.perf_counter() - started, 6),
+                    "outcome": "error",
+                    "error_code": error.code,
+                }
+            )
+            raise
+        except Exception:
+            request.app.state.failures += 1
+            diagnostic["total_worker_seconds"] = round(time.perf_counter() - started, 6)
             raise
         finally:
-            image.close()
+            _record_request_diagnostics(request, diagnostic)
+            if image is not None:
+                image.close()
             await _release_slot(request, request_id)
 
     @app.post("/native/vision-language/smoke")
@@ -820,6 +918,11 @@ def _approved_question(prompt: str) -> str:
 
 
 def _decode_image(data_url: str) -> Image.Image:
+    image, _encoded_bytes = _decode_image_with_metadata(data_url)
+    return image
+
+
+def _decode_image_with_metadata(data_url: str) -> tuple[Image.Image, int]:
     if data_url.startswith("data:image/svg+xml"):
         raise SceneChatRequestError(422, "unsupported_image", "SVG images are not supported.")
     header, separator, encoded = data_url.partition(",")
@@ -866,7 +969,7 @@ def _decode_image(data_url: str) -> Image.Image:
         if oriented is not source:
             oriented.close()
         source.close()
-        return converted
+        return converted, len(image_bytes)
     except SceneChatRequestError:
         raise
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError) as error:
@@ -891,6 +994,58 @@ async def _release_slot(request: Request, request_id: str) -> None:
             request.app.state.active_cancellation = None
             if request.app.state.ready:
                 request.app.state.worker_state = WorkerState.READY
+
+
+def _visual_token_count(inputs: Any) -> int | None:
+    values = inputs.get("num_soft_tokens_per_image") if hasattr(inputs, "get") else None
+    if values is None:
+        return None
+    try:
+        if hasattr(values, "sum"):
+            return int(values.sum().item())
+        if isinstance(values, (list, tuple)):
+            return sum(int(value) for value in values)
+        return int(values)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _configure_image_processor(image_processor: Any, visual_token_budget: int) -> None:
+    if image_processor is None:
+        raise RuntimeError("The allowlisted Gemma 4 processor has no image processor")
+    if getattr(image_processor, "patch_size", None) != GEMMA4_PATCH_SIZE:
+        raise RuntimeError("The Gemma 4 image processor must use patch size 16")
+    if getattr(image_processor, "pooling_kernel_size", None) != GEMMA4_POOLING_KERNEL_SIZE:
+        raise RuntimeError("The Gemma 4 image processor must use pooling kernel size 3")
+    if visual_token_budget not in ALLOWED_VISUAL_TOKEN_BUDGETS:
+        raise RuntimeError("The Gemma 4 visual token budget is not allowlisted")
+    image_processor.max_soft_tokens = visual_token_budget
+
+
+def _record_request_diagnostics(request: Request, diagnostic: dict[str, Any]) -> None:
+    request.app.state.last_request_diagnostics = diagnostic
+    LOGGER.info(
+        "SceneChat stage diagnostics visual_token_budget=%s image_patch_size=%s "
+        "image_pooling_kernel_size=%s input_width=%s input_height=%s "
+        "input_bytes=%s visual_tokens=%s queue_seconds=%s preprocessing_seconds=%s "
+        "inference_seconds=%s validation_seconds=%s total_worker_seconds=%s "
+        "completion_tokens=%s outcome=%s error_code=%s",
+        diagnostic.get("visual_token_budget"),
+        diagnostic.get("image_patch_size"),
+        diagnostic.get("image_pooling_kernel_size"),
+        diagnostic.get("input_width"),
+        diagnostic.get("input_height"),
+        diagnostic.get("input_bytes"),
+        diagnostic.get("visual_tokens"),
+        diagnostic.get("queue_seconds"),
+        diagnostic.get("preprocessing_seconds"),
+        diagnostic.get("inference_seconds"),
+        diagnostic.get("validation_seconds"),
+        diagnostic.get("total_worker_seconds"),
+        diagnostic.get("completion_tokens"),
+        diagnostic.get("outcome"),
+        diagnostic.get("error_code"),
+    )
 
 
 async def _run_generation(
@@ -979,6 +1134,12 @@ def main() -> None:
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=DEFAULT_MAXIMUM_NEW_TOKENS)
     parser.add_argument("--generation-timeout-seconds", type=float, default=60.0)
+    parser.add_argument(
+        "--visual-token-budget",
+        type=int,
+        choices=ALLOWED_VISUAL_TOKEN_BUDGETS,
+        default=DEFAULT_VISUAL_TOKEN_BUDGET,
+    )
     arguments = parser.parse_args()
     config = EngineConfig(
         model_id=arguments.model_id,
@@ -988,6 +1149,7 @@ def main() -> None:
         context_length=arguments.context_length,
         maximum_new_tokens=arguments.maximum_new_tokens,
         generation_timeout_seconds=arguments.generation_timeout_seconds,
+        visual_token_budget=arguments.visual_token_budget,
     )
     application = create_app(
         worker_id=arguments.worker_id,

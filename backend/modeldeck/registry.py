@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from modeldeck.gemma4_settings import ALLOWED_VISUAL_TOKEN_BUDGETS
 from modeldeck.protocol import CapabilitySet, GenerationFamily, LifecycleClass
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IMPLEMENTATIONS
 
@@ -76,6 +77,14 @@ class RuntimeTemplate(BaseModel):
                 raise ValueError(
                     f"runtime template setting {name} must be an integer from {minimum} to {maximum}"
                 )
+        if self.settings.get("visual_token_budget") not in {
+            None,
+            *ALLOWED_VISUAL_TOKEN_BUDGETS,
+        }:
+            raise ValueError(
+                "runtime template setting visual_token_budget must be one of "
+                + ", ".join(str(value) for value in ALLOWED_VISUAL_TOKEN_BUDGETS)
+            )
         if self.settings.get("execution_preset") not in {None, "vulkan-full"}:
             raise ValueError("runtime template execution preset is not trusted")
         for name in ("hardware_verification_required", "hsa_preload_evidence"):

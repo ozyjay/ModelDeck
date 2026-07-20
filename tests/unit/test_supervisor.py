@@ -131,6 +131,7 @@ def test_scenechat_launch_is_allowlisted_offline_and_api_key_scoped(monkeypatch,
     assert launch.command[launch.command.index("--cache-root") + 1] == ("/mnt/work/models/huggingface/hub")
     assert launch.command[launch.command.index("--maximum-new-tokens") + 1] == "512"
     assert launch.command[launch.command.index("--generation-timeout-seconds") + 1] == "60"
+    assert launch.command[launch.command.index("--visual-token-budget") + 1] == "280"
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert launch.environment["MODELDECK_SCENECHAT_API_KEY"] == "test-local-key"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -24,6 +25,7 @@ def create_gateway_app(
 ) -> FastAPI:
     configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
+    app.state.last_request_diagnostics = None
     base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
@@ -119,6 +121,10 @@ def create_gateway_app(
             for alias, candidates in routes.items()
         }
 
+    @app.get("/v1/metrics")
+    async def metrics(request: Request):
+        return {"last_request": request.app.state.last_request_diagnostics}
+
     @app.get("/v1/routes")
     async def route_list():
         routes = active_routes()
@@ -204,8 +210,8 @@ def create_gateway_app(
         profiles = {profile.id: profile for candidates in active_routes().values() for profile in candidates}
         async with httpx.AsyncClient(timeout=1.0) as client:
             for profile in profiles.values():
-                health_payload, ready = await worker_health(client, profile)
-                if not ready or not health_payload:
+                health_payload, _ready = await worker_health(client, profile)
+                if not health_payload:
                     continue
                 try:
                     response = await client.post(
@@ -303,21 +309,37 @@ async def proxy_request(
     *,
     timeout_seconds: float = 60.0,
 ):
+    started = time.perf_counter()
     body = await request.json()
     alias = str(body.get("model") or default_alias or "")
     candidates = route_candidates(routes, alias)
     if not candidates:
+        _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
         return unavailable(alias, "unknown")
     client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
     selected = None
+    health_results: list[dict[str, Any] | None] = []
     try:
         for profile in candidates:
-            _, ready = await worker_health(client, profile)
+            health, ready = await worker_health(client, profile)
+            health_results.append(health)
             if ready:
                 selected = profile
                 break
         if selected is None:
             await client.aclose()
+            if health_results and all(
+                health is not None and health.get("busy") is True for health in health_results
+            ):
+                response = gateway_error(
+                    429,
+                    "worker_busy",
+                    f"Every ready-capable Worker for Route '{alias}' is currently busy.",
+                    alias,
+                )
+                _record_gateway_diagnostic(request, alias, started, "error", "worker_busy")
+                return response
+            _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
             return unavailable(alias, candidates[0].generation_family.value)
         body["model"] = upstream_model(selected, alias)
         upstream = client.build_request(
@@ -327,8 +349,18 @@ async def proxy_request(
             headers=upstream_headers(selected),
         )
         response = await client.send(upstream, stream=bool(body.get("stream")))
+    except httpx.TimeoutException:
+        await client.aclose()
+        _record_gateway_diagnostic(request, alias, started, "error", "gateway_timeout")
+        return gateway_error(
+            504,
+            "gateway_timeout",
+            f"The local Worker for Route '{alias}' did not respond within the gateway deadline.",
+            alias,
+        )
     except (httpx.HTTPError, ValueError):
         await client.aclose()
+        _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
         return unavailable(alias, candidates[0].generation_family.value)
     if body.get("stream"):
         return StreamingResponse(
@@ -344,6 +376,18 @@ async def proxy_request(
             metadata_error = trace_token_metadata_error(response_payload)
             if metadata_error:
                 return invalid_trace_metadata(selected.id, metadata_error)
+        error_code = None
+        if not response.is_success and isinstance(response_payload, dict):
+            error = response_payload.get("error")
+            if isinstance(error, dict) and isinstance(error.get("code"), str):
+                error_code = error["code"]
+        _record_gateway_diagnostic(
+            request,
+            alias,
+            started,
+            "success" if response.is_success else "error",
+            error_code,
+        )
         return JSONResponse(
             response_payload,
             status_code=response.status_code,
@@ -496,6 +540,35 @@ def unavailable(alias: str, family: str) -> JSONResponse:
         },
         status_code=503,
     )
+
+
+def gateway_error(status_code: int, code: str, message: str, alias: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": {
+                "code": code,
+                "message": message,
+                "route": alias or None,
+                "cloud_fallback_attempted": False,
+            }
+        },
+        status_code=status_code,
+    )
+
+
+def _record_gateway_diagnostic(
+    request: Request,
+    alias: str,
+    started: float,
+    outcome: str,
+    error_code: str | None,
+) -> None:
+    request.app.state.last_request_diagnostics = {
+        "route": alias or None,
+        "total_gateway_seconds": round(time.perf_counter() - started, 6),
+        "outcome": outcome,
+        "error_code": error_code,
+    }
 
 
 def trace_token_metadata_error(payload: Any) -> str | None:
