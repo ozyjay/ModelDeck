@@ -39,7 +39,7 @@ export default function App() {
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
+  const [pending, setPending] = useState<Set<string>>(() => new Set());
 
   const refresh = useCallback(async () => {
     const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextLive, nextWorkers,
@@ -88,7 +88,7 @@ export default function App() {
 
   const operate = async (worker: Worker, operation: WorkerOperation) => {
     const key = `${worker.id}:${operation}`;
-    setPending(key); setError(null);
+    setPending((current) => new Set(current).add(key)); setError(null);
     try {
       const result = await postJson<{ ok?: boolean; test?: { evidence?: { error_summary?: string } } }>(`/api/workers/${worker.id}/${operation}`);
       await refresh();
@@ -96,7 +96,7 @@ export default function App() {
         throw new Error(result.test?.evidence?.error_summary ?? "Worker generation smoke test failed.");
       }
     } catch (reason) { setError(messageFrom(reason)); }
-    finally { setPending(null); }
+    finally { setPending((current) => { const next = new Set(current); next.delete(key); return next; }); }
   };
 
   const navigate = (next: View, path: string) => {
@@ -137,7 +137,7 @@ export default function App() {
 
 function LiveView({ live, workers, models, operate, pending }: {
   live: LiveState; workers: Worker[]; models: ModelEntry[];
-  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: string | null;
+  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: ReadonlySet<string>;
 }) {
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
   const [smokingRoute, setSmokingRoute] = useState<string | null>(null);
@@ -163,7 +163,7 @@ function LiveView({ live, workers, models, operate, pending }: {
     <section className="panel table-panel"><PanelHeading title="Live Routes" detail={`${live.routes.length} published`} />
       {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
       {live.routes.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Public route</th><th>Protocol</th><th>Worker order</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
-        {live.routes.map((route) => <tr key={route.id}><td><strong>{route.display_name}</strong><code>{route.public_name}</code></td><td>{route.protocol_contract}</td><td><div className="active-worker-chain">{route.workers.map((worker, index) => <span key={worker.id}>{index === 0 ? "Primary" : `Backup ${index}`}: {worker.name} <StateBadge state={worker.state} /></span>)}</div></td><td>{route.effective_worker?.name ?? "No ready Worker"}</td><td>{route.workers[0] && <div className="button-row"><button disabled={pending !== null || route.workers[0].state === "ready"} onClick={() => void operate(route.workers[0], "start")}>Start primary</button><button className="secondary" disabled={pending !== null || smokingRoute !== null || !route.ready} onClick={() => void smokeRoute(route.id)}>Rehearse Route</button></div>}</td></tr>)}
+        {live.routes.map((route) => <tr key={route.id}><td><strong>{route.display_name}</strong><code>{route.public_name}</code></td><td>{route.protocol_contract}</td><td><div className="active-worker-chain">{route.workers.map((worker, index) => <span key={worker.id}>{index === 0 ? "Primary" : `Backup ${index}`}: {worker.name} <StateBadge state={worker.state} /></span>)}</div></td><td>{route.effective_worker?.name ?? "No ready Worker"}</td><td>{route.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, route.workers[0].id) || route.workers[0].state === "ready"} onClick={() => void operate(route.workers[0], "start")}>{pending.has(`${route.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !route.ready} onClick={() => void smokeRoute(route.id)}>Rehearse Route</button></div>}</td></tr>)}
       </tbody></table></div> : <p className="muted">This Event publishes no Routes.</p>}
     </section>
   </div>;
@@ -231,15 +231,15 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
   </div>;
 }
 
-function WorkersView({ workers, pending, operate, refresh, openDay }: { workers: Worker[]; pending: string | null; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+function WorkersView({ workers, pending, operate, refresh, openDay }: { workers: Worker[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const [sort, setSort] = useState<WorkerSort>("name-asc");
   const [feedback, setFeedback] = useState<string | null>(null);
   const sorted = useMemo(() => [...workers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [workers, sort]);
   const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
   const archive = async (worker: Worker) => { if (!window.confirm(`Archive Worker “${worker.name}”? Cached Model files will be kept.`)) return; await deleteJson(`/api/workers/${worker.id}`); setFeedback(`Archived Worker “${worker.name}”; its cached Model was kept.`); await refresh(); };
-  return <div className="view-stack"><div className="view-actions"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not.</p><div className="worker-toolbar"><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label></div></div>
+  return <div className="view-stack"><div className="view-actions"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Start requests can be submitted together while model loads are safely queued.</p><div className="worker-toolbar"><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label></div></div>
     {feedback && <div className="configuration-feedback">{feedback}</div>}
-    {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => <article className={`worker-card state-${worker.state}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><StateBadge state={worker.state} /></div><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype]]} /></details><div className="button-row"><button className="secondary" disabled={openDay} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button disabled={pending !== null || worker.state === "ready"} onClick={() => void operate(worker, "start")}>Start</button><button className="secondary" disabled={pending !== null || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>Smoke</button><button className="secondary" disabled={pending !== null || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>Stop</button><button className="secondary danger" disabled={openDay || pending !== null || worker.state !== "stopped"} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div></article>)}</div>}
+    {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => { const workerPending = workerOperationPending(pending, worker.id); return <article className={`worker-card state-${worker.state}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><StateBadge state={worker.state} /></div><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || worker.state !== "stopped"} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div></article>; })}</div>}
   </div>;
 }
 
@@ -286,3 +286,4 @@ function DefinitionList({ rows }: { rows: Array<[string, string]> }) { return <d
 function formatBytes(value: number) { if (!Number.isFinite(value) || value <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`; }
 function humanise(value: string) { return value.replaceAll("_", " ").replaceAll("-", " "); }
 function messageFrom(reason: unknown) { return reason instanceof Error ? reason.message : "The operation failed."; }
+function workerOperationPending(pending: ReadonlySet<string>, workerId: string) { return [...pending].some((key) => key.startsWith(`${workerId}:`)); }

@@ -66,9 +66,12 @@ function responses(includeConfiguration = false): Record<string, unknown> {
 }
 
 function mockFetch(payloads: Record<string, unknown>) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
-    const payload = payloads[path];
+    const configured = payloads[path];
+    const payload = typeof configured === "function"
+      ? await (configured as (input: RequestInfo | URL, init?: RequestInit) => unknown)(input, init)
+      : configured;
     return new Response(JSON.stringify(payload ?? { detail: `Unexpected request: ${path}` }), {
       status: payload === undefined ? 404 : 200,
       headers: { "Content-Type": "application/json" },
@@ -109,6 +112,24 @@ describe("ModelDeck v2 operator console", () => {
     expect(await screen.findByRole("heading", { name: "Qwen token trace" })).toBeInTheDocument();
     expect(screen.getByText(/execution identity is not/i)).toBeInTheDocument();
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
+  });
+
+  it("allows start requests for different Workers to be submitted together", async () => {
+    const secondWorker = { ...worker, id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380", name: "Second Qwen", port: 8632 };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, secondWorker];
+    payloads[`/api/workers/${worker.id}/start`] = () => new Promise<never>(() => undefined);
+    payloads[`/api/workers/${secondWorker.id}/start`] = () => new Promise<never>(() => undefined);
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    const startButtons = screen.getAllByRole("button", { name: "Start" });
+    fireEvent.click(startButtons[0]);
+    expect(startButtons[0]).toBeDisabled();
+    expect(startButtons[1]).toBeEnabled();
+    fireEvent.click(startButtons[1]);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/workers/${worker.id}/start`)).toBe(true));
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/workers/${secondWorker.id}/start`)).toBe(true);
   });
 
   it("filters the Models library by model metadata", async () => {
