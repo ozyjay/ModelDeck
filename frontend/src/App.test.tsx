@@ -209,8 +209,9 @@ describe("ModelDeck v2 operator console", () => {
     fireEvent.click(await screen.findByRole("link", { name: "Events" }));
     expect(await screen.findByRole("heading", { name: "2026 Open Day" })).toBeInTheDocument();
     expect(screen.getByText("Primary")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Route Name" })).toHaveValue("Token trace");
-    expect(screen.getByDisplayValue("qwen-0-5b")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Route Label" })).toHaveValue("Token trace");
+    expect(screen.getByRole("textbox", { name: "API Model ID" })).toHaveValue("qwen-0-5b");
+    expect(screen.getByText(/Sent by clients in the/)).toHaveTextContent("Sent by clients in the model field.");
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
   });
 
