@@ -7,7 +7,10 @@ function Resolve-ModelDeckWorker {
         [string]$Runtime
     )
 
-    $Workers = @(Invoke-RestMethod -Uri "$ManagementUrl/api/workers" -TimeoutSec 10)
+    # Invoke-RestMethod deliberately writes a top-level JSON array as one pipeline object.
+    # Enumerate it explicitly so Where-Object compares one Worker at a time.
+    $Response = Invoke-RestMethod -Uri "$ManagementUrl/api/workers" -TimeoutSec 10
+    $Workers = @($Response.GetEnumerator())
     $Matches = if ($Worker) {
         @($Workers | Where-Object { $_.id -eq $Worker -or $_.name -eq $Worker })
     }

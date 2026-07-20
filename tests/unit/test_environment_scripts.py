@@ -6,6 +6,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HELPERS = PROJECT_ROOT / "scripts" / "environment_helpers.psm1"
+MODELDECK_HELPERS = PROJECT_ROOT / "scripts" / "modeldeck_helpers.psm1"
 RUN_SCRIPT = PROJECT_ROOT / "scripts" / "run.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
@@ -114,3 +115,18 @@ def test_checked_in_env_example_uses_only_supported_names() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_worker_resolver_enumerates_invoke_rest_method_json_array() -> None:
+    result = _run_pwsh(
+        "function global:Invoke-RestMethod { "
+        "$workers = @([pscustomobject]@{ id='worker-qwen'; name='Qwen'; runtime='transformers-rocm' }, "
+        "[pscustomobject]@{ id='worker-q4'; name='DiffusionGemma Q4'; runtime='text-diffusion-gptq-rocm' }); "
+        "return ,$workers }; "
+        f"Import-Module '{MODELDECK_HELPERS}' -Force; "
+        "Resolve-ModelDeckWorker -ManagementUrl 'http://127.0.0.1:3600' -Worker 'worker-q4' "
+        "| Select-Object id,name | ConvertTo-Json -Compress"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"id": "worker-q4", "name": "DiffusionGemma Q4"}

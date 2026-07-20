@@ -179,6 +179,8 @@ class TransformersAutoregressiveEngine:
         text_so_far = ""
         stop_sequences = [body.stop] if isinstance(body.stop, str) else list(body.stop or ())
         generator = torch.Generator(device=self.device).manual_seed(body.seed)
+        eos_token_ids = _configured_eos_token_ids(self.tokenizer, self.model)
+        last_event: dict[str, Any] | None = None
         started = time.perf_counter()
 
         for step in range(min(body.max_tokens, self.config.maximum_new_tokens)):
@@ -199,6 +201,8 @@ class TransformersAutoregressiveEngine:
                         if logits[token_id] > 0
                         else logits[token_id] * body.repetition_penalty
                     )
+            if len(generated) < body.min_tokens:
+                _suppress_token_logits(logits, eos_token_ids)
             sampling_logits = logits if body.temperature == 0 else logits / max(body.temperature, 1e-6)
             probabilities = torch.softmax(sampling_logits, dim=-1)
             probabilities = self._apply_top_p(probabilities, body.top_p)
@@ -206,6 +210,10 @@ class TransformersAutoregressiveEngine:
                 selected_id = int(torch.argmax(probabilities).item())
             else:
                 selected_id = int(torch.multinomial(probabilities, 1, generator=generator).item())
+            if selected_id in eos_token_ids:
+                if last_event is not None:
+                    last_event["complete"] = True
+                return
             effective_top_k = min(body.top_k, probabilities.shape[-1])
             top_probabilities, top_indices = torch.topk(probabilities, effective_top_k)
             token = self.tokenizer.decode([selected_id], clean_up_tokenization_spaces=False)
@@ -214,10 +222,8 @@ class TransformersAutoregressiveEngine:
             sequence = torch.cat(
                 (sequence, torch.tensor([[selected_id]], device=self.device, dtype=sequence.dtype)), dim=1
             )
-            minimum_reached = step + 1 >= body.min_tokens
-            complete = minimum_reached and (
-                selected_id == self.tokenizer.eos_token_id
-                or any(text_so_far.endswith(stop) for stop in stop_sequences)
+            complete = len(generated) >= body.min_tokens and any(
+                text_so_far.endswith(stop) for stop in stop_sequences
             )
             hidden_summary = None
             if body.include_hidden_state_summary and output.hidden_states:
@@ -227,7 +233,7 @@ class TransformersAutoregressiveEngine:
                     "mean": round(float(hidden.mean().item()), 6),
                     "l2_norm": round(float(torch.linalg.vector_norm(hidden).item()), 6),
                 }
-            yield {
+            event = {
                 "step": step,
                 "selected": {
                     "token_id": selected_id,
@@ -256,6 +262,8 @@ class TransformersAutoregressiveEngine:
                 "cancelled": False,
                 "complete": complete,
             }
+            last_event = event
+            yield event
             if complete:
                 return
 
@@ -541,6 +549,28 @@ def _decode_tokens(tokenizer: Any, token_ids: list[int]) -> list[str]:
         )
         for token_id in token_ids
     ]
+
+
+def _configured_eos_token_ids(tokenizer: Any, model: Any) -> set[int]:
+    values = [getattr(tokenizer, "eos_token_id", None)]
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None:
+        values.append(getattr(generation_config, "eos_token_id", None))
+    token_ids: set[int] = set()
+    for value in values:
+        candidates = value if isinstance(value, (list, tuple, set)) else [value]
+        token_ids.update(
+            int(candidate)
+            for candidate in candidates
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate >= 0
+        )
+    return token_ids
+
+
+def _suppress_token_logits(logits: Any, token_ids: set[int]) -> None:
+    for token_id in token_ids:
+        if token_id < len(logits):
+            logits[token_id] = float("-inf")
 
 
 def _trace_token_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:

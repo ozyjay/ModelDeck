@@ -4,8 +4,10 @@ from typing import Any
 
 from modeldeck.workers.autoregressive_worker import (
     GenerationRequest,
+    _configured_eos_token_ids,
     _decode_tokens,
     _latest_user_prompt,
+    _suppress_token_logits,
     _tokenise_without_special_tokens,
 )
 
@@ -54,3 +56,17 @@ def test_latest_user_prompt_excludes_system_wrappers_and_earlier_messages() -> N
 
 def test_plain_prompt_is_the_displayable_user_prompt() -> None:
     assert _latest_user_prompt(GenerationRequest(prompt="hello  world")) == "hello  world"
+
+
+def test_all_configured_eos_tokens_are_suppressed_during_minimum_generation() -> None:
+    tokenizer = type("Tokenizer", (), {"eos_token_id": 4})()
+    generation_config = type("GenerationConfig", (), {"eos_token_id": [4, 5]})()
+    model = type("Model", (), {"generation_config": generation_config})()
+    logits = [0.0, 1.0, 2.0, 3.0, 9.0, 8.0]
+
+    eos_token_ids = _configured_eos_token_ids(tokenizer, model)
+    _suppress_token_logits(logits, eos_token_ids)
+
+    assert eos_token_ids == {4, 5}
+    assert logits[:4] == [0.0, 1.0, 2.0, 3.0]
+    assert logits[4:] == [float("-inf"), float("-inf")]
