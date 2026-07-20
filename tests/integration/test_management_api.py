@@ -129,6 +129,48 @@ async def test_model_creates_worker_from_trusted_runtime_without_public_alias(tm
 
 
 @pytest.mark.asyncio
+async def test_scenechat_worker_uses_trusted_runtime_creation_defaults(tmp_path, monkeypatch) -> None:
+    cached = {
+        "model_id": "google/gemma-4-E2B-it",
+        "revision": "9dbdf8a839e4e9e0eb56ed80cc8886661d3817cf",
+        "download_state": "installed-untested",
+        "configuration_support": "scenechat-gemma4",
+        "cache_location": str(tmp_path / "hub" / "models--google--gemma-4-E2B-it"),
+        "snapshot_location": str(tmp_path / "snapshot"),
+        "base_model_id": None,
+        "base_model_revision": None,
+        "artifacts": [],
+    }
+    monkeypatch.setattr(v2_api, "discover_huggingface_models", lambda: [cached])
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            templates = await client.get("/api/runtime-templates")
+            created = await client.post(
+                "/api/workers",
+                json={
+                    "name": "SceneChat Gemma 4 E2B",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "scenechat-gemma4",
+                },
+            )
+
+    template = next(item for item in templates.json()["templates"] if item["id"] == "scenechat-gemma4")
+    assert template["dtype"] == "bfloat16"
+    assert template["settings"]["context_length"] == 8192
+    assert template["settings"]["maximum_new_tokens"] == 512
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["dtype"] == "bfloat16"
+    assert payload["settings"]["context_length"] == 8192
+    assert payload["settings"]["maximum_new_tokens"] == 512
+
+
+@pytest.mark.asyncio
 async def test_event_draft_publish_discard_and_reactivate_are_separate(tmp_path) -> None:
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
     store.initialise_v2()

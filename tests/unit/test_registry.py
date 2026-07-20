@@ -71,7 +71,7 @@ def test_local_profile_is_instantiated_from_runtime_template(tmp_path) -> None:
             model_id="google/gemma-4-26B-A4B-it",
             revision="a" * 40,
             alias="gemma-26b-vision",
-            dtype="bfloat16",
+            dtype="float16",
             context_length=4096,
             maximum_new_tokens=256,
         ),
@@ -84,8 +84,17 @@ def test_local_profile_is_instantiated_from_runtime_template(tmp_path) -> None:
     assert profile.generation_family.value == "vision-language"
     assert profile.capabilities.image_input is True
     assert profile.capabilities.structured_output is True
+    assert profile.dtype == "bfloat16"
     assert profile.settings["cache_root"] == str(tmp_path)
     assert profile.settings["maximum_new_tokens"] == 256
+
+
+def test_scenechat_runtime_declares_safe_creation_defaults() -> None:
+    template = runtime_templates()["scenechat-gemma4"]
+
+    assert template.dtype == "bfloat16"
+    assert template.settings["context_length"] == 8192
+    assert template.settings["maximum_new_tokens"] == 512
 
 
 def test_unknown_runtime_template_cannot_create_a_profile(tmp_path) -> None:

@@ -184,6 +184,47 @@ describe("ModelDeck v2 operator console", () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/events")).toHaveLength(1);
   });
 
+  it("uses trusted SceneChat runtime defaults when creating a Worker", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [{
+      ...catalogueModel("google/gemma-4-E2B-it", ["image-input", "structured-output"]),
+      generation_family_hint: "vision-language",
+      configuration_support: "scenechat-gemma4",
+    }], downloads_started: false };
+    payloads["/api/runtime-templates"] = { templates: [{
+      id: "scenechat-gemma4", display_name: "SceneChat Gemma 4 ROCm",
+      implementation: "vision-language-transformers-rocm", generation_family: "vision-language",
+      cache_setting: "cache_root", uses_base_model_identity: false,
+      lifecycle: "on-demand", dtype: "bfloat16",
+      settings: { context_length: 8192, maximum_new_tokens: 512 },
+      package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
+      publisher: "ModelDeck", source: "packaged", digest: "digest",
+    }] };
+    payloads["/api/workers"] = (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "POST" ? worker : [];
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create Worker" }));
+    expect(screen.getByText("Runtime defaults: bfloat16 · 8192 context · 512 max output · on-demand")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) =>
+        String(input) === "/api/workers" && init?.method === "POST"
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(String(call?.[1]?.body));
+      expect(body).toMatchObject({
+        model_id: "google/gemma-4-E2B-it",
+        runtime_template_id: "scenechat-gemma4",
+      });
+      expect(body).not.toHaveProperty("dtype");
+      expect(body).not.toHaveProperty("context_length");
+      expect(body).not.toHaveProperty("maximum_new_tokens");
+    });
+  });
+
   it("offers a discovered GPT-OSS artefact when creating its Worker", async () => {
     const payloads = responses();
     payloads["/api/catalogue"] = { models: [{
@@ -200,6 +241,7 @@ describe("ModelDeck v2 operator console", () => {
       id: "gpt-oss-llama-vulkan", display_name: "GPT-OSS llama.cpp Vulkan",
       implementation: "llama-vulkan", generation_family: "autoregressive",
       cache_setting: "artifact_path", uses_base_model_identity: false,
+      lifecycle: "exclusive", dtype: null, settings: {},
       package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
       publisher: "ModelDeck", source: "packaged", digest: "digest",
     }] };

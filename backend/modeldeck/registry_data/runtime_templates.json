@@ -23,8 +23,9 @@
       "runtime": "vision-language-transformers-rocm",
       "generation_family": "vision-language",
       "capabilities": {"chat": "compatibility-only", "streaming": false, "cancellation": true, "image_input": true, "structured_output": true},
-      "settings": {"generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180},
-      "cache_setting": "cache_root"
+      "settings": {"context_length": 8192, "maximum_new_tokens": 512, "generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180},
+      "cache_setting": "cache_root",
+      "dtype": "bfloat16"
     },
     {
       "id": "diffusiongemma-transformers",

@@ -93,6 +93,9 @@ export interface RuntimeTemplate {
   generation_family: string;
   cache_setting: "cache_root" | "q4_checkpoint_dir" | "artifact_path";
   uses_base_model_identity: boolean;
+  lifecycle: "resident" | "on-demand" | "exclusive" | null;
+  dtype: "float16" | "bfloat16" | null;
+  settings: Record<string, string | number | boolean>;
   package_id: string;
   package_version: string;
   package_display_name: string;

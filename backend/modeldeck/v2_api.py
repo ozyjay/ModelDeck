@@ -24,11 +24,11 @@ class WorkerCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     model_id: str = Field(min_length=3, max_length=256)
     revision: str = Field(min_length=1, max_length=128)
-    dtype: Literal["float16", "bfloat16"] = "float16"
-    lifecycle: Literal["resident", "on-demand", "exclusive"] = "on-demand"
-    context_length: int = Field(default=2048, ge=256, le=32768)
-    maximum_new_tokens: int = Field(default=128, ge=1, le=512)
-    maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
+    dtype: Literal["float16", "bfloat16"] | None = None
+    lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
+    context_length: int | None = Field(default=None, ge=256, le=32768)
+    maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
+    maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
@@ -134,11 +134,14 @@ def create_v2_router() -> APIRouter:
             revision=payload.revision,
             alias=internal_name,
             profile_name=internal_name,
-            dtype=payload.dtype,
-            lifecycle=payload.lifecycle,
-            context_length=payload.context_length,
-            maximum_new_tokens=payload.maximum_new_tokens,
-            maximum_denoising_steps=payload.maximum_denoising_steps,
+            dtype=payload.dtype or selected.template.dtype or "float16",
+            lifecycle=payload.lifecycle or selected.template.lifecycle or "on-demand",
+            context_length=payload.context_length
+            or _integer_template_default(selected.template.settings, "context_length", 2048),
+            maximum_new_tokens=payload.maximum_new_tokens
+            or _integer_template_default(selected.template.settings, "maximum_new_tokens", 128),
+            maximum_denoising_steps=payload.maximum_denoising_steps
+            or _integer_template_default(selected.template.settings, "maximum_denoising_steps", 24),
             artifact_id=payload.artifact_id,
             runtime_template_id=payload.runtime_template_id,
         )
@@ -574,6 +577,11 @@ def _validate(definition: EventDefinition, request: Request):
 def _require_mutable(request: Request) -> None:
     if request.app.state.settings.open_day:
         raise HTTPException(423, "Configuration is locked while Open Day mode is active")
+
+
+def _integer_template_default(settings: dict[str, object], name: str, fallback: int) -> int:
+    value = settings.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) else fallback
 
 
 def _route_smoke_request(route):
