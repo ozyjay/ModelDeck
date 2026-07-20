@@ -24,9 +24,11 @@ complete, locally discovered revision using an installed trusted runtime templat
 - `POST /api/workers/stop-all`
 - `GET /api/workers/{worker_id}/logs` and `/logs/stream`
 
-`PATCH` changes only the editable name. Execution settings are immutable: a different
-Model, revision, runtime or bounded setting creates a replacement Worker. Draft Event
-references may be rebound during replacement; published revisions are never rewritten.
+`PATCH` changes only the editable name. Execution settings are immutable. The replacement
+endpoint accepts a new name and bounded `dtype`, `lifecycle`, `context_length`,
+`maximum_new_tokens` and `maximum_denoising_steps` values; it derives the Model, revision,
+artefact and trusted runtime from the original Worker. Draft Event references may be
+rebound during replacement; published revisions are never rewritten.
 Archiving is blocked until the Worker is stopped and no draft or active Event revision
 references it. Historical revisions retain their audit reference. Cache files are never
 removed by Worker operations.

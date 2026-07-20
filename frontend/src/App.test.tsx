@@ -206,7 +206,14 @@ describe("ModelDeck v2 operator console", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Models" }));
     fireEvent.click(await screen.findByRole("button", { name: "Create Worker" }));
-    expect(screen.getByText("Runtime defaults: bfloat16 · 8192 context · 512 max output · on-demand")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Data type" })).toHaveValue("bfloat16");
+    expect(screen.getByRole("combobox", { name: "Data type" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveValue("on-demand");
+    expect(screen.getByRole("combobox", { name: "Lifecycle" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "Context length" })).toHaveValue(8192);
+    expect(screen.getByRole("spinbutton", { name: "Maximum output" })).toHaveValue(512);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Context length" }), { target: { value: "4096" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Maximum output" }), { target: { value: "256" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
 
     await waitFor(() => {
@@ -218,11 +225,53 @@ describe("ModelDeck v2 operator console", () => {
       expect(body).toMatchObject({
         model_id: "google/gemma-4-E2B-it",
         runtime_template_id: "scenechat-gemma4",
+        dtype: "bfloat16",
+        lifecycle: "on-demand",
+        context_length: 4096,
+        maximum_new_tokens: 256,
       });
-      expect(body).not.toHaveProperty("dtype");
-      expect(body).not.toHaveProperty("context_length");
-      expect(body).not.toHaveProperty("maximum_new_tokens");
     });
+  });
+
+  it("creates an immutable replacement and can rebind draft Event routes", async () => {
+    const payloads = responses(true);
+    payloads["/api/runtime-templates"] = { templates: [{
+      id: "autoregressive-transformers", display_name: "Autoregressive Transformers ROCm",
+      implementation: "autoregressive-transformers-rocm", generation_family: "autoregressive",
+      cache_setting: "cache_root", uses_base_model_identity: false,
+      lifecycle: null, dtype: null,
+      settings: { context_length: 2048, maximum_new_tokens: 128 },
+      package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
+      publisher: "ModelDeck", source: "packaged", digest: "digest",
+    }] };
+    payloads[`/api/workers/${worker.id}/replacement`] = {
+      replacement: { ...worker, id: "cf50c7e3-14fa-43b7-a073-24d103f624a8", name: "Qwen revised" },
+      rebound_event_drafts: [eventRecord.definition.id],
+    };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Replacement name" }), { target: { value: "Qwen revised" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Context length" }), { target: { value: "4096" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Maximum output" }), { target: { value: "256" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create replacement" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) =>
+        String(input) === `/api/workers/${worker.id}/replacement` && init?.method === "POST"
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        name: "Qwen revised",
+        dtype: "float16",
+        lifecycle: "on-demand",
+        context_length: 4096,
+        maximum_new_tokens: 256,
+        rebind_drafts: true,
+      });
+    });
+    expect(await screen.findByText(/1 draft Event was updated/)).toHaveTextContent("published routing is unchanged");
   });
 
   it("offers a discovered GPT-OSS artefact when creating its Worker", async () => {

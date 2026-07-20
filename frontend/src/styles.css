@@ -229,7 +229,13 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .runtime-form-heading small { margin-top: 0.2rem; color: var(--muted); }
 .runtime-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-top: 0.9rem; }
 .runtime-fields label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; }
+.runtime-fields label small { min-height: 1em; color: var(--muted); font-size: 0.68rem; font-weight: 500; }
 .runtime-fields input, .runtime-fields select { width: 100%; min-width: 0; padding: 0.62rem 0.7rem; border: 1px solid var(--line); border-radius: 0.55rem; background: #0d1520; color: var(--text); }
+.runtime-fields input:disabled, .runtime-fields select:disabled { color: #b8c3d2; opacity: 0.78; cursor: not-allowed; }
+.worker-replacement-form { border-color: #344b69; background: #101a27; }
+.rebind-option { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.8rem; color: var(--text); font-size: 0.8rem; }
+.rebind-option input { width: auto; }
+.model-configuration { max-width: 960px; }
 .runtime-form-actions { display: flex; gap: 0.55rem; margin-top: 0.8rem; }
 .configuration-feedback { padding: 0.8rem 0.9rem; border: 1px solid var(--line); border-radius: 0.7rem; }
 .configuration-feedback.good { color: #b7f7df; border-color: #285844; background: #10231c; }

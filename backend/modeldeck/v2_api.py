@@ -39,7 +39,15 @@ class WorkerRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
-class WorkerReplacementRequest(WorkerCreateRequest):
+class WorkerReplacementRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80)
+    dtype: Literal["float16", "bfloat16"] | None = None
+    lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
+    context_length: int | None = Field(default=None, ge=256, le=32768)
+    maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
+    maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
     rebind_drafts: bool = True
 
 
@@ -198,9 +206,29 @@ def create_v2_router() -> APIRouter:
 
     @router.post("/workers/{worker_id}/replacement", status_code=201)
     async def replace_worker(worker_id: str, payload: WorkerReplacementRequest, request: Request):
-        _require_worker(request, worker_id)
+        definition = _require_worker(request, worker_id)
+        if definition.runtime_template_id is None:
+            raise HTTPException(409, "This Worker has no trusted runtime identity to replace")
+        model_id = definition.artifact_model_id or definition.model_id
+        revision = definition.artifact_revision or definition.revision
+        artifact_id = _replacement_artifact_id(definition, model_id, revision, request)
         replacement = await create_worker(
-            WorkerCreateRequest.model_validate(payload.model_dump(exclude={"rebind_drafts"})), request
+            WorkerCreateRequest(
+                name=payload.name,
+                model_id=model_id,
+                revision=revision,
+                dtype=payload.dtype or definition.dtype,
+                lifecycle=payload.lifecycle or definition.lifecycle,
+                context_length=payload.context_length
+                or _worker_integer_setting(definition, "context_length"),
+                maximum_new_tokens=payload.maximum_new_tokens
+                or _worker_integer_setting(definition, "maximum_new_tokens"),
+                maximum_denoising_steps=payload.maximum_denoising_steps
+                or _worker_integer_setting(definition, "maximum_denoising_steps"),
+                artifact_id=artifact_id,
+                runtime_template_id=definition.runtime_template_id,
+            ),
+            request,
         )
         rebound_events = []
         if payload.rebind_drafts:
@@ -498,6 +526,38 @@ def _add_lifecycle_route(router: APIRouter, operation: str) -> None:
 
 def _worker_records(request: Request, *, include_archived: bool = False):
     return request.app.state.compatibility_store.list_workers(include_archived=include_archived)
+
+
+def _worker_integer_setting(definition: WorkerDefinition, name: str) -> int | None:
+    value = definition.settings.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _replacement_artifact_id(
+    definition: WorkerDefinition, model_id: str, revision: str, request: Request
+) -> str | None:
+    registration = request.app.state.runtime_registrations.get(definition.runtime_template_id)
+    if registration is None:
+        raise HTTPException(409, "The Worker's trusted runtime is no longer installed")
+    if registration.template.cache_setting != "artifact_path":
+        return None
+    artifact_path = definition.settings.get("artifact_path")
+    cached = next(
+        (
+            model
+            for model in discover_huggingface_models()
+            if model["model_id"] == model_id and model["revision"] == revision
+        ),
+        None,
+    )
+    if cached is None or not isinstance(artifact_path, str):
+        raise HTTPException(409, "The Worker's allowlisted Model artefact is no longer available")
+    current_path = Path(artifact_path).resolve()
+    snapshot_path = Path(cached["snapshot_location"])
+    for artifact in cached.get("artifacts", []):
+        if any((snapshot_path / filename).resolve() == current_path for filename in artifact["filenames"]):
+            return artifact["artifact_id"]
+    raise HTTPException(409, "The Worker's allowlisted Model artefact could not be identified")
 
 
 def _worker_response(request: Request, record):

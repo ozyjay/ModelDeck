@@ -129,6 +129,74 @@ async def test_model_creates_worker_from_trusted_runtime_without_public_alias(tm
 
 
 @pytest.mark.asyncio
+async def test_worker_replacement_preserves_identity_and_only_rebinds_drafts(tmp_path, monkeypatch) -> None:
+    cached = {
+        "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+        "revision": "revision-1",
+        "download_state": "installed-untested",
+        "configuration_support": "autoregressive-transformers",
+        "cache_location": str(tmp_path / "hub" / "models--Qwen--Qwen2.5-0.5B-Instruct"),
+        "snapshot_location": str(tmp_path / "snapshot"),
+        "base_model_id": None,
+        "base_model_revision": None,
+        "artifacts": [],
+    }
+    monkeypatch.setattr(v2_api, "discover_huggingface_models", lambda: [cached])
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [cached])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/workers",
+                json={
+                    "name": "Original Qwen",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "autoregressive-transformers",
+                },
+            )
+            original = created.json()
+            event = event_document(original["id"])
+            assert (await client.post("/api/events", json=event)).status_code == 201
+            assert (await client.post(f"/api/events/{event['id']}/publish")).status_code == 201
+
+            replaced = await client.post(
+                f"/api/workers/{original['id']}/replacement",
+                json={
+                    "name": "Revised Qwen",
+                    "dtype": "bfloat16",
+                    "lifecycle": "resident",
+                    "context_length": 4096,
+                    "maximum_new_tokens": 256,
+                    "rebind_drafts": True,
+                },
+            )
+            rejected_identity_change = await client.post(
+                f"/api/workers/{original['id']}/replacement",
+                json={"name": "Different Model", "model_id": "Other/Model"},
+            )
+            draft = (await client.get("/api/events")).json()["events"][0]
+            published = (await client.get(f"/api/events/{event['id']}/revisions")).json()["revisions"][0]
+
+    assert replaced.status_code == 201, replaced.text
+    payload = replaced.json()
+    replacement = payload["replacement"]
+    assert replacement["model_id"] == original["model_id"]
+    assert replacement["revision"] == original["revision"]
+    assert replacement["runtime_template_id"] == original["runtime_template_id"]
+    assert replacement["dtype"] == "bfloat16"
+    assert replacement["lifecycle"] == "resident"
+    assert replacement["settings"]["context_length"] == 4096
+    assert replacement["settings"]["maximum_new_tokens"] == 256
+    assert payload["rebound_event_drafts"] == [event["id"]]
+    assert draft["definition"]["routes"][0]["worker_ids"] == [replacement["id"]]
+    assert published["definition"]["routes"][0]["worker_ids"] == [original["id"]]
+    assert rejected_identity_change.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_scenechat_worker_uses_trusted_runtime_creation_defaults(tmp_path, monkeypatch) -> None:
     cached = {
         "model_id": "google/gemma-4-E2B-it",

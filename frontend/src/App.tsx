@@ -127,7 +127,7 @@ export default function App() {
         {!health || !hardware || !telemetry || !gateway ? <Unavailable retry={refresh} />
           : view === "live" ? <LiveView live={live} workers={workers} models={models} operate={operate} pending={pending} />
           : view === "events" ? <EventsView events={events} workers={workers} contracts={contracts} openDay={health.open_day} refresh={refresh} />
-          : view === "workers" ? <WorkersView workers={workers} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
+          : view === "workers" ? <WorkersView workers={workers} templates={templates} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
           : view === "models" ? <ModelsView models={models} templates={templates} refresh={refresh} openDay={health.open_day} />
           : <AdvancedView hardware={hardware} telemetry={telemetry} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
@@ -231,15 +231,114 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
   </div>;
 }
 
-function WorkersView({ workers, pending, operate, refresh, openDay }: { workers: Worker[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+interface WorkerParameterValues {
+  dtype: "float16" | "bfloat16";
+  lifecycle: "resident" | "on-demand" | "exclusive";
+  contextLength: number;
+  maximumNewTokens: number;
+  maximumDenoisingSteps: number;
+}
+
+function integerSetting(settings: RuntimeTemplate["settings"] | Worker["settings"] | undefined, name: string, fallback: number) {
+  const value = settings?.[name];
+  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
+}
+
+function runtimeParameterDefaults(template?: RuntimeTemplate, worker?: Worker): WorkerParameterValues {
+  return {
+    dtype: worker?.dtype === "bfloat16" ? "bfloat16" : template?.dtype ?? "float16",
+    lifecycle: worker?.lifecycle ?? template?.lifecycle ?? "on-demand",
+    contextLength: integerSetting(worker?.settings, "context_length", integerSetting(template?.settings, "context_length", 2048)),
+    maximumNewTokens: integerSetting(worker?.settings, "maximum_new_tokens", integerSetting(template?.settings, "maximum_new_tokens", 128)),
+    maximumDenoisingSteps: integerSetting(worker?.settings, "maximum_denoising_steps", integerSetting(template?.settings, "maximum_denoising_steps", 24)),
+  };
+}
+
+function workerParameterPayload(template: RuntimeTemplate, values: WorkerParameterValues) {
+  return {
+    dtype: values.dtype,
+    lifecycle: values.lifecycle,
+    ...(["autoregressive", "vision-language"].includes(template.generation_family) ? { context_length: values.contextLength } : {}),
+    ...(template.generation_family !== "speech-conversation" ? { maximum_new_tokens: values.maximumNewTokens } : {}),
+    ...(template.generation_family === "text-diffusion" ? { maximum_denoising_steps: values.maximumDenoisingSteps } : {}),
+  };
+}
+
+function parametersAreValid(template: RuntimeTemplate, values: WorkerParameterValues) {
+  const validContext = !["autoregressive", "vision-language"].includes(template.generation_family)
+    || (values.contextLength >= 256 && values.contextLength <= 32768);
+  const validOutput = template.generation_family === "speech-conversation"
+    || (values.maximumNewTokens >= 1 && values.maximumNewTokens <= 512);
+  const validDenoising = template.generation_family !== "text-diffusion"
+    || (values.maximumDenoisingSteps >= 1 && values.maximumDenoisingSteps <= 48);
+  return validContext && validOutput && validDenoising;
+}
+
+function WorkerParameterFields({ template, values, onChange }: {
+  template: RuntimeTemplate;
+  values: WorkerParameterValues;
+  onChange: (values: WorkerParameterValues) => void;
+}) {
+  const update = (change: Partial<WorkerParameterValues>) => onChange({ ...values, ...change });
+  const hasContext = ["autoregressive", "vision-language"].includes(template.generation_family);
+  const hasOutput = template.generation_family !== "speech-conversation";
+  const hasDenoising = template.generation_family === "text-diffusion";
+  return <>
+    <div className="runtime-fields worker-parameter-fields">
+      <label>Data type{template.dtype && <small>Required by trusted runtime</small>}
+        <select aria-label="Data type" value={values.dtype} disabled={template.dtype !== null} onChange={(event) => update({ dtype: event.target.value as WorkerParameterValues["dtype"] })}>
+          <option value="float16">Float16</option><option value="bfloat16">BFloat16</option>
+        </select>
+      </label>
+      <label>Lifecycle{template.lifecycle && <small>Required by trusted runtime</small>}
+        <select aria-label="Lifecycle" value={values.lifecycle} disabled={template.lifecycle !== null} onChange={(event) => update({ lifecycle: event.target.value as WorkerParameterValues["lifecycle"] })}>
+          <option value="on-demand">On demand</option><option value="resident">Resident</option><option value="exclusive">Exclusive</option>
+        </select>
+      </label>
+      {hasContext && <label>Context length<small>256–32,768 tokens</small><input aria-label="Context length" type="number" min={256} max={32768} value={values.contextLength} onChange={(event) => update({ contextLength: event.target.valueAsNumber })} /></label>}
+      {hasOutput && <label>Maximum output<small>1–512 tokens</small><input aria-label="Maximum output" type="number" min={1} max={512} value={values.maximumNewTokens} onChange={(event) => update({ maximumNewTokens: event.target.valueAsNumber })} /></label>}
+      {hasDenoising && <label>Maximum denoising steps<small>1–48 refinement steps</small><input aria-label="Maximum denoising steps" type="number" min={1} max={48} value={values.maximumDenoisingSteps} onChange={(event) => update({ maximumDenoisingSteps: event.target.valueAsNumber })} /></label>}
+    </div>
+    <p className="manifest-note">These limits become part of the immutable Worker definition. Sampling controls such as temperature, seed and top-k remain per-request parameters.</p>
+  </>;
+}
+
+function replacementName(name: string) {
+  const suffix = " replacement";
+  return `${name.slice(0, 80 - suffix.length)}${suffix}`;
+}
+
+function WorkersView({ workers, templates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const [sort, setSort] = useState<WorkerSort>("name-asc");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState<string | null>(null);
+  const [replacementWorkerName, setReplacementWorkerName] = useState("");
+  const [replacementParameters, setReplacementParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
+  const [rebindDrafts, setRebindDrafts] = useState(true);
   const sorted = useMemo(() => [...workers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [workers, sort]);
   const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
   const archive = async (worker: Worker) => { if (!window.confirm(`Archive Worker “${worker.name}”? Cached Model files will be kept.`)) return; await deleteJson(`/api/workers/${worker.id}`); setFeedback(`Archived Worker “${worker.name}”; its cached Model was kept.`); await refresh(); };
-  return <div className="view-stack"><div className="view-actions"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Start requests can be submitted together while model loads are safely queued.</p><div className="worker-toolbar"><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label></div></div>
+  const beginReplacement = (worker: Worker, template: RuntimeTemplate) => { setReplacing(worker.id); setReplacementWorkerName(replacementName(worker.name)); setReplacementParameters(runtimeParameterDefaults(template, worker)); setRebindDrafts(true); setFeedback(null); };
+  const replace = async (worker: Worker, template: RuntimeTemplate) => {
+    const result = await postJson<{ replacement: Worker; rebound_event_drafts: string[] }>(`/api/workers/${worker.id}/replacement`, {
+      name: replacementWorkerName,
+      ...workerParameterPayload(template, replacementParameters),
+      rebind_drafts: rebindDrafts,
+    });
+    setReplacing(null);
+    const rebound = result.rebound_event_drafts.length;
+    setFeedback(`Created replacement Worker “${result.replacement.name}”. ${rebound} draft Event${rebound === 1 ? " was" : "s were"} updated; published routing is unchanged until you publish a draft.`);
+    await refresh();
+  };
+  return <div className="view-stack"><div className="view-actions"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Use Replace to change safe model limits without mutating the original Worker.</p><div className="worker-toolbar"><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label></div></div>
     {feedback && <div className="configuration-feedback">{feedback}</div>}
-    {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => { const workerPending = workerOperationPending(pending, worker.id); return <article className={`worker-card state-${worker.state}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><StateBadge state={worker.state} /></div><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div></article>; })}</div>}
+    {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => {
+      const workerPending = workerOperationPending(pending, worker.id);
+      const template = templates.find((item) => item.id === worker.runtime_template_id);
+      return <article className={`worker-card state-${worker.state}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><StateBadge state={worker.state} /></div><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
+        {replacing === worker.id && template && <div className="runtime-form worker-replacement-form"><div className="runtime-form-heading"><strong>Replace this Worker</strong><small>The Model, revision and trusted runtime stay fixed. The original Worker is kept.</small></div><div className="runtime-fields"><label>Replacement name<input value={replacementWorkerName} maxLength={80} onChange={(event) => setReplacementWorkerName(event.target.value)} /></label><label>Model<input value={worker.artifact_model_id ?? worker.model_id} disabled /></label><label>Runtime<input value={template.display_name} disabled /></label></div><WorkerParameterFields template={template} values={replacementParameters} onChange={setReplacementParameters} /><label className="rebind-option"><input type="checkbox" checked={rebindDrafts} onChange={(event) => setRebindDrafts(event.target.checked)} /> Rebind draft Event routes to the replacement</label><p className="manifest-note">Published Event revisions always keep the original Worker until you explicitly publish an updated draft.</p><div className="runtime-form-actions"><button disabled={!replacementWorkerName.trim() || !parametersAreValid(template, replacementParameters)} onClick={() => void replace(worker, template).catch((reason) => setFeedback(messageFrom(reason)))}>Create replacement</button><button className="secondary" onClick={() => setReplacing(null)}>Cancel</button></div></div>}
+      </article>;
+    })}</div>}
   </div>;
 }
 
@@ -250,13 +349,43 @@ function ModelsView({ models, templates, refresh, openDay }: { models: ModelEntr
   const [name, setName] = useState("");
   const [runtime, setRuntime] = useState("");
   const [artifact, setArtifact] = useState("");
+  const [parameters, setParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [feedback, setFeedback] = useState<string | null>(null);
   const sorted = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return models.filter((model) => !needle || [model.model_id, model.generation_family_hint, model.runnable_reason, ...model.capability_hints].some((value) => value?.toLocaleLowerCase().includes(needle))).sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id));
   }, [models, query, sort]);
-  const begin = (model: ModelEntry) => { setConfiguring(`${model.model_id}@${model.revision}`); setName(model.model_id.split("/").at(-1)?.replaceAll("-", " ") ?? "New Worker"); setRuntime(model.configuration_support ?? ""); setArtifact(model.artifacts?.[0]?.artifact_id ?? ""); setFeedback(null); };
-  const create = async (model: ModelEntry) => { await postJson("/api/workers", { name, model_id: model.model_id, revision: model.revision, runtime_template_id: runtime || undefined, artifact_id: artifact || undefined }); setConfiguring(null); setFeedback(`Created Worker “${name}”.`); await refresh(); };
+  const begin = (model: ModelEntry) => {
+    const template = templates.find((item) => item.id === model.configuration_support);
+    setConfiguring(`${model.model_id}@${model.revision}`);
+    setName(model.model_id.split("/").at(-1)?.replaceAll("-", " ") ?? "New Worker");
+    setRuntime(model.configuration_support ?? "");
+    setArtifact(model.artifacts?.[0]?.artifact_id ?? "");
+    setParameters(runtimeParameterDefaults(template));
+    setFeedback(null);
+  };
+  const create = async (model: ModelEntry, selectedTemplate?: RuntimeTemplate) => {
+    const template = selectedTemplate ?? templates.find((item) => item.id === runtime);
+    if (!template) throw new Error("Select an installed trusted runtime.");
+    await postJson("/api/workers", {
+      name,
+      model_id: model.model_id,
+      revision: model.revision,
+      runtime_template_id: template.id,
+      artifact_id: artifact || undefined,
+      ...workerParameterPayload(template, parameters),
+    });
+    setConfiguring(null);
+    setFeedback(`Created Worker “${name}”.`);
+    await refresh();
+  };
+  if (configuring) {
+    const model = models.find((item) => `${item.model_id}@${item.revision}` === configuring);
+    const baseline = templates.find((item) => item.id === model?.configuration_support);
+    const availableTemplates = templates.filter((item) => baseline && item.generation_family === baseline.generation_family && item.cache_setting === baseline.cache_setting && item.uses_base_model_identity === baseline.uses_base_model_identity);
+    const selectedTemplate = availableTemplates.find((template) => template.id === runtime);
+    if (model) return <div className="view-stack"><section className="panel model-configuration"><div className="runtime-form-heading"><p className="eyebrow">{model.generation_family_hint ?? "Model"}</p><h2>Create a Worker</h2><small>{model.model_id} at pinned revision {model.revision}</small></div><div className="runtime-fields"><label>Worker name<input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => { const nextRuntime = event.target.value; setRuntime(nextRuntime); setParameters(runtimeParameterDefaults(availableTemplates.find((item) => item.id === nextRuntime))); }}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div>{selectedTemplate ? <WorkerParameterFields template={selectedTemplate} values={parameters} onChange={setParameters} /> : <div className="configuration-feedback bad">No compatible trusted runtime is installed for this Model.</div>}<div className="runtime-form-actions"><button disabled={openDay || !name.trim() || !selectedTemplate || (selectedTemplate ? !parametersAreValid(selectedTemplate, parameters) : true)} onClick={() => selectedTemplate && void create(model, selectedTemplate).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => setConfiguring(null)}>Cancel</button></div>{feedback && <div className="configuration-feedback bad">{feedback}</div>}</section></div>;
+  }
   return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Create as many Workers as a Model needs.</p><div className="model-library-toolbar"><label>Search models<input type="search" value={query} placeholder="Name or capability" onChange={(event) => setQuery(event.target.value)} /></label><label>Sort models<select value={sort} onChange={(event) => setSort(event.target.value as ModelSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label></div></div>{openDay && <div className="configuration-feedback">Open Day mode locks configuration. Restart ModelDeck without <code>-OpenDay</code> to create Workers.</div>}{feedback && <div className="configuration-feedback good">{feedback}</div>}
     <section className="panel"><PanelHeading title="Discovered Models" detail={query.trim() ? `${sorted.length} of ${models.length} cached` : `${models.length} cached`} />{sorted.length ? <div className="model-list">{sorted.map((model) => { const key = `${model.model_id}@${model.revision}`; const baseline = templates.find((item) => item.id === model.configuration_support); const availableTemplates = templates.filter((item) => baseline && item.generation_family === baseline.generation_family && item.cache_setting === baseline.cache_setting && item.uses_base_model_identity === baseline.uses_base_model_identity); const selectedTemplate = availableTemplates.find((template) => template.id === runtime); return <article className="model-row" key={key}><div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unclassified"} · {formatBytes(model.physical_size_bytes)} · {model.worker_count} Worker{model.worker_count === 1 ? "" : "s"}</p><div className="tag-list">{model.capability_hints.map((hint) => <span className="tag" key={hint}>{humanise(hint)}</span>)}</div></div><StateBadge state={model.runnable ? "recognised" : model.download_state} /></div><p className="model-stage">{model.runnable_reason}</p>{configuring !== key ? <div className="model-actions"><button disabled={openDay || !model.runnable || !model.modeldeck_allowed || !model.revision} onClick={() => begin(model)}>Create Worker</button></div> : <div className="runtime-form"><div className="runtime-form-heading"><strong>Create a Worker</strong><small>The trusted runtime determines the immutable execution identity.</small></div><div className="runtime-fields"><label>Worker name<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div>{selectedTemplate && <p className="manifest-note">Runtime defaults: {selectedTemplate.dtype ?? "float16"} · {String(selectedTemplate.settings.context_length ?? 2048)} context · {String(selectedTemplate.settings.maximum_new_tokens ?? 128)} max output · {selectedTemplate.lifecycle ?? "on-demand"}</p>}<div className="runtime-form-actions"><button disabled={openDay} onClick={() => void create(model).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => setConfiguring(null)}>Cancel</button></div></div>}</article>; })}</div> : <div className="empty-state compact"><h3>No Models match “{query.trim()}”</h3><p>Try a model name, generation family or capability.</p></div>}</section>
   </div>;
