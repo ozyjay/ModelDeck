@@ -76,6 +76,18 @@ function mockFetch(payloads: Record<string, unknown>) {
   }));
 }
 
+function catalogueModel(modelId: string, capabilityHints: string[] = ["text-generation", "chat"]) {
+  return {
+    model_id: modelId, revision: "revision-1", cache_location: "/cache/model",
+    snapshot_location: "/cache/snapshot", physical_size_bytes: 1,
+    download_state: "installed-untested", generation_family_hint: "autoregressive",
+    capability_hints: capabilityHints, configuration_support: "autoregressive-transformers",
+    configuration_support_reason: "Supported", modeldeck_allowed: true,
+    base_model_id: null, base_model_revision: null, runnable: true,
+    runnable_reason: "Ready to create a Worker.", worker_count: 0, artifacts: [],
+  };
+}
+
 describe("ModelDeck v2 operator console", () => {
   beforeEach(() => window.history.replaceState({}, "", "/"));
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -94,6 +106,32 @@ describe("ModelDeck v2 operator console", () => {
     expect(await screen.findByRole("heading", { name: "Qwen token trace" })).toBeInTheDocument();
     expect(screen.getByText(/execution identity is not/i)).toBeInTheDocument();
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
+  });
+
+  it("filters the Models library by model metadata", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [
+      catalogueModel("Qwen/Qwen2.5-1.5B-Instruct"),
+      catalogueModel("Example/Vision-Model", ["image-input", "chat"]),
+    ], downloads_started: false };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search models" }), { target: { value: "qwen" } });
+    expect(screen.getByRole("heading", { name: "Qwen/Qwen2.5-1.5B-Instruct" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Example/Vision-Model" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 of 2 cached")).toBeInTheDocument();
+  });
+
+  it("explains and disables Worker creation while Open Day mode is active", async () => {
+    const payloads = responses();
+    payloads["/api/health"] = { ...(payloads["/api/health"] as object), open_day: true };
+    payloads["/api/catalogue"] = { models: [catalogueModel("Qwen/Qwen2.5-1.5B-Instruct")], downloads_started: false };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    expect(screen.getByText(/Open Day mode locks configuration/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Worker" })).toBeDisabled();
   });
 
   it("edits an Event with explicit primary and ordered backup Workers", async () => {
