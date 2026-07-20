@@ -173,7 +173,10 @@ nav { display: grid; gap: 0.3rem; }
 .worker-card.state-ready::before, .worker-card.state-busy::before { background: var(--accent); }
 .worker-card.state-failed::before, .worker-card.state-incompatible::before { background: var(--danger); }
 .worker-card.state-loading::before, .worker-card.state-warming::before, .worker-card.state-starting::before { background: var(--blue); }
+.worker-card.collapsed > :not(.worker-card-heading) { display: none; }
 .worker-card-heading { display: flex; justify-content: space-between; gap: 1rem; }
+.worker-card-heading-actions { display: flex; align-items: center; gap: 0.6rem; }
+.compact-button { padding: 0.38rem 0.58rem; font-size: 0.75rem; }
 .worker-card h3 { margin: 0.15rem 0; font-size: 1.03rem; overflow-wrap: anywhere; }
 .worker-id { margin: 0; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .worker-summary { margin: 0.2rem 0 0.75rem; color: var(--muted); font-size: 0.82rem; }

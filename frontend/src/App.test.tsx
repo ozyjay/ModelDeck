@@ -114,6 +114,50 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
   });
 
+  it("collapses and expands a Worker card", async () => {
+    mockFetch(responses(true));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    const collapse = await screen.findByRole("button", { name: "Collapse Worker Qwen token trace" });
+    expect(screen.getByRole("button", { name: "Archive" })).toBeVisible();
+    fireEvent.click(collapse);
+
+    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    const expand = screen.getByRole("button", { name: "Expand Worker Qwen token trace" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(expand);
+
+    expect(screen.getByRole("button", { name: "Archive" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse Worker Qwen token trace" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("explains the effect of archiving and leaves the Worker unchanged when cancelled", async () => {
+    const payloads = responses(true);
+    payloads[`/api/workers/${worker.id}`] = { ok: true, worker_id: worker.id, cache_removed: false };
+    const fetchMock = mockFetch(payloads);
+    const confirm = vi.spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    const archiveButton = await screen.findByRole("button", { name: "Archive" });
+    fireEvent.click(archiveButton);
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/cannot be restored in ModelDeck/i));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Historical Event revisions and cached Model files will be kept/i));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/Cancel leaves the Worker unchanged/i));
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/workers/${worker.id}` && init?.method === "DELETE"
+    )).toBe(false);
+
+    fireEvent.click(archiveButton);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/workers/${worker.id}` && init?.method === "DELETE"
+    )).toBe(true));
+  });
+
   it("allows start requests for different Workers to be submitted together", async () => {
     const secondWorker = { ...worker, id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380", name: "Second Qwen", port: 8632 };
     const payloads = responses(true);
@@ -165,6 +209,7 @@ describe("ModelDeck v2 operator console", () => {
     fireEvent.click(await screen.findByRole("link", { name: "Events" }));
     expect(await screen.findByRole("heading", { name: "2026 Open Day" })).toBeInTheDocument();
     expect(screen.getByText("Primary")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Route name" })).toHaveValue("Token trace");
     expect(screen.getByDisplayValue("qwen-0-5b")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
   });
