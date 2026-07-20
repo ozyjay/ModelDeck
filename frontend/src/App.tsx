@@ -118,7 +118,10 @@ export default function App() {
       </aside>
       <main className="main-content">
         <header className="topbar"><div><p className="eyebrow">Framework Desktop · local control plane</p><h1>{NAVIGATION.find((item) => item.view === view)?.label}</h1></div>
-          <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}><StatusDot state={gateway?.available ? "good" : "bad"} /><span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span></div>
+          <div className="topbar-status">
+            {health && <div className={`mode-badge ${health.open_day ? "locked" : "unlocked"}`} aria-label="Configuration status"><StatusDot state={health.open_day ? "warn" : "good"} /><span>{health.open_day ? "Open Day · configuration locked" : "Configuration unlocked"}</span></div>}
+            <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}><StatusDot state={gateway?.available ? "good" : "bad"} /><span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span></div>
+          </div>
         </header>
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
         {!health || !hardware || !telemetry || !gateway ? <Unavailable retry={refresh} />
@@ -185,11 +188,11 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
     if (!draft || !selected || JSON.stringify(draft) === JSON.stringify(selected.definition) || openDay) return;
     setSaveState("Saving…");
     const timer = window.setTimeout(() => {
-      putJson(`/api/events/${draft.id}/draft`, draft).then(() => { setSaveState("Saved"); return refresh(); })
+      putJson(`/api/events/${draft.id}/draft`, draft).then(() => setSaveState("Saved"))
         .catch((reason) => { setSaveState("Save failed"); setFeedback(messageFrom(reason)); });
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [draft, selected, openDay, refresh]);
+  }, [draft, selected, openDay]);
 
   const createEvent = async () => {
     const definition: EventDefinition = { id: crypto.randomUUID(), name: "New Event", description: "", qualification: "compatible", demos: [], routes: [] };

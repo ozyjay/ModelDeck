@@ -52,9 +52,12 @@ nav { display: grid; gap: 0.3rem; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.8rem; }
 .topbar h1 { margin: 0.18rem 0 0; font-size: clamp(1.65rem, 3vw, 2.25rem); letter-spacing: -0.04em; }
 .eyebrow { margin: 0; color: var(--accent); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
-.gateway-badge, .stream-status { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.62rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: #111a25; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.topbar-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.55rem; }
+.gateway-badge, .mode-badge, .stream-status { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.62rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: #111a25; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
 .gateway-badge.ready { color: #b7f7df; border-color: #285844; }
 .gateway-badge.unavailable { color: #ffc1c7; border-color: #653944; }
+.mode-badge.unlocked { color: #b7f7df; border-color: #285844; }
+.mode-badge.locked { color: #ffe0ac; border-color: #6a5431; }
 .status-dot { width: 0.54rem; height: 0.54rem; display: inline-block; flex: 0 0 auto; border-radius: 50%; background: var(--neutral); box-shadow: 0 0 0 3px #77869b22; }
 .status-dot.good { background: var(--accent); box-shadow: 0 0 0 3px #68e0b825; }
 .status-dot.warn { background: var(--warning); box-shadow: 0 0 0 3px #f3ba6725; }

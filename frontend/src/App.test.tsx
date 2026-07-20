@@ -66,14 +66,16 @@ function responses(includeConfiguration = false): Record<string, unknown> {
 }
 
 function mockFetch(payloads: Record<string, unknown>) {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://localhost").pathname;
     const payload = payloads[path];
     return new Response(JSON.stringify(payload ?? { detail: `Unexpected request: ${path}` }), {
       status: payload === undefined ? 404 : 200,
       headers: { "Content-Type": "application/json" },
     });
-  }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 function catalogueModel(modelId: string, capabilityHints: string[] = ["text-generation", "chat"]) {
@@ -96,6 +98,7 @@ describe("ModelDeck v2 operator console", () => {
     mockFetch(responses());
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Build your first local route" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Configuration status")).toHaveTextContent("Configuration unlocked");
     expect(screen.getByText("ModelDeck starts empty: create a Worker from a discovered Model, create an Event and Route, then publish it.")).toBeInTheDocument();
   });
 
@@ -130,6 +133,7 @@ describe("ModelDeck v2 operator console", () => {
     mockFetch(payloads);
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    expect(screen.getByLabelText("Configuration status")).toHaveTextContent("Open Day · configuration locked");
     expect(screen.getByText(/Open Day mode locks configuration/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Worker" })).toBeDisabled();
   });
@@ -142,6 +146,21 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText("Primary")).toBeInTheDocument();
     expect(screen.getByDisplayValue("qwen-0-5b")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
+  });
+
+  it("preserves Event description input while autosaving", async () => {
+    const payloads = responses(true);
+    payloads[`/api/events/${eventRecord.definition.id}/draft`] = eventRecord;
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    const description = screen.getByRole("textbox", { name: "Description" });
+    fireEvent.change(description, { target: { value: "A description typed without interruption" } });
+    expect(description).toHaveValue("A description typed without interruption");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === `/api/events/${eventRecord.definition.id}/draft`)).toBe(true), { timeout: 1500 });
+    await waitFor(() => expect(screen.getByText(/· Saved/)).toBeInTheDocument(), { timeout: 1500 });
+    expect(description).toHaveValue("A description typed without interruption");
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/events")).toHaveLength(1);
   });
 
   it("offers a discovered GPT-OSS artefact when creating its Worker", async () => {
