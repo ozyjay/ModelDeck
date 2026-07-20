@@ -106,7 +106,9 @@ nav { display: grid; gap: 0.3rem; }
 .view-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.35rem 0; }
 .view-actions p, .section-description, .muted { color: var(--muted); }
 .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.75rem; }
+.field-grid, .field-grid label { min-width: 0; }
 .field-grid label { display: grid; gap: 0.35rem; }
+.field-grid input, .field-grid select { width: 100%; min-width: 0; }
 .field-help { color: var(--muted); font-size: 0.72rem; font-weight: 500; text-transform: none; }
 .field-help code { color: inherit; font-size: inherit; }
 .order-label { width: 5rem; flex: 0 0 auto; color: var(--muted); font-size: 0.75rem; font-weight: 750; text-transform: uppercase; }
@@ -125,7 +127,7 @@ nav { display: grid; gap: 0.3rem; }
 .event-select small { margin-top: 0.2rem; color: var(--muted); }
 .event-editor label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
 .event-editor input, .event-editor textarea { width: 100%; }
-.event-detail { min-width: 0; }
+.event-detail, .event-editor, .route-editor-list, .route-editor, .worker-order-list { min-width: 0; }
 .event-heading, .route-editor-title, .editor-section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
 .event-heading h2, .editor-section-heading h3, .editor-section-heading h4 { margin: 0.15rem 0; }
 .event-heading p:last-child { color: var(--muted); }
@@ -141,9 +143,11 @@ nav { display: grid; gap: 0.3rem; }
 .active-route-table td > small { margin-top: 0.15rem; color: var(--muted); overflow-wrap: anywhere; }
 .active-worker-chain { display: grid; gap: 0.4rem; }
 .demo-route-list, .route-editor-list { display: grid; gap: 0.8rem; }
-.demo-route-card, .route-editor { padding: 1rem; border: 1px solid var(--line-soft); border-radius: 0.75rem; background: #0e1621; }
+.demo-route-card, .route-editor { width: 100%; max-width: 100%; padding: 1rem; border: 1px solid var(--line-soft); border-radius: 0.75rem; background: #0e1621; }
 .worker-order-list, .demo-editor-list { display: grid; gap: 0.5rem; }
 .demo-editor-list > div, .worker-order-list > div { display: flex; align-items: center; justify-content: space-between; gap: 0.65rem; padding: 0.6rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; }
+.worker-order-list > div > select { flex: 1 1 12rem; width: 100%; min-width: 0; }
+.worker-order-list > div > button { flex: 0 0 auto; }
 .demo-editor-list > div { align-items: end; }
 .demo-editor-list label { flex: 1; min-width: 0; }
 .demo-editor-list .identifier-input { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
