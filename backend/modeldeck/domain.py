@@ -152,7 +152,16 @@ class EventDefinition(BaseModel):
         if len(route_ids) != len(set(route_ids)):
             raise ValueError("route identifiers must be unique")
         if len(public_names) != len(set(public_names)):
-            raise ValueError("public route names must be unique within an Event")
+            duplicates = {public_name for public_name in public_names if public_names.count(public_name) > 1}
+            conflicting_routes = [
+                f"'{route.display_name}' ({route.public_name})"
+                for route in self.routes
+                if route.public_name.casefold() in duplicates
+            ]
+            raise ValueError(
+                "API Model IDs must be unique within an Event; conflicting Routes: "
+                + ", ".join(conflicting_routes)
+            )
         known_routes = set(route_ids)
         for demo in self.demos:
             if len(demo.route_ids) != len(set(demo.route_ids)):

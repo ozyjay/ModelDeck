@@ -413,7 +413,7 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText("Primary")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Route Label" })).toHaveValue("Token trace");
     expect(screen.getByRole("textbox", { name: "API Model ID" })).toHaveValue("qwen-0-5b");
-    expect(screen.getByText(/Sent by clients in the/)).toHaveTextContent("Sent by clients in the model field.");
+    expect(screen.getByText(/Sent by clients in the/)).toHaveTextContent("Sent by clients in the model field and must be unique within this Event.");
     const demo = screen.getByRole("article", { name: "Demo Token Trails" });
     expect(within(demo).getByRole("checkbox", { name: /Token trace/ })).toBeChecked();
     expect(screen.getByRole("heading", { name: "Routes" })).toBeInTheDocument();
@@ -479,6 +479,37 @@ describe("ModelDeck v2 operator console", () => {
     const route = await screen.findByRole("article", { name: "Route Token trace" });
     expect(within(route).getByText(/Native autoregressive trace requires an autoregressive Worker with top k trace/)).toBeInTheDocument();
     expect(within(route).getByRole("option", { name: /DiffusionGemma Q4.*incompatible/ })).toBeDisabled();
+  });
+
+  it("identifies duplicate API Model IDs before autosave", async () => {
+    const qwenRoute = {
+      ...eventRecord.definition.routes[0],
+      id: "f50dcfc1-b0b5-460c-94bd-bfc0933145fd",
+      display_name: "Qwen3.5 0.8B 70",
+      public_name: "qwen3-5-0-8b-70",
+    };
+    const record = {
+      ...eventRecord,
+      definition: {
+        ...eventRecord.definition,
+        routes: [...eventRecord.definition.routes, qwenRoute],
+      },
+    };
+    const payloads = responses(true);
+    payloads["/api/events"] = { events: [record] };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const qwenCard = await screen.findByRole("article", { name: "Route Qwen3.5 0.8B 70" });
+    fireEvent.change(within(qwenCard).getByRole("textbox", { name: "API Model ID" }), { target: { value: "qwen-0-5b" } });
+
+    expect(within(qwenCard).getByText("“qwen-0-5b” is already used by Route “Token trace”. Choose a unique API Model ID.")).toBeInTheDocument();
+    expect(within(qwenCard).getByRole("textbox", { name: "API Model ID" })).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Validate" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish routing" })).toBeDisabled();
+    expect(screen.getByText(/Needs attention/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith("/draft") && init?.method === "PUT")).toBe(false);
   });
 
   it("shows structured validation details when publishing fails", async () => {

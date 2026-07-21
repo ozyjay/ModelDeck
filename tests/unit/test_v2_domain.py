@@ -83,6 +83,26 @@ def test_event_routes_share_workers_and_preserve_explicit_order():
     assert routing_snapshot(event, 4)["routes"][0]["worker_ids"] == [primary.id, backup.id]
 
 
+def test_event_duplicate_api_model_ids_name_conflicting_routes():
+    worker = worker_definition()
+    event = event_definition(worker.id)
+    duplicate = event.routes[0].model_copy(update={"id": str(uuid4()), "display_name": "Qwen3.5 vision"})
+
+    with pytest.raises(
+        ValueError,
+        match=r"API Model IDs must be unique.*Token trace.*qwen-0-5b.*Qwen3.5 vision",
+    ):
+        EventDefinition.model_validate(
+            {
+                **event.model_dump(mode="json"),
+                "routes": [
+                    event.routes[0].model_dump(mode="json"),
+                    duplicate.model_dump(mode="json"),
+                ],
+            }
+        )
+
+
 def test_tested_working_event_requires_matching_evidence():
     worker = worker_definition()
     event = event_definition(worker.id, qualification="tested-working")

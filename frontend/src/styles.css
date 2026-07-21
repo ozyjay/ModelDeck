@@ -139,6 +139,8 @@ nav { display: grid; gap: 0.3rem; }
 .event-select small { margin-top: 0.2rem; color: var(--muted); }
 .event-editor label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
 .event-editor input, .event-editor textarea { width: 100%; }
+.event-editor input[aria-invalid="true"] { border-color: var(--danger); }
+.event-editor .field-error { color: #ffc1c7; font-weight: 650; line-height: 1.4; text-transform: none; }
 .event-detail, .event-editor, .route-editor-list, .route-editor, .worker-order-list { min-width: 0; }
 .event-heading, .route-editor-title, .editor-section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
 .event-heading h2, .editor-section-heading h3, .editor-section-heading h4 { margin: 0.15rem 0; }
