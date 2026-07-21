@@ -171,6 +171,39 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("status")).toHaveTextContent("2 of 2 Workers");
   });
 
+  it("remembers Worker search, filters and sorting after a reload", async () => {
+    const visionWorker: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "Qwen vision",
+      state: "ready",
+      model_id: "Qwen/Qwen3.5-4B",
+      runtime: "qwen35-rocm",
+      port: 8632,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, visionWorker];
+    mockFetch(payloads);
+    const first = render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search workers" }), { target: { value: "vision" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "State" }), { target: { value: "ready" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Runtime" }), { target: { value: "qwen35-rocm" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort workers" }), { target: { value: "runtime-asc" } });
+    await waitFor(() => expect(window.localStorage.getItem("modeldeck-worker-library-preferences-v1")).toContain('"runtime":"qwen35-rocm"'));
+
+    first.unmount();
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    expect(await screen.findByRole("searchbox", { name: "Search workers" })).toHaveValue("vision");
+    expect(screen.getByRole("combobox", { name: "State" })).toHaveValue("ready");
+    expect(screen.getByRole("combobox", { name: "Runtime" })).toHaveValue("qwen35-rocm");
+    expect(screen.getByRole("combobox", { name: "Sort workers" })).toHaveValue("runtime-asc");
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 2 Workers");
+  });
+
   it("collapses and expands a Worker card", async () => {
     mockFetch(responses(true));
     render(<App />);
@@ -267,6 +300,30 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("heading", { name: "Qwen/Qwen2.5-1.5B-Instruct" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Example/Vision-Model" })).not.toBeInTheDocument();
     expect(screen.getByText("1 of 2 cached")).toBeInTheDocument();
+  });
+
+  it("remembers Model search and sorting after a reload", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [
+      catalogueModel("Qwen/Qwen3.5-4B"),
+      catalogueModel("Example/Vision-Model", ["image-input"]),
+    ], downloads_started: false };
+    mockFetch(payloads);
+    const first = render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search models" }), { target: { value: "qwen" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort models" }), { target: { value: "size-desc" } });
+    await waitFor(() => expect(window.localStorage.getItem("modeldeck-model-library-preferences-v1")).toContain('"sort":"size-desc"'));
+
+    first.unmount();
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+
+    expect(await screen.findByRole("searchbox", { name: "Search models" })).toHaveValue("qwen");
+    expect(screen.getByRole("combobox", { name: "Sort models" })).toHaveValue("size-desc");
+    expect(screen.getByRole("heading", { name: "Qwen/Qwen3.5-4B" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Example/Vision-Model" })).not.toBeInTheDocument();
   });
 
   it("keeps the Models catalogue open while collapsing individual Model cards", async () => {

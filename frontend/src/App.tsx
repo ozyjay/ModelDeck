@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 
 import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
@@ -25,7 +25,55 @@ interface CollapseControls {
 }
 
 const COLLAPSE_STORAGE_KEY = "modeldeck-collapse-preferences-v1";
+const WORKER_LIBRARY_STORAGE_KEY = "modeldeck-worker-library-preferences-v1";
+const MODEL_LIBRARY_STORAGE_KEY = "modeldeck-model-library-preferences-v1";
 const CollapseContext = createContext<CollapseControls | null>(null);
+
+interface WorkerLibraryPreferences { query: string; state: string; runtime: string; sort: WorkerSort }
+interface ModelLibraryPreferences { query: string; sort: ModelSort }
+
+const WORKER_SORTS: WorkerSort[] = ["name-asc", "name-desc", "model-asc", "runtime-asc", "state"];
+const MODEL_SORTS: ModelSort[] = ["name-asc", "name-desc", "size-desc", "size-asc", "readiness", "workers"];
+
+function storedObject(key: string): Record<string, unknown> {
+  try {
+    const stored = window.localStorage.getItem(key);
+    const parsed: unknown = stored ? JSON.parse(stored) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadWorkerLibraryPreferences(): WorkerLibraryPreferences {
+  const stored = storedObject(WORKER_LIBRARY_STORAGE_KEY);
+  return {
+    query: typeof stored.query === "string" ? stored.query : "",
+    state: typeof stored.state === "string" ? stored.state : "",
+    runtime: typeof stored.runtime === "string" ? stored.runtime : "",
+    sort: WORKER_SORTS.includes(stored.sort as WorkerSort) ? stored.sort as WorkerSort : "name-asc",
+  };
+}
+
+function loadModelLibraryPreferences(): ModelLibraryPreferences {
+  const stored = storedObject(MODEL_LIBRARY_STORAGE_KEY);
+  return {
+    query: typeof stored.query === "string" ? stored.query : "",
+    sort: MODEL_SORTS.includes(stored.sort as ModelSort) ? stored.sort as ModelSort : "name-asc",
+  };
+}
+
+function useStoredPreferences<T>(key: string, load: () => T): [T, Dispatch<SetStateAction<T>>] {
+  const [preferences, setPreferences] = useState<T>(load);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(preferences));
+    } catch {
+      console.warn(`${key} could not be saved locally.`);
+    }
+  }, [key, preferences]);
+  return [preferences, setPreferences];
+}
 
 function loadCollapsePreferences(): CollapsePreferences {
   try {
@@ -446,10 +494,8 @@ function confirmArchiveWorker(worker: Worker) {
 function WorkersView({ workers, templates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const collapseControls = useContext(CollapseContext);
   if (!collapseControls) throw new Error("Collapse controls are unavailable");
-  const [query, setQuery] = useState("");
-  const [stateFilter, setStateFilter] = useState("");
-  const [runtimeFilter, setRuntimeFilter] = useState("");
-  const [sort, setSort] = useState<WorkerSort>("name-asc");
+  const [libraryPreferences, setLibraryPreferences] = useStoredPreferences(WORKER_LIBRARY_STORAGE_KEY, loadWorkerLibraryPreferences);
+  const { query, state: stateFilter, runtime: runtimeFilter, sort } = libraryPreferences;
   const [feedback, setFeedback] = useState<string | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
   const [replacementWorkerName, setReplacementWorkerName] = useState("");
@@ -472,7 +518,7 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
   }, [workers, query, stateFilter, runtimeFilter]);
   const sorted = useMemo(() => [...filteredWorkers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [filteredWorkers, sort]);
   const filtersActive = Boolean(query.trim() || stateFilter || runtimeFilter);
-  const clearFilters = () => { setQuery(""); setStateFilter(""); setRuntimeFilter(""); };
+  const clearFilters = () => setLibraryPreferences((current) => ({ ...current, query: "", state: "", runtime: "" }));
   const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
   const archive = async (worker: Worker) => {
     if (!confirmArchiveWorker(worker)) return;
@@ -493,7 +539,7 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
     await refresh();
   };
   return <div className="view-stack"><div className="view-actions worker-view-heading"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Use Replace to change safe model limits without mutating the original Worker.</p></div>
-    {!!workers.length && <div className="worker-toolbar" aria-label="Worker search and filters"><label>Search workers<input type="search" value={query} placeholder="Name, model or capability" onChange={(event) => setQuery(event.target.value)} /></label><label>State<select value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}><option value="">All states</option>{states.map((state) => <option key={state} value={state}>{state.replaceAll("-", " ")}</option>)}</select></label><label>Runtime<select value={runtimeFilter} onChange={(event) => setRuntimeFilter(event.target.value)}><option value="">All runtimes</option>{runtimes.map((runtime) => <option key={runtime} value={runtime}>{runtime}</option>)}</select></label><label>Sort workers<select value={sort} onChange={(event) => setSort(event.target.value as WorkerSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label><div className="worker-filter-summary" role="status"><span>{sorted.length} of {workers.length} Worker{workers.length === 1 ? "" : "s"}</span><button className="secondary compact-button" disabled={!filtersActive} onClick={clearFilters}>Clear filters</button></div></div>}
+    {!!workers.length && <div className="worker-toolbar" aria-label="Worker search and filters"><label>Search workers<input type="search" value={query} placeholder="Name, model or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>State<select value={stateFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, state: event.target.value }))}><option value="">All states</option>{stateFilter && !states.includes(stateFilter as Worker["state"]) && <option value={stateFilter}>{stateFilter.replaceAll("-", " ")} (not currently present)</option>}{states.map((state) => <option key={state} value={state}>{state.replaceAll("-", " ")}</option>)}</select></label><label>Runtime<select value={runtimeFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, runtime: event.target.value }))}><option value="">All runtimes</option>{runtimeFilter && !runtimes.includes(runtimeFilter) && <option value={runtimeFilter}>{runtimeFilter} (not currently present)</option>}{runtimes.map((runtime) => <option key={runtime} value={runtime}>{runtime}</option>)}</select></label><label>Sort workers<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as WorkerSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label><div className="worker-filter-summary" role="status"><span>{sorted.length} of {workers.length} Worker{workers.length === 1 ? "" : "s"}</span><button className="secondary compact-button" disabled={!filtersActive} onClick={clearFilters}>Clear filters</button></div></div>}
     {feedback && <div className="configuration-feedback">{feedback}</div>}
     {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : !sorted.length ? <section className="empty-state compact"><h2>No Workers match these filters</h2><p>Try a different name, model, capability, state or runtime.</p><button className="secondary" onClick={clearFilters}>Clear filters</button></section> : <div className="worker-grid">{sorted.map((worker) => {
       const workerPending = workerOperationPending(pending, worker.id);
@@ -535,8 +581,8 @@ function ModelCardShell({ model, children }: { model: ModelEntry; children: Reac
 }
 
 function ModelsView({ models, workers, templates, refresh, openDay }: { models: ModelEntry[]; workers: Worker[]; templates: RuntimeTemplate[]; refresh: () => Promise<void>; openDay: boolean }) {
-  const [sort, setSort] = useState<ModelSort>("name-asc");
-  const [query, setQuery] = useState("");
+  const [libraryPreferences, setLibraryPreferences] = useStoredPreferences(MODEL_LIBRARY_STORAGE_KEY, loadModelLibraryPreferences);
+  const { query, sort } = libraryPreferences;
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [runtime, setRuntime] = useState("");
@@ -592,7 +638,7 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
     const selectedTemplate = availableTemplates.find((template) => template.id === runtime);
     if (model) return <div className="view-stack"><section className="panel model-configuration"><div className="runtime-form-heading"><p className="eyebrow">{model.generation_family_hint ?? "Model"}</p><h2>Create a Worker</h2><small>{model.model_id} at pinned revision {model.revision}</small></div><div className="runtime-fields"><label>Worker name<input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => { const nextRuntime = event.target.value; setRuntime(nextRuntime); setParameters(runtimeParameterDefaults(availableTemplates.find((item) => item.id === nextRuntime))); }}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div>{selectedTemplate ? <WorkerParameterFields template={selectedTemplate} values={parameters} onChange={setParameters} /> : <div className="configuration-feedback bad">No compatible trusted runtime is installed for this Model.</div>}<div className="runtime-form-actions"><button disabled={openDay || !name.trim() || !selectedTemplate || (selectedTemplate ? !parametersAreValid(selectedTemplate, parameters) : true)} onClick={() => selectedTemplate && void create(model, selectedTemplate).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => setConfiguring(null)}>Cancel</button></div>{feedback && <div className="configuration-feedback bad">{feedback}</div>}</section></div>;
   }
-  return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Create as many Workers as a Model needs.</p><div className="model-library-toolbar"><label>Search models<input type="search" value={query} placeholder="Name or capability" onChange={(event) => setQuery(event.target.value)} /></label><label>Sort models<select value={sort} onChange={(event) => setSort(event.target.value as ModelSort)}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label></div></div>{openDay && <div className="configuration-feedback">Open Day mode locks configuration. Restart ModelDeck without <code>-OpenDay</code> to create Workers.</div>}{feedback && <div className="configuration-feedback good">{feedback}</div>}
+  return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Create as many Workers as a Model needs.</p><div className="model-library-toolbar"><label>Search models<input type="search" value={query} placeholder="Name or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>Sort models<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as ModelSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label></div></div>{openDay && <div className="configuration-feedback">Open Day mode locks configuration. Restart ModelDeck without <code>-OpenDay</code> to create Workers.</div>}{feedback && <div className="configuration-feedback good">{feedback}</div>}
     <section className="panel"><StaticPanelHeading title="Discovered Models" detail={query.trim() ? `${sorted.length} of ${models.length} cached` : `${models.length} cached`} />{sorted.length ? <div className="model-list">{sorted.map((model) => {
       const key = `${model.model_id}@${model.revision}`;
       const baseline = templates.find((item) => item.id === model.configuration_support);
