@@ -305,7 +305,16 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
     const definition: EventDefinition = { id: crypto.randomUUID(), name: "New Event", description: "", qualification: "compatible", demos: [], routes: [] };
     const record = await postJson<EventRecord>("/api/events", definition); await refresh(); setSelectedId(record.definition.id);
   };
-  const validate = async () => { if (!draft) return; setValidation(await postJson(`/api/events/${draft.id}/validate`)); };
+  const validate = async () => {
+    if (!draft) return;
+    if (!openDay) {
+      setSaveState("Saving…");
+      await putJson(`/api/events/${draft.id}/draft`, draft);
+      setSaveState("Saved");
+    }
+    setValidation(await postJson(`/api/events/${draft.id}/validate`));
+    setFeedback(null);
+  };
   const publish = async () => {
     if (!draft) return;
     await putJson(`/api/events/${draft.id}/draft`, draft);
@@ -340,7 +349,7 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
       <aside className="panel event-list">{events.map((event) => <button className={`event-select ${event.definition.id === draft.id ? "active" : ""}`} key={event.definition.id} onClick={() => setSelectedId(event.definition.id)}><span><strong>{event.definition.name}</strong><small>{event.active ? `Live revision ${event.active_revision}` : event.latest_revision ? `Published revision ${event.latest_revision}` : "Draft only"}</small></span></button>)}</aside>
       <CollapsiblePanel sectionId={`event-${draft.id}`} title={draft.name} detail={`${selected.active ? `Live revision ${selected.active_revision}` : "Draft"} · ${saveState}`} className="event-detail" accessory={<StateBadge state={selected.active ? "ready" : "stopped"} />}>
         {feedback && <div className="configuration-feedback">{feedback}</div>}
-        <div className="button-row event-actions"><button className="secondary" onClick={() => void validate()}>Validate</button><button disabled={openDay || saveState === "Saving…"} onClick={() => void publish().catch((reason) => setFeedback(messageFrom(reason)))}>Publish routing</button><button className="secondary" disabled={openDay || !selected.latest_revision} onClick={() => void discard().catch((reason) => setFeedback(messageFrom(reason)))}>Discard draft</button><button className="secondary" onClick={() => void loadRevisions()}>History</button><button className="secondary danger" disabled={openDay || Boolean(selected.latest_revision)} onClick={() => void deleteEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Delete Event</button></div>
+        <div className="button-row event-actions"><button className="secondary" onClick={() => void validate().catch((reason) => setFeedback(messageFrom(reason)))}>Validate</button><button disabled={openDay || saveState === "Saving…"} onClick={() => void publish().catch((reason) => setFeedback(messageFrom(reason)))}>Publish routing</button><button className="secondary" disabled={openDay || !selected.latest_revision} onClick={() => void discard().catch((reason) => setFeedback(messageFrom(reason)))}>Discard draft</button><button className="secondary" onClick={() => void loadRevisions()}>History</button><button className="secondary danger" disabled={openDay || Boolean(selected.latest_revision)} onClick={() => void deleteEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Delete Event</button></div>
         {validation && <div className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Ready to publish" : "Validation needs attention"}</strong>{validation.errors.length > 0 && <section aria-label="Validation errors"><h3>{validation.errors.length} error{validation.errors.length === 1 ? "" : "s"}</h3><ul>{validation.errors.map((error, index) => <ValidationIssue key={index} issue={error} draft={draft} workers={workers} />)}</ul></section>}{validation.warnings.length > 0 && <section aria-label="Validation notes"><h3>{validation.warnings.length} note{validation.warnings.length === 1 ? "" : "s"}</h3><ul>{validation.warnings.map((warning, index) => <ValidationIssue key={`warning-${index}`} issue={warning} draft={draft} workers={workers} note />)}</ul></section>}</div>}
         {revisions.length > 0 && <details className="revision-history" open><summary>Published revisions</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{new Date(revision.published_at).toLocaleString()}</small></span><button className="secondary" disabled={revision.active || openDay} onClick={() => void postJson(`/api/events/${draft.id}/revisions/${revision.revision}/publish`).then(refresh)}>Make live</button></article>)}</div></details>}
         <div className="event-editor">
@@ -352,8 +361,8 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
           <CollapsibleEditorSection sectionId={`event-routes-${draft.id}`} title="Routes" description="Configure the Routes available to this Event. A Route can be used by multiple Demos or remain unassigned." accessory={<button disabled={openDay || !workers.length} onClick={() => setDraft({ ...draft, routes: [...draft.routes, { id: crypto.randomUUID(), display_name: "New Route", public_name: `route-${draft.routes.length + 1}`, protocol_contract: contracts[0]?.id ?? "openai-chat-v1", worker_ids: [workers[0].id] }] })}>Add Route</button>}>
             <section className="unassigned-routes" aria-labelledby="unassigned-routes-heading"><div><h4 id="unassigned-routes-heading">Unassigned Routes</h4><small>Shared Routes that are not used by any Demo.</small></div>{unassignedRoutes.length ? <div className="compact-route-reference-list">{unassignedRoutes.map((route) => <div className="compact-route-reference" key={route.id}><strong>{route.display_name}</strong><code>{route.public_name}</code></div>)}</div> : <p className="muted">{draft.routes.length ? "Every shared Route is used by at least one Demo." : "No shared Routes have been created."}</p>}</section>
             <div className="route-editor-list">{draft.routes.map((route) => <CollapsibleEditorCard sectionId={`event-route-${draft.id}-${route.id}`} label={`Route ${route.display_name}`} heading={<h4>{route.display_name}</h4>} accessory={<button className="secondary danger" disabled={openDay} onClick={() => removeRoute(route.id)}>Remove</button>} key={route.id}><div className="field-grid"><label>Route Label<input value={route.display_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { display_name: event.target.value })} /></label><label>API Model ID<small className="field-help">Sent by clients in the <code>model</code> field.</small><input aria-label="API Model ID" value={route.public_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { public_name: event.target.value })} /></label><label>Protocol contract<select value={route.protocol_contract} disabled={openDay} onChange={(event) => updateRoute(route.id, { protocol_contract: event.target.value })}>{contracts.map((contract) => <option value={contract.id} key={contract.id}>{contract.display_name}</option>)}</select></label></div>
-            <h4>Worker order</h4><div className="worker-order-list">{route.worker_ids.map((workerId, index) => <div key={`${workerId}-${index}`}><span className="order-label">{index === 0 ? "Primary" : `Backup ${index}`}</span><select value={workerId} disabled={openDay} onChange={(event) => { const next = [...route.worker_ids]; next[index] = event.target.value; updateRoute(route.id, { worker_ids: next }); }}>{workers.map((worker) => <option key={worker.id} value={worker.id} disabled={route.worker_ids.includes(worker.id) && worker.id !== workerId}>{worker.name} · {worker.model_id}</option>)}</select><button className="secondary" disabled={openDay || index === 0} onClick={() => { const next = [...route.worker_ids]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateRoute(route.id, { worker_ids: next }); }}>↑</button><button className="secondary" disabled={openDay || index === route.worker_ids.length - 1} onClick={() => { const next = [...route.worker_ids]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; updateRoute(route.id, { worker_ids: next }); }}>↓</button><button className="secondary danger" disabled={openDay || index === 0} onClick={() => updateRoute(route.id, { worker_ids: route.worker_ids.filter((_, item) => item !== index) })}>Remove</button></div>)}</div>
-            <button className="secondary" disabled={openDay || workers.every((worker) => route.worker_ids.includes(worker.id))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add backup</button>
+            <h4>Worker order</h4><p className="provider-priority-help">{contractRequirement(route.protocol_contract, contracts)}</p><div className="worker-order-list">{route.worker_ids.map((workerId, index) => <div key={`${workerId}-${index}`}><span className="order-label">{index === 0 ? "Primary" : `Backup ${index}`}</span><select value={workerId} disabled={openDay} onChange={(event) => { const next = [...route.worker_ids]; next[index] = event.target.value; updateRoute(route.id, { worker_ids: next }); }}>{workers.map((worker) => { const compatible = workerSupportsContract(worker, route.protocol_contract, contracts); return <option key={worker.id} value={worker.id} disabled={(route.worker_ids.includes(worker.id) && worker.id !== workerId) || (!compatible && worker.id !== workerId)}>{worker.name} · {worker.model_id}{compatible ? "" : " · incompatible"}</option>; })}</select><button className="secondary" disabled={openDay || index === 0} onClick={() => { const next = [...route.worker_ids]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateRoute(route.id, { worker_ids: next }); }}>↑</button><button className="secondary" disabled={openDay || index === route.worker_ids.length - 1} onClick={() => { const next = [...route.worker_ids]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; updateRoute(route.id, { worker_ids: next }); }}>↓</button><button className="secondary danger" disabled={openDay || index === 0} onClick={() => updateRoute(route.id, { worker_ids: route.worker_ids.filter((_, item) => item !== index) })}>Remove</button></div>)}</div>
+            <button className="secondary" disabled={openDay || !workers.some((worker) => !route.worker_ids.includes(worker.id) && workerSupportsContract(worker, route.protocol_contract, contracts))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id) && workerSupportsContract(item, route.protocol_contract, contracts)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add compatible backup</button>
             </CollapsibleEditorCard>)}</div>
           </CollapsibleEditorSection>
         </div>
@@ -370,6 +379,24 @@ function validationFromApiError(reason: unknown): EventValidation | null {
   return typeof candidate.valid === "boolean" && Array.isArray(candidate.errors) && Array.isArray(candidate.warnings)
     ? candidate as EventValidation
     : null;
+}
+
+function workerSupportsContract(worker: Worker, contractId: string, contracts: ProtocolContract[]) {
+  const contract = contracts.find((item) => item.id === contractId);
+  return Boolean(contract
+    && worker.generation_family === contract.generation_family
+    && contract.required_capabilities.every((capability) => worker.capabilities[capability] === true));
+}
+
+function contractRequirement(contractId: string, contracts: ProtocolContract[]) {
+  const contract = contracts.find((item) => item.id === contractId);
+  if (!contract) return "Select a trusted protocol contract.";
+  const capabilities = contract.required_capabilities.length
+    ? ` with ${contract.required_capabilities.map(humanise).join(" and ")}`
+    : "";
+  const family = humanise(contract.generation_family);
+  const article = /^[aeiou]/i.test(family) ? "an" : "a";
+  return `${contract.display_name} requires ${article} ${family} Worker${capabilities}. Incompatible alternatives are disabled; an existing mismatch stays visible and labelled.`;
 }
 
 function ValidationIssue({ issue, draft, workers, note = false }: { issue: EventValidation["errors"][number] | EventValidation["warnings"][number]; draft: EventDefinition; workers: Worker[]; note?: boolean }) {

@@ -424,6 +424,7 @@ describe("ModelDeck v2 operator console", () => {
 
   it("identifies the Route, Worker role and Worker details for validation issues", async () => {
     const payloads = responses(true);
+    payloads[`/api/events/${eventRecord.definition.id}/draft`] = eventRecord;
     payloads[`/api/events/${eventRecord.definition.id}/validate`] = {
       valid: false,
       errors: [
@@ -435,20 +436,49 @@ describe("ModelDeck v2 operator console", () => {
       ],
       routes: [],
     };
-    mockFetch(payloads);
+    const fetchMock = mockFetch(payloads);
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Route Label" }), { target: { value: "Updated token trace" } });
     fireEvent.click(await screen.findByRole("button", { name: "Validate" }));
 
     const errors = await screen.findByRole("region", { name: "Validation errors" });
-    expect(within(errors).getAllByText("Routes → Token trace → Worker order → Primary Worker")).toHaveLength(2);
+    expect(within(errors).getAllByText("Routes → Updated token trace → Worker order → Primary Worker")).toHaveLength(2);
     expect(within(errors).getAllByText("qwen-0-5b")).toHaveLength(2);
     expect(within(errors).getAllByText(/Qwen token trace · Qwen\/Qwen2.5-0.5B-Instruct · transformers-rocm/)).toHaveLength(2);
     expect(within(errors).getByText("Missing capabilities: image_input")).toBeInTheDocument();
 
     const notes = screen.getByRole("region", { name: "Validation notes" });
-    expect(within(notes).getByText("Routes → Token trace")).toBeInTheDocument();
+    expect(within(notes).getByText("Routes → Updated token trace")).toBeInTheDocument();
     expect(within(notes).getByText("Note: Route 'Token trace' is not used by a Demo")).toBeInTheDocument();
+
+    const draftWriteIndex = fetchMock.mock.calls.findIndex(([input, init]) => String(input).endsWith("/draft") && init?.method === "PUT");
+    const validationIndex = fetchMock.mock.calls.findIndex(([input]) => String(input).endsWith("/validate"));
+    expect(draftWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(validationIndex).toBeGreaterThan(draftWriteIndex);
+    expect(JSON.parse(String(fetchMock.mock.calls[draftWriteIndex][1]?.body)).routes[0].display_name).toBe("Updated token trace");
+  });
+
+  it("marks and disables incompatible Workers for a Route contract", async () => {
+    const diffusionWorker: Worker = {
+      ...worker,
+      id: "7a19b667-8efc-4440-a60f-b3b17b6ece55",
+      name: "DiffusionGemma Q4",
+      model_id: "google/diffusiongemma-26B-A4B-it",
+      generation_family: "text-diffusion",
+      runtime: "text-diffusion-gptq-rocm",
+      capabilities: { iterative_refinement: true, intermediate_frames: true },
+      port: 8632,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, diffusionWorker];
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const route = await screen.findByRole("article", { name: "Route Token trace" });
+    expect(within(route).getByText(/Native autoregressive trace requires an autoregressive Worker with top k trace/)).toBeInTheDocument();
+    expect(within(route).getByRole("option", { name: /DiffusionGemma Q4.*incompatible/ })).toBeDisabled();
   });
 
   it("shows structured validation details when publishing fails", async () => {
