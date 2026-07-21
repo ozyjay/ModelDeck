@@ -64,6 +64,121 @@ def _wait_for(url: str, *, timeout: float) -> None:
     raise RuntimeError("The benchmark-only gateway did not become available")
 
 
+def _temperatures() -> list[dict[str, Any]]:
+    payload = _json_request(f"{MANAGEMENT_URL}/api/telemetry", timeout=5)
+    if not isinstance(payload, dict):
+        raise RuntimeError("The telemetry endpoint returned an invalid response")
+    readings = []
+    for reading in payload.get("temperatures", []):
+        value = reading.get("celsius") if isinstance(reading, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            continue
+        readings.append(reading)
+    return readings
+
+
+def _maximum_temperature(readings: list[dict[str, Any]]) -> float | None:
+    values = [float(reading["celsius"]) for reading in readings]
+    return max(values) if values else None
+
+
+def _gpu_temperature(readings: list[dict[str, Any]]) -> float | None:
+    values = [float(reading["celsius"]) for reading in readings if reading.get("source") == "amdgpu"]
+    return max(values) if values else None
+
+
+def _wait_for_cooldown(target: float, maximum_wait_seconds: float = 600) -> None:
+    deadline = time.monotonic() + maximum_wait_seconds
+    while time.monotonic() < deadline:
+        readings = _temperatures()
+        maximum = _maximum_temperature(readings)
+        if maximum is None:
+            raise RuntimeError("No temperature sensors are available for the benchmark")
+        if maximum <= target:
+            return
+        time.sleep(2)
+    raise RuntimeError(f"Hardware did not cool below {target:g}°C in time")
+
+
+class ThermalGuard:
+    def __init__(self, maximum_celsius: float) -> None:
+        self.maximum_celsius = maximum_celsius
+        self.maximum_observed_celsius: float | None = None
+        self.maximum_gpu_celsius: float | None = None
+        self.sample_count = 0
+        self.abort_reason: str | None = None
+        self.triggered = threading.Event()
+        self.finished = threading.Event()
+        self.worker_id: str | None = None
+        self.thread = threading.Thread(target=self._monitor, name="scenechat-benchmark-thermal-guard")
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def close(self) -> None:
+        self.finished.set()
+        self.thread.join(timeout=35)
+
+    def _abort(self, reason: str) -> None:
+        worker_id = self.worker_id
+        self.abort_reason = reason
+        self.triggered.set()
+        if worker_id:
+            try:
+                _post(f"{MANAGEMENT_URL}/api/workers/{worker_id}/stop", timeout=30)
+            except (HTTPError, URLError, TimeoutError, OSError):
+                pass
+
+    def _monitor(self) -> None:
+        while not self.finished.wait(0.5):
+            try:
+                readings = _temperatures()
+            except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, TypeError, ValueError):
+                self._abort("telemetry_unavailable")
+                return
+            maximum = _maximum_temperature(readings)
+            if maximum is None:
+                self._abort("temperature_sensors_unavailable")
+                return
+            gpu = _gpu_temperature(readings)
+            self.sample_count += 1
+            self.maximum_observed_celsius = max(
+                maximum,
+                self.maximum_observed_celsius or maximum,
+            )
+            if gpu is not None:
+                self.maximum_gpu_celsius = max(gpu, self.maximum_gpu_celsius or gpu)
+            if maximum >= self.maximum_celsius:
+                self._abort("temperature_limit")
+                return
+
+
+def _thermal_summary(
+    guard: ThermalGuard,
+    maximum_temperature_celsius: float,
+    cooldown_temperature_celsius: float,
+) -> dict[str, Any]:
+    return {
+        "maximum_allowed_celsius": maximum_temperature_celsius,
+        "cooldown_target_celsius": cooldown_temperature_celsius,
+        "maximum_observed_celsius": guard.maximum_observed_celsius,
+        "maximum_gpu_celsius": guard.maximum_gpu_celsius,
+        "sample_count": guard.sample_count,
+        "abort": guard.triggered.is_set(),
+        "abort_reason": guard.abort_reason,
+    }
+
+
+def _finish_guarded_arm(worker: dict[str, Any], guard: ThermalGuard) -> None:
+    if not guard.triggered.is_set():
+        try:
+            _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/stop", timeout=30)
+        except (HTTPError, URLError, TimeoutError, OSError):
+            pass
+    guard.worker_id = None
+    guard.close()
+
+
 def _worker_by_id(workers: list[dict[str, Any]], worker_id: str) -> dict[str, Any]:
     matches = [worker for worker in workers if worker["id"] == worker_id or worker["name"] == worker_id]
     if len(matches) != 1:
@@ -227,44 +342,76 @@ def _benchmark_arm(
     warmups: int,
     runs: int,
     human_review: bool,
+    maximum_temperature_celsius: float,
+    cooldown_temperature_celsius: float,
 ) -> dict[str, Any]:
     _post(f"{MANAGEMENT_URL}/api/workers/{other['id']}/stop")
-    _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/start")
-    warmup_failures: Counter[str] = Counter()
-    valid_warmups = 0
-    for _ in range(warmups):
-        warmup_sample, warmup_failure = _run_request(gateway_url, payload)
-        if warmup_sample is None:
-            warmup_failures[warmup_failure or "unknown"] += 1
-        else:
-            valid_warmups += 1
-    budget = int(worker["settings"]["visual_token_budget"])
-    if valid_warmups == 0:
-        return {
-            "visual_token_budget": budget,
-            "benchmark_status": "not_run_no_valid_warmups",
-            "warmup_valid_responses": 0,
-            "warmup_failure_categories": dict(sorted(warmup_failures.items())),
-            **_summary([], Counter()),
-            "human_review": None,
-        }
-    samples: list[dict[str, Any]] = []
-    failures: Counter[str] = Counter()
-    for _ in range(runs):
-        sample, failure = _run_request(gateway_url, payload)
-        if sample is None:
-            failures[failure or "unknown"] += 1
-        else:
-            samples.append(sample)
-    result = _summary(samples, failures)
-    result["visual_token_budget"] = budget
-    result["benchmark_status"] = "completed"
-    result["warmup_valid_responses"] = valid_warmups
-    result["warmup_failure_categories"] = dict(sorted(warmup_failures.items()))
-    result["human_review"] = _review(samples, budget) if human_review else None
-    for sample in samples:
-        sample.pop("analysis", None)
-    return result
+    _wait_for_cooldown(cooldown_temperature_celsius)
+    guard = ThermalGuard(maximum_temperature_celsius)
+    guard.worker_id = worker["id"]
+    guard.start()
+    try:
+        _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/start")
+        warmup_failures: Counter[str] = Counter()
+        valid_warmups = 0
+        for _ in range(warmups):
+            warmup_sample, warmup_failure = _run_request(gateway_url, payload)
+            if guard.triggered.is_set():
+                warmup_failures[guard.abort_reason or "thermal_abort"] += 1
+                break
+            if warmup_sample is None:
+                warmup_failures[warmup_failure or "unknown"] += 1
+            else:
+                valid_warmups += 1
+        budget = int(worker["settings"]["visual_token_budget"])
+        if guard.triggered.is_set() or valid_warmups == 0:
+            _finish_guarded_arm(worker, guard)
+            return {
+                "visual_token_budget": budget,
+                "benchmark_status": (
+                    "thermal_abort" if guard.triggered.is_set() else "not_run_no_valid_warmups"
+                ),
+                "warmup_valid_responses": valid_warmups,
+                "warmup_failure_categories": dict(sorted(warmup_failures.items())),
+                **_summary([], Counter()),
+                "human_review": None,
+                "thermal": _thermal_summary(
+                    guard,
+                    maximum_temperature_celsius,
+                    cooldown_temperature_celsius,
+                ),
+            }
+        samples: list[dict[str, Any]] = []
+        failures: Counter[str] = Counter()
+        for _ in range(runs):
+            sample, failure = _run_request(gateway_url, payload)
+            if guard.triggered.is_set():
+                failures[guard.abort_reason or "thermal_abort"] += 1
+                break
+            if sample is None:
+                failures[failure or "unknown"] += 1
+            else:
+                samples.append(sample)
+        _finish_guarded_arm(worker, guard)
+        result = _summary(samples, failures)
+        result["visual_token_budget"] = budget
+        result["benchmark_status"] = "thermal_abort" if guard.triggered.is_set() else "completed"
+        result["warmup_valid_responses"] = valid_warmups
+        result["warmup_failure_categories"] = dict(sorted(warmup_failures.items()))
+        result["human_review"] = (
+            _review(samples, budget) if human_review and not guard.triggered.is_set() else None
+        )
+        result["thermal"] = _thermal_summary(
+            guard,
+            maximum_temperature_celsius,
+            cooldown_temperature_celsius,
+        )
+        for sample in samples:
+            sample.pop("analysis", None)
+        return result
+    finally:
+        guard.worker_id = None
+        guard.close()
 
 
 def main() -> None:
@@ -274,9 +421,17 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, choices=range(3, 6), default=4)
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--human-review", action="store_true")
+    parser.add_argument("--maximum-temperature-celsius", type=float, default=80)
+    parser.add_argument("--cooldown-temperature-celsius", type=float, default=65)
     arguments = parser.parse_args()
     if arguments.runs < 50:
         parser.error("--runs must be at least 50")
+    if not 65 <= arguments.maximum_temperature_celsius <= 90:
+        parser.error("--maximum-temperature-celsius must be between 65 and 90")
+    if not 45 <= arguments.cooldown_temperature_celsius <= 75:
+        parser.error("--cooldown-temperature-celsius must be between 45 and 75")
+    if arguments.cooldown_temperature_celsius >= arguments.maximum_temperature_celsius:
+        parser.error("cooldown temperature must be below maximum temperature")
 
     workers = _json_request(f"{MANAGEMENT_URL}/api/workers")
     worker_280 = _worker_by_id(workers, arguments.worker_280)
@@ -306,28 +461,26 @@ def main() -> None:
     )
     gateway_thread = threading.Thread(target=server.run, name="scenechat-benchmark-gateway")
     gateway_thread.start()
+    results: list[dict[str, Any]] = []
+    thermal_abort = False
     try:
         _wait_for(f"{gateway_url}/v1/health", timeout=15)
-        results = [
-            _benchmark_arm(
+        for worker, other in ((worker_140, worker_280), (worker_280, worker_140)):
+            result = _benchmark_arm(
                 gateway_url,
-                worker_140,
-                worker_280,
+                worker,
+                other,
                 payload,
                 arguments.warmups,
                 arguments.runs,
                 arguments.human_review,
-            ),
-            _benchmark_arm(
-                gateway_url,
-                worker_280,
-                worker_140,
-                payload,
-                arguments.warmups,
-                arguments.runs,
-                arguments.human_review,
-            ),
-        ]
+                arguments.maximum_temperature_celsius,
+                arguments.cooldown_temperature_celsius,
+            )
+            results.append(result)
+            if result["thermal"]["abort"]:
+                thermal_abort = True
+                break
     finally:
         server.should_exit = True
         gateway_thread.join(timeout=10)
@@ -336,8 +489,9 @@ def main() -> None:
                 _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/stop")
             except (HTTPError, URLError, TimeoutError):
                 pass
-        for worker in originally_ready:
-            _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/start")
+        if not thermal_abort:
+            for worker in originally_ready:
+                _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/start")
 
     document = {
         "format": "modeldeck-scenechat-visual-token-benchmark",
@@ -349,6 +503,9 @@ def main() -> None:
         "image": image_metadata,
         "warmups_per_arm": arguments.warmups,
         "request_deadline_seconds": REQUEST_DEADLINE_SECONDS,
+        "maximum_temperature_celsius": arguments.maximum_temperature_celsius,
+        "cooldown_temperature_celsius": arguments.cooldown_temperature_celsius,
+        "thermal_abort": thermal_abort,
         "arms": results,
         "privacy": "No image data, prompt text, model descriptions or credentials are retained.",
     }
@@ -357,6 +514,8 @@ def main() -> None:
     output = output_dir / f"scenechat_visual_tokens_{datetime.now(UTC):%Y%m%dT%H%M%SZ}.json"
     output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(output)
+    if thermal_abort:
+        raise SystemExit("The benchmark stopped because its thermal safety guard triggered")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -17,6 +18,22 @@ def load_benchmark_module():
 
 
 benchmark = load_benchmark_module()
+
+
+class SafeThermalGuard:
+    def __init__(self, _maximum_celsius: float) -> None:
+        self.maximum_observed_celsius = 60.0
+        self.maximum_gpu_celsius = 55.0
+        self.sample_count = 2
+        self.abort_reason = None
+        self.triggered = threading.Event()
+        self.worker_id = None
+
+    def start(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 def test_benchmark_summary_retains_metrics_but_not_descriptions() -> None:
@@ -76,7 +93,9 @@ def test_benchmark_requires_matching_pinned_workers_and_exact_budgets() -> None:
 
 
 def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None:
-    monkeypatch.setattr(benchmark, "_post", lambda _url: None)
+    monkeypatch.setattr(benchmark, "_post", lambda _url, *, timeout=900: None)
+    monkeypatch.setattr(benchmark, "_wait_for_cooldown", lambda _target: None)
+    monkeypatch.setattr(benchmark, "ThermalGuard", SafeThermalGuard)
     calls = 0
 
     def failed_request(_gateway_url, _payload):
@@ -96,9 +115,51 @@ def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None
         warmups=4,
         runs=50,
         human_review=False,
+        maximum_temperature_celsius=80,
+        cooldown_temperature_celsius=65,
     )
 
     assert calls == 4
     assert result["benchmark_status"] == "not_run_no_valid_warmups"
     assert result["warmup_failure_categories"] == {"generation_timeout": 4}
     assert result["measured_requests"] == 0
+    assert result["thermal"] == {
+        "maximum_allowed_celsius": 80,
+        "cooldown_target_celsius": 65,
+        "maximum_observed_celsius": 60.0,
+        "maximum_gpu_celsius": 55.0,
+        "sample_count": 2,
+        "abort": False,
+        "abort_reason": None,
+    }
+
+
+def test_thermal_guard_stops_worker_at_temperature_limit(monkeypatch) -> None:
+    stopped: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        benchmark,
+        "_temperatures",
+        lambda: [
+            {"source": "amdgpu", "celsius": 72.5},
+            {"source": "k10temp", "celsius": 80.0},
+        ],
+    )
+    monkeypatch.setattr(
+        benchmark,
+        "_post",
+        lambda url, *, timeout=900: stopped.append((url, timeout)),
+    )
+    guard = benchmark.ThermalGuard(80)
+    guard.worker_id = "worker-140"
+
+    guard.start()
+    assert guard.triggered.wait(2)
+    guard.close()
+
+    assert guard.abort_reason == "temperature_limit"
+    assert guard.maximum_observed_celsius == 80.0
+    assert guard.maximum_gpu_celsius == 72.5
+    assert guard.sample_count == 1
+    assert stopped == [
+        ("http://127.0.0.1:3600/api/workers/worker-140/stop", 30),
+    ]

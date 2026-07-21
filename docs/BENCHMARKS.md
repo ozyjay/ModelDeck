@@ -44,6 +44,24 @@ It never changes Event routing or Worker configuration.
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
 
+For a focused 140-versus-280 visual-token comparison, run the prepared 1280-by-720
+synthetic SceneChat image through each pinned Worker 50 times:
+
+```powershell
+pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+    -Worker140 '<140-worker-id>' `
+    -Worker280 '<280-worker-id>' `
+    -Runs 50 `
+    -HumanReview
+```
+
+The focused benchmark waits until the hottest reported sensor is at or below 65°C before
+each arm, then samples live Fedora hwmon telemetry every 0.5 seconds. It records the hottest
+overall and AMD GPU readings. At the default 80°C ceiling, or if live telemetry becomes
+unavailable, it stops the active Worker, omits the remaining arm, writes a partial report and
+exits non-zero. Use `-MaximumTemperatureCelsius` and `-CooldownTemperatureCelsius` to apply
+different guarded limits.
+
 ## Workloads and measurements
 
 Each Worker receives one excluded benchmark warm-up followed by two measured requests
