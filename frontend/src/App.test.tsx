@@ -137,6 +137,39 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
   });
 
+  it("searches and filters Workers, reports the result count and clears the filters", async () => {
+    const visionWorker: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "Qwen vision",
+      state: "ready",
+      model_id: "Qwen/Qwen3.5-4B",
+      generation_family: "vision-language",
+      runtime: "qwen35-rocm",
+      capabilities: { chat: true, image_input: true },
+      port: 8632,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, visionWorker];
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("2 of 2 Workers");
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search workers" }), { target: { value: "qwen image_input" } });
+    expect(screen.getByRole("heading", { name: "Qwen vision" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Qwen token trace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 2 Workers");
+
+    fireEvent.change(screen.getByRole("combobox", { name: "State" }), { target: { value: "stopped" } });
+    expect(screen.getByRole("heading", { name: "No Workers match these filters" })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[1]);
+
+    expect(screen.getByRole("heading", { name: "Qwen token trace" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Qwen vision" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 of 2 Workers");
+  });
+
   it("collapses and expands a Worker card", async () => {
     mockFetch(responses(true));
     render(<App />);
@@ -358,6 +391,33 @@ describe("ModelDeck v2 operator console", () => {
 
     expect(within(unassigned).queryByText("Unassigned experiment")).not.toBeInTheDocument();
     expect(within(unassigned).getByText("Every shared Route is used by at least one Demo.")).toBeInTheDocument();
+  });
+
+  it("collapses Event Demo and Route levels and remembers individual cards", async () => {
+    mockFetch(responses(true));
+    const first = render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const demo = await screen.findByRole("article", { name: "Demo Token Trails" });
+    fireEvent.click(within(demo).getByRole("button", { name: "Collapse Demo Token Trails" }));
+    expect(within(demo).getByText("Routes used by this Demo")).not.toBeVisible();
+
+    const route = screen.getByRole("article", { name: "Route Token trace" });
+    fireEvent.click(within(route).getByRole("button", { name: "Collapse Route Token trace" }));
+    expect(within(route).getByRole("textbox", { name: "Route Label", hidden: true })).not.toBeVisible();
+    await waitFor(() => expect(window.localStorage.getItem("modeldeck-collapse-preferences-v1")).toContain(`event-route-${eventRecord.definition.id}-${eventRecord.definition.routes[0].id}`));
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Demos" }));
+    expect(screen.getByRole("article", { name: "Demo Token Trails", hidden: true })).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Expand Demos" }));
+    expect(screen.getByRole("button", { name: "Expand Demo Token Trails" })).toBeInTheDocument();
+
+    first.unmount();
+    mockFetch(responses(true));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    expect(await screen.findByRole("button", { name: "Expand Demo Token Trails" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand Route Token trace" })).toBeInTheDocument();
   });
 
   it("preserves Event description input while autosaving", async () => {
