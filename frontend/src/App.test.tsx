@@ -235,6 +235,23 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText("1 of 2 cached")).toBeInTheDocument();
   });
 
+  it("keeps the Models catalogue open while collapsing individual Model cards", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [catalogueModel("Qwen/Qwen2.5-1.5B-Instruct")], downloads_started: false };
+    mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    expect(screen.queryByRole("button", { name: "Collapse Discovered Models" })).not.toBeInTheDocument();
+    const collapse = screen.getByRole("button", { name: "Collapse Model Qwen/Qwen2.5-1.5B-Instruct" });
+    fireEvent.click(collapse);
+
+    expect(screen.getByRole("heading", { name: "Qwen/Qwen2.5-1.5B-Instruct" })).toBeVisible();
+    expect(screen.getByText("recognised")).toBeVisible();
+    expect(screen.getByText("Configured Workers")).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Expand Model Qwen/Qwen2.5-1.5B-Instruct" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("shows configured Worker identities and states prominently on Model cards", async () => {
     const sceneWorker: Worker = {
       ...worker,
