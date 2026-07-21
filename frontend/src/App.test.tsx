@@ -524,6 +524,40 @@ describe("ModelDeck v2 operator console", () => {
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
   });
 
+  it("confirms every Event editor removal before changing the draft", async () => {
+    const backup: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "Trace backup",
+      port: 8632,
+    };
+    const eventWithBackup: EventRecord = {
+      ...eventRecord,
+      definition: {
+        ...eventRecord.definition,
+        routes: [{ ...eventRecord.definition.routes[0], worker_ids: [worker.id, backup.id] }],
+      },
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, backup];
+    payloads["/api/events"] = { events: [eventWithBackup] };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Demo Token Trails" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Route Token trace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Backup 1 Worker Trace backup from Route Token trace" }));
+
+    expect(confirm).toHaveBeenNthCalledWith(1, expect.stringMatching(/Remove Demo “Token Trails”/));
+    expect(confirm).toHaveBeenNthCalledWith(2, expect.stringMatching(/removed from every Demo/));
+    expect(confirm).toHaveBeenNthCalledWith(3, expect.stringMatching(/Worker itself will be kept/));
+    expect(screen.getByRole("article", { name: "Demo Token Trails" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Route Token trace" })).toBeInTheDocument();
+    expect(screen.getByText("Backup 1")).toBeInTheDocument();
+  });
+
   it("identifies the Route, Worker role and Worker details for validation issues", async () => {
     const payloads = responses(true);
     payloads[`/api/events/${eventRecord.definition.id}/draft`] = eventRecord;
