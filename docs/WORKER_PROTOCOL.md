@@ -74,8 +74,11 @@ Native iterative refinement is canonical; it is not implemented by calling an AR
 loop. Job event streams publish refinement frames as the engine produces them rather than
 waiting to replay the completed frame collection.
 
-The mock is deterministic and contract-shaped. It is not evidence that a real model or
-ROCm stack works.
+The autoregressive, text-diffusion, and SceneChat mocks are deterministic and
+contract-shaped. A SceneChat mock returns schema-valid placeholder analysis without
+inspecting the supplied image and is signalled by the gateway with
+`x-modeldeck-fallback: mock`. Mock output is not evidence that a real model or ROCm stack
+works.
 
 ## SceneChat vision-language compatibility worker
 

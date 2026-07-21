@@ -69,6 +69,41 @@ async def test_management_starts_empty_without_packaged_workers_or_routes(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_management_creates_distinct_scenechat_mock_workers_on_demand(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post("/api/workers/mock-scenechat", json={"visual_token_budget": 70})
+            second = await client.post("/api/workers/mock-scenechat", json={"visual_token_budget": 70})
+            workers = await client.get("/api/workers")
+            started = await client.post(f"/api/workers/{first.json()['id']}/start")
+            smoked = await client.post(f"/api/workers/{first.json()['id']}/smoke")
+            stopped = await client.post(f"/api/workers/{first.json()['id']}/stop")
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["name"] == "SceneChat mock 70"
+    assert second.json()["name"] == "SceneChat mock 70 (2)"
+    assert first.json()["id"] != second.json()["id"]
+    assert first.json()["model_id"] == "modeldeck/mock-scenechat-vision"
+    assert first.json()["generation_family"] == "vision-language"
+    assert first.json()["runtime"] == "mock"
+    assert first.json()["capabilities"]["image_input"] is True
+    assert first.json()["capabilities"]["structured_output"] is True
+    assert first.json()["settings"]["visual_token_budget"] == 70
+    assert len(workers.json()) == 2
+    assert started.json()["state"] == "ready"
+    assert smoked.json()["ok"] is True
+    assert stopped.json()["state"] == "stopped"
+
+    restarted = create_app(settings)
+    assert len(restarted.state.worker_definitions) == 2
+
+
+@pytest.mark.asyncio
 async def test_worker_name_is_editable_and_persists_without_changing_identity(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")

@@ -17,6 +17,7 @@ complete, locally discovered revision using an installed trusted runtime templat
 ### Workers
 
 - `GET|POST /api/workers`
+- `POST /api/workers/mock-scenechat` creates an explicit deterministic vision-language mock
 - `GET|PATCH|DELETE /api/workers/{worker_id}`
 - `GET /api/workers/{worker_id}/usage`
 - `POST /api/workers/{worker_id}/start|stop|restart|smoke`

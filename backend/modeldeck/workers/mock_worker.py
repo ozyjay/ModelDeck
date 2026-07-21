@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from modeldeck.contracts.scenechat import SceneAnalysis, SceneObject
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
 
 
@@ -23,10 +24,10 @@ class CompletionRequest(BaseModel):
     request_id: str | None = None
     model: str = "fast-chat"
     prompt: str | None = None
-    messages: list[dict[str, str]] | None = None
+    messages: list[dict[str, Any]] | None = None
     stream: bool = False
     seed: int = 7
-    max_tokens: int = Field(default=32, ge=1, le=256)
+    max_tokens: int = Field(default=32, ge=1, le=512)
     top_k: int = Field(default=5, ge=1, le=20)
 
 
@@ -44,6 +45,13 @@ class DiffusionRequest(BaseModel):
 def capabilities(family: GenerationFamily) -> CapabilitySet:
     if family == GenerationFamily.AUTOREGRESSIVE:
         return CapabilitySet(chat=True, completions=True, logits=True, top_k_trace=True)
+    if family == GenerationFamily.VISION_LANGUAGE:
+        return CapabilitySet(
+            chat="compatibility-only",
+            streaming=False,
+            image_input=True,
+            structured_output=True,
+        )
     return CapabilitySet(
         iterative_refinement=True,
         intermediate_frames=True,
@@ -124,13 +132,27 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat(body: CompletionRequest):
-        _require_family(family, GenerationFamily.AUTOREGRESSIVE)
+        _require_one_of(family, {GenerationFamily.AUTOREGRESSIVE, GenerationFamily.VISION_LANGUAGE})
+        if family == GenerationFamily.VISION_LANGUAGE:
+            if body.stream:
+                raise HTTPException(400, "Mock SceneChat does not stream")
+            return _scenechat_completion_response(body, worker_id)
         if body.stream:
             return StreamingResponse(
                 _stream_completion(body, worker_id, app.state.cancelled),
                 media_type="text/event-stream",
             )
         return _completion_response(body, worker_id)
+
+    @app.post("/native/vision-language/smoke")
+    async def vision_language_smoke():
+        _require_family(family, GenerationFamily.VISION_LANGUAGE)
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "mock": True,
+            "visual_contract": "scene-analysis-v1",
+        }
 
     @app.post("/v1/completions")
     async def completion(body: CompletionRequest):
@@ -217,9 +239,16 @@ def _require_family(actual: GenerationFamily, expected: GenerationFamily) -> Non
         raise HTTPException(404, f"Route requires a {expected.value} worker")
 
 
+def _require_one_of(actual: GenerationFamily, expected: set[GenerationFamily]) -> None:
+    if actual not in expected:
+        raise HTTPException(
+            404, "Route requires one of: " + ", ".join(sorted(item.value for item in expected))
+        )
+
+
 def _completion_response(body: CompletionRequest, worker_id: str) -> dict[str, Any]:
     request_id = body.request_id or str(uuid.uuid4())
-    prompt = body.prompt or " ".join(message.get("content", "") for message in body.messages or [])
+    prompt = body.prompt or _message_text(body.messages)
     text = f"Mock local response: {prompt.strip() or 'ready'}"[: body.max_tokens * 8]
     return {
         "id": request_id,
@@ -232,13 +261,45 @@ def _completion_response(body: CompletionRequest, worker_id: str) -> dict[str, A
     }
 
 
+def _scenechat_completion_response(body: CompletionRequest, worker_id: str) -> dict[str, Any]:
+    request_id = body.request_id or str(uuid.uuid4())
+    analysis = SceneAnalysis(
+        summary="Mock SceneChat view for local Route rehearsal.",
+        objects=[
+            SceneObject(
+                label="mock object",
+                description="A deterministic placeholder produced without inspecting the supplied image.",
+                approximate_location="centre",
+            )
+        ],
+        relationships=["The mock object is centred in the placeholder scene."],
+        uncertainties=["Mock output does not describe the supplied image."],
+        safety_notes=["This response is deterministic mock data, not physical model inference."],
+    )
+    return {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": body.model,
+        "provider": worker_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": analysis.model_dump_json()},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": len(analysis.model_dump_json().split())},
+    }
+
+
 async def _stream_completion(
     body: CompletionRequest,
     worker_id: str,
     cancelled: set[str],
 ) -> AsyncIterator[str]:
     request_id = body.request_id or str(uuid.uuid4())
-    prompt = body.prompt or " ".join(message.get("content", "") for message in body.messages or [])
+    prompt = body.prompt or _message_text(body.messages)
     text = f"Mock local response: {prompt.strip() or 'ready'}"[: body.max_tokens * 8]
     for token in text.split(" "):
         if request_id in cancelled:
@@ -294,10 +355,24 @@ def _trace_events(
 def _latest_mock_user_prompt(body: CompletionRequest) -> str:
     if not body.messages:
         return body.prompt or ""
-    return next(
-        (message.get("content", "") for message in reversed(body.messages) if message.get("role") == "user"),
-        "",
-    )
+    message = next((message for message in reversed(body.messages) if message.get("role") == "user"), None)
+    return _content_text(message.get("content")) if message else ""
+
+
+def _message_text(messages: list[dict[str, Any]] | None) -> str:
+    return " ".join(_content_text(message.get("content")) for message in messages or [])
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(item.get("text", ""))
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
 
 
 def _mock_tokenise(text: str) -> tuple[list[int], list[str]]:

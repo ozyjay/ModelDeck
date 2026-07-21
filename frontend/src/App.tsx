@@ -555,6 +555,8 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
   const [replacementWorkerName, setReplacementWorkerName] = useState("");
   const [replacementParameters, setReplacementParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [rebindDrafts, setRebindDrafts] = useState(true);
+  const [mockVisualTokenBudget, setMockVisualTokenBudget] = useState(70);
+  const [creatingMock, setCreatingMock] = useState(false);
   const states = useMemo(() => [...new Set(workers.map((worker) => worker.state))].sort(), [workers]);
   const runtimes = useMemo(() => [...new Set(workers.map((worker) => worker.runtime))].sort(), [workers]);
   const filteredWorkers = useMemo(() => {
@@ -592,7 +594,18 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
     setFeedback(`Created replacement Worker “${result.replacement.name}”. ${rebound} draft Event${rebound === 1 ? " was" : "s were"} updated; published routing is unchanged until you publish a draft.`);
     await refresh();
   };
+  const createSceneChatMock = async () => {
+    setCreatingMock(true);
+    try {
+      const worker = await postJson<Worker>("/api/workers/mock-scenechat", { visual_token_budget: mockVisualTokenBudget });
+      setFeedback(`Created ${worker.name}. Mock output is deterministic and is labelled as fallback traffic.`);
+      await refresh();
+    } finally {
+      setCreatingMock(false);
+    }
+  };
   return <div className="view-stack"><div className="view-actions worker-view-heading"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Use Replace to change safe model limits without mutating the original Worker.</p></div>
+    <section className="mock-worker-creator" aria-label="SceneChat mock Workers"><div><strong>SceneChat mock Worker</strong><small>Deterministic CPU fallback for Route rehearsal only; it does not inspect the supplied image.</small></div><label>Visual tokens<select value={mockVisualTokenBudget} disabled={openDay || creatingMock} onChange={(event) => setMockVisualTokenBudget(Number(event.target.value))}>{[70, 140, 280, 560, 1120].map((budget) => <option value={budget} key={budget}>{budget}</option>)}</select></label><button disabled={openDay || creatingMock} onClick={() => void createSceneChatMock().catch((reason) => setFeedback(messageFrom(reason)))}>{creatingMock ? "Creating…" : "Create SceneChat mock"}</button></section>
     {!!workers.length && <div className="worker-toolbar" aria-label="Worker search and filters"><label>Search workers<input type="search" value={query} placeholder="Name, model or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>State<select value={stateFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, state: event.target.value }))}><option value="">All states</option>{stateFilter && !states.includes(stateFilter as Worker["state"]) && <option value={stateFilter}>{stateFilter.replaceAll("-", " ")} (not currently present)</option>}{states.map((state) => <option key={state} value={state}>{state.replaceAll("-", " ")}</option>)}</select></label><label>Runtime<select value={runtimeFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, runtime: event.target.value }))}><option value="">All runtimes</option>{runtimeFilter && !runtimes.includes(runtimeFilter) && <option value={runtimeFilter}>{runtimeFilter} (not currently present)</option>}{runtimes.map((runtime) => <option key={runtime} value={runtime}>{runtime}</option>)}</select></label><label>Sort workers<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as WorkerSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label><div className="worker-filter-summary" role="status"><span>{sorted.length} of {workers.length} Worker{workers.length === 1 ? "" : "s"}</span><button className="secondary compact-button" disabled={!filtersActive} onClick={clearFilters}>Clear filters</button></div></div>}
     {feedback && <div className="configuration-feedback">{feedback}</div>}
     {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : !sorted.length ? <section className="empty-state compact"><h2>No Workers match these filters</h2><p>Try a different name, model, capability, state or runtime.</p><button className="secondary" onClick={clearFilters}>Clear filters</button></section> : <div className="worker-grid">{sorted.map((worker) => {

@@ -138,6 +138,36 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
   });
 
+  it("creates explicit SceneChat mock Workers with a selected visual-token budget", async () => {
+    const mockWorker: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "SceneChat mock 280",
+      model_id: "modeldeck/mock-scenechat-vision",
+      revision: "fixture-v1",
+      generation_family: "vision-language",
+      runtime: "mock",
+      capabilities: { chat: "compatibility-only", image_input: true, structured_output: true },
+      settings: { visual_token_budget: 280 },
+      port: 8632,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers/mock-scenechat"] = mockWorker;
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Visual tokens" }), { target: { value: "280" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create SceneChat mock" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).endsWith("/api/workers/mock-scenechat")
+      && init?.method === "POST"
+      && init.body === JSON.stringify({ visual_token_budget: 280 })
+    )).toBe(true));
+    expect(await screen.findByText(/Created SceneChat mock 280/)).toBeInTheDocument();
+    expect(screen.getByText(/does not inspect the supplied image/)).toBeInTheDocument();
+  });
+
   it("searches and filters Workers, reports the result count and clears the filters", async () => {
     const visionWorker: Worker = {
       ...worker,

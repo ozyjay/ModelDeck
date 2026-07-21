@@ -35,6 +35,12 @@ class WorkerCreateRequest(BaseModel):
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
+class MockSceneChatWorkerCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visual_token_budget: VisualTokenBudget = 70
+
+
 class WorkerRenameRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -175,6 +181,55 @@ def create_v2_router() -> APIRouter:
             template_registrations=registrations,
         ).model_copy(update={"id": worker_id})
         definition = WorkerDefinition.from_profile(profile, name=clean_name)
+        store.save_worker_definition(definition.model_dump(mode="json"))
+        try:
+            request.app.state.supervisor.register_profile(definition.to_profile())
+        except ValueError as error:
+            store.delete_worker_definition(worker_id)
+            raise HTTPException(409, str(error)) from error
+        request.app.state.worker_definitions[worker_id] = definition
+        return _worker_response(request, store.get_worker_definition(worker_id))
+
+    @router.post("/workers/mock-scenechat", status_code=201)
+    async def create_mock_scenechat_worker(payload: MockSceneChatWorkerCreateRequest, request: Request):
+        _require_mutable(request)
+        records = _worker_records(request, include_archived=True)
+        used_ports = {int(record["definition"]["port"]) for record in records}
+        port = next((candidate for candidate in LOCAL_PORT_RANGE if candidate not in used_ports), None)
+        if port is None:
+            raise HTTPException(409, "No local ModelDeck Worker ports are available")
+        active_names = {str(record["definition"]["name"]).casefold() for record in _worker_records(request)}
+        base_name = f"SceneChat mock {payload.visual_token_budget}"
+        name = base_name
+        suffix = 2
+        while name.casefold() in active_names:
+            name = f"{base_name} ({suffix})"
+            suffix += 1
+        worker_id = str(uuid4())
+        definition = WorkerDefinition(
+            id=worker_id,
+            name=name,
+            model_id="modeldeck/mock-scenechat-vision",
+            revision="fixture-v1",
+            generation_family="vision-language",
+            runtime="mock",
+            lifecycle="on-demand",
+            port=port,
+            dtype="auto",
+            capabilities={
+                "chat": "compatibility-only",
+                "streaming": False,
+                "cancellation": True,
+                "image_input": True,
+                "structured_output": True,
+            },
+            settings={
+                "context_length": 8192,
+                "maximum_new_tokens": 512,
+                "visual_token_budget": payload.visual_token_budget,
+            },
+        )
+        store = request.app.state.compatibility_store
         store.save_worker_definition(definition.model_dump(mode="json"))
         try:
             request.app.state.supervisor.register_profile(definition.to_profile())

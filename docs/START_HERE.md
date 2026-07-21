@@ -13,6 +13,8 @@ It begins with no configured Workers or routing.
 4. Start ModelDeck with `pwsh -NoProfile -File scripts/run.ps1` and open
    <http://127.0.0.1:3600>.
 5. In **Models**, create a named Worker from a recognised cached Model.
+   For local SceneChat Route rehearsal, **Workers → Create SceneChat mock** creates an
+   explicitly labelled deterministic CPU fallback that does not inspect the image.
 6. In **Events**, create an Event, add a Route, choose its protocol, assign the primary
    and ordered backup Workers, and associate the Route with a Demo.
 7. Validate and publish the Event. Publishing routing does not start Workers.
