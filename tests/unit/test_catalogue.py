@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from modeldeck.catalogue import discover_huggingface_models, resolve_cache_paths
 
 
@@ -37,6 +38,30 @@ def test_marks_incomplete_snapshot_partial(tmp_path: Path) -> None:
     snapshot.mkdir(parents=True)
     (snapshot / "weights.incomplete").write_bytes(b"partial")
     assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"
+
+
+def test_marks_incomplete_sharded_snapshot_partial(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Qwen--Sharded" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps({"architectures": ["DemoForCausalLM"]}), encoding="utf-8"
+    )
+    for shard in (1, 2):
+        (snapshot / f"model-{shard:05d}-of-00004.safetensors").write_bytes(b"weights")
+
+    assert discover_huggingface_models([tmp_path])[0]["download_state"] == "partial"
+
+
+def test_accepts_complete_sharded_snapshot(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Qwen--Sharded" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps({"architectures": ["DemoForCausalLM"]}), encoding="utf-8"
+    )
+    for shard in range(1, 5):
+        (snapshot / f"model-{shard:05d}-of-00004.safetensors").write_bytes(b"weights")
+
+    assert discover_huggingface_models([tmp_path])[0]["download_state"] == "installed-untested"
 
 
 def test_model_payload_without_transformers_config_is_complete_but_unsupported(
@@ -140,6 +165,53 @@ def test_identifies_gemma4_unified_as_scenechat_compatible(tmp_path: Path) -> No
 
     assert model["generation_family_hint"] == "vision-language"
     assert model["configuration_support"] == "scenechat-gemma4"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["Qwen3.5-0.8B", "Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B"],
+)
+def test_identifies_allowlisted_qwen35_scenechat_models(tmp_path: Path, model_name: str) -> None:
+    snapshot = tmp_path / f"models--Qwen--{model_name}" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3_5ForConditionalGeneration"],
+                "model_type": "qwen3_5",
+                "text_config": {"model_type": "qwen3_5_text"},
+                "vision_config": {"model_type": "qwen3_5"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "vision-language"
+    assert model["configuration_support"] == "scenechat-qwen35"
+
+
+def test_does_not_allowlist_qwen35_forks_by_architecture_alone(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Example--Qwen3.5-4B" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3_5ForConditionalGeneration"],
+                "model_type": "qwen3_5",
+                "text_config": {},
+                "vision_config": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] is None
 
 
 def test_gpt_oss_source_points_to_companion_and_complete_gguf_is_configurable(tmp_path: Path) -> None:

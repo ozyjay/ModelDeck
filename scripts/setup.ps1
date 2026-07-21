@@ -46,7 +46,7 @@ if ($ControlPlaneOnly) {
     & "$Runtime/bin/python" -m pip install --no-deps -e .
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the ModelDeck worker into the ROCm environment.' }
 
-    & "$Runtime/bin/python" -c "import PIL, torch, torchvision, transformers; from transformers import DiffusionGemmaForBlockDiffusion; from transformers.models.gemma4.processing_gemma4 import Gemma4Processor; print('torch', torch.__version__); print('hip', torch.version.hip); print('torchvision', torchvision.__version__); print('transformers', transformers.__version__); print('pillow', PIL.__version__); print('diffusiongemma_import', 'ok'); print('cuda_available', torch.cuda.is_available()); print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not visible in this session')"
+    & "$Runtime/bin/python" -c "import PIL, torch, torchvision, transformers; from transformers import DiffusionGemmaForBlockDiffusion, Qwen3_5ForConditionalGeneration; from transformers.models.gemma4.processing_gemma4 import Gemma4Processor; print('torch', torch.__version__); print('hip', torch.version.hip); print('torchvision', torchvision.__version__); print('transformers', transformers.__version__); print('pillow', PIL.__version__); print('diffusiongemma_import', 'ok'); print('qwen35_import', 'ok'); print('cuda_available', torch.cuda.is_available()); print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not visible in this session')"
     if ($LASTEXITCODE -ne 0) { throw 'The ROCm runtime import probe failed.' }
 
     $Q4Runtime = '.venv-rocm72-q4'

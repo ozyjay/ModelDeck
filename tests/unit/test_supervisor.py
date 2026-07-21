@@ -4,6 +4,7 @@ import socket
 import sys
 
 import pytest
+from modeldeck.profiles import LocalProfileRequest, create_local_profile
 from modeldeck.protocol import LifecycleClass
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.supervisor.service import (
@@ -135,6 +136,35 @@ def test_scenechat_launch_is_allowlisted_offline_and_api_key_scoped(monkeypatch,
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert launch.environment["MODELDECK_SCENECHAT_API_KEY"] == "test-local-key"
+
+
+def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="Qwen/Qwen3.5-4B",
+            revision="a" * 40,
+            alias="qwen35-4b",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="scenechat-qwen35",
+    )
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.qwen35_worker",
+    ]
+    assert launch.command[launch.command.index("--model-id") + 1] == "Qwen/Qwen3.5-4B"
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
 
 
 def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, tmp_path) -> None:

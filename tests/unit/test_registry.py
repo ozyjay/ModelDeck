@@ -17,6 +17,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
     assert set(templates) == {
         "autoregressive-transformers",
         "scenechat-gemma4",
+        "scenechat-qwen35",
         "diffusiongemma-transformers",
         "diffusiongemma-modeldeck-q4",
         "gpt-oss-llama-vulkan",
@@ -96,6 +97,16 @@ def test_scenechat_runtime_declares_safe_creation_defaults() -> None:
     assert template.settings["context_length"] == 8192
     assert template.settings["maximum_new_tokens"] == 512
     assert template.settings["visual_token_budget"] == 280
+
+
+def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verification() -> None:
+    template = runtime_templates()["scenechat-qwen35"]
+
+    assert template.runtime == "qwen35-vision-language-transformers-rocm"
+    assert template.dtype == "bfloat16"
+    assert template.settings["context_length"] == 8192
+    assert template.settings["visual_token_budget"] == 280
+    assert template.settings["hardware_verification_required"] is True
 
 
 def test_unknown_runtime_template_cannot_create_a_profile(tmp_path) -> None:

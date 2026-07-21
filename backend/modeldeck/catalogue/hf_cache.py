@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -31,12 +32,30 @@ def _revision(model_dir: Path, snapshot: Path) -> str:
 
 
 def _snapshot_complete(snapshot: Path) -> bool:
-    weights = (
-        any(snapshot.glob("*.safetensors"))
-        or any(snapshot.glob("pytorch_model*.bin"))
+    safetensors = list(snapshot.glob("*.safetensors"))
+    pytorch_weights = list(snapshot.glob("pytorch_model*.bin"))
+    return (
+        _weight_files_complete(safetensors)
+        or _weight_files_complete(pytorch_weights)
         or any(snapshot.glob("*.gguf"))
     )
-    return weights
+
+
+def _weight_files_complete(paths: list[Path]) -> bool:
+    if not paths:
+        return False
+    shard_pattern = re.compile(r"-(\d+)-of-(\d+)\.(?:safetensors|bin)$")
+    shard_matches = [shard_pattern.search(path.name) for path in paths]
+    if not any(shard_matches):
+        return True
+    if any(match is None for match in shard_matches):
+        return True
+    expected_counts = {int(match.group(2)) for match in shard_matches if match is not None}
+    shard_numbers = {int(match.group(1)) for match in shard_matches if match is not None}
+    if len(expected_counts) != 1:
+        return False
+    expected = expected_counts.pop()
+    return shard_numbers == set(range(1, expected + 1))
 
 
 def _artifacts(snapshot: Path, repo_id: str) -> list[dict[str, Any]]:
@@ -155,6 +174,12 @@ def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | Non
         return None, "The snapshot has no readable Transformers configuration."
     architectures = {str(value) for value in config.get("architectures") or ()}
     model_type = str(config.get("model_type", "")).lower()
+    qwen35_scenechat_models = {
+        "Qwen/Qwen3.5-0.8B",
+        "Qwen/Qwen3.5-2B",
+        "Qwen/Qwen3.5-4B",
+        "Qwen/Qwen3.5-9B",
+    }
     if repo_id == "openai/gpt-oss-120b" or model_type == "gpt_oss":
         return None, (
             "This is the GPT-OSS source snapshot. Configure the pinned "
@@ -162,6 +187,12 @@ def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | Non
         )
     if config.get("quantization_config"):
         return None, "Quantised snapshots require a dedicated, compatibility-tested runtime."
+    if (
+        repo_id in qwen35_scenechat_models
+        and model_type == "qwen3_5"
+        and "Qwen3_5ForConditionalGeneration" in architectures
+    ):
+        return "scenechat-qwen35", "Supported by the dedicated SceneChat Qwen3.5 worker."
     if any(architecture.endswith("ForCausalLM") for architecture in architectures) or config.get(
         "is_decoder"
     ):

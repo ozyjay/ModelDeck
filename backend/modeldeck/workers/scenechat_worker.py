@@ -473,8 +473,17 @@ def create_app(
     config: EngineConfig,
     api_key: str = "local",
     engine: VisionLanguageEngine | None = None,
+    worker_label: str = "SceneChat",
+    model_owner: str = "google",
+    vision_settings: dict[str, int] | None = None,
 ) -> FastAPI:
     runtime = engine or TransformersSceneChatEngine(config)
+    reported_vision_settings = {
+        "visual_token_budget": config.visual_token_budget,
+        "image_patch_size": GEMMA4_PATCH_SIZE,
+        "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+        **(vision_settings or {}),
+    }
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -504,7 +513,7 @@ def create_app(
             await asyncio.to_thread(runtime.close)
 
     app = FastAPI(
-        title=f"ModelDeck SceneChat worker: {worker_id}",
+        title=f"ModelDeck {worker_label} worker: {worker_id}",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -582,9 +591,7 @@ def create_app(
             "average_latency_seconds": round(average, 4) if average is not None else None,
             "busy": state.active_request_id is not None,
             "effective_settings": {
-                "visual_token_budget": config.visual_token_budget,
-                "image_patch_size": GEMMA4_PATCH_SIZE,
-                "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+                **reported_vision_settings,
             },
             "last_request": state.last_request_diagnostics,
         }
@@ -599,9 +606,7 @@ def create_app(
             "trust_remote_code": False,
             "dtype": config.dtype,
             "contract_version": CONTRACT_VERSION,
-            "visual_token_budget": config.visual_token_budget,
-            "image_patch_size": GEMMA4_PATCH_SIZE,
-            "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+            **reported_vision_settings,
         }
 
     @app.post("/load")
@@ -658,7 +663,7 @@ def create_app(
                     "id": config.model_id,
                     "object": "model",
                     "created": 0,
-                    "owned_by": "google",
+                    "owned_by": model_owner,
                 }
             ],
         }
@@ -694,9 +699,7 @@ def create_app(
         started = time.perf_counter()
         image: Image.Image | None = None
         diagnostic: dict[str, Any] = {
-            "visual_token_budget": config.visual_token_budget,
-            "image_patch_size": GEMMA4_PATCH_SIZE,
-            "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+            **reported_vision_settings,
             "queue_seconds": round(queue_seconds, 6),
             "preprocessing_seconds": None,
             "inference_seconds": None,

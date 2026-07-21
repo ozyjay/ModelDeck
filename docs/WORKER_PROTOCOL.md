@@ -91,6 +91,14 @@ Gemma 4 unified snapshots use the same SceneChat contract through the explicitly
 `Gemma4UnifiedProcessor` and `Gemma4UnifiedForConditionalGeneration` loader adapter. Audio and
 video inputs remain outside the SceneChat contract.
 
+The dedicated Qwen3.5 adapter accepts only the official `Qwen/Qwen3.5-0.8B`,
+`Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-4B`, and `Qwen/Qwen3.5-9B` repositories with the
+`Qwen3_5ForConditionalGeneration` architecture. It pairs `Qwen3VLProcessor` with
+`Qwen3_5ForConditionalGeneration`, uses local files without remote code, and bounds image
+pixels to the configured visual-token budget. Catalogue recognition is not physical ROCm
+compatibility evidence; readiness still requires a successful load and warm-up on the
+detected stack.
+
 The Repartee speech protocol and its fixed PCM framing are documented in
 `docs/REPARTEE_RUNTIMES.md`. Autoregressive GPT-OSS requests continue to use the existing
 OpenAI-compatible chat and completion routes.

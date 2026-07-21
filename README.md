@@ -91,8 +91,9 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/<worker-uu
 
 The Model library turns a recognised, complete Hugging Face snapshot into a local Worker
 when its architecture matches an installed trusted runtime. Supported
-paths are causal-language-model Transformers, SceneChat Gemma 4, DiffusionGemma block
-diffusion, and self-contained ModelDeck DiffusionGemma Q4 format 2 releases. Q4 releases
+paths are causal-language-model Transformers, SceneChat Gemma 4 and the official Qwen3.5
+0.8B, 2B, 4B and 9B checkpoints, DiffusionGemma block diffusion, and self-contained
+ModelDeck DiffusionGemma Q4 format 2 releases. Q4 releases
 must retain their manifests, quality evidence, complete file inventory, and checksums;
 generic GPTQ repositories are not accepted. ModelDeck derives the cache root, port,
 capabilities and safe launch argument array. Archiving a Worker never removes the cached

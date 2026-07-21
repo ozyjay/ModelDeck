@@ -449,6 +449,38 @@ def _vision_language_launch(
     )
 
 
+def _qwen35_vision_language_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    python = _rocm_python()
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Qwen3.5 vision-language worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    environment["MODELDECK_SCENECHAT_API_KEY"] = os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
+    return WorkerLaunch(
+        command=[
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.qwen35_worker",
+            *common,
+            "--cache-root",
+            str(cache_root),
+            "--dtype",
+            profile.dtype,
+            "--context-length",
+            str(profile.settings.get("context_length", 8192)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 512)),
+            "--generation-timeout-seconds",
+            str(profile.settings.get("generation_timeout_seconds", 60)),
+            "--visual-token-budget",
+            str(profile.settings.get("visual_token_budget", 280)),
+        ],
+        environment=environment,
+    )
+
+
 def _llama_vulkan_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -554,6 +586,7 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "mock": _mock_launch,
     "transformers-rocm": _autoregressive_launch,
     "vision-language-transformers-rocm": _vision_language_launch,
+    "qwen35-vision-language-transformers-rocm": _qwen35_vision_language_launch,
     "text-diffusion-transformers-rocm": _text_diffusion_launch,
     "text-diffusion-gptq-rocm": _text_diffusion_launch,
     "llama-vulkan": _llama_vulkan_launch,
