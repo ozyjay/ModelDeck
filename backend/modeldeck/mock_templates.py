@@ -15,6 +15,7 @@ class MockWorkerTemplate:
     model_id: str
     default_name: str
     capabilities: dict[str, bool | str]
+    fixed_settings: dict[str, int | str] | None = None
     options: tuple[dict[str, Any], ...] = ()
 
     @property
@@ -73,7 +74,7 @@ MOCK_WORKER_TEMPLATES = {
                 "image_input": True,
                 "structured_output": True,
             },
-            (VISUAL_TOKEN_OPTION,),
+            options=(VISUAL_TOKEN_OPTION,),
         ),
         MockWorkerTemplate(
             "text-diffusion-v1",
@@ -92,6 +93,32 @@ MOCK_WORKER_TEMPLATES = {
             "Speech conversation mock",
             {"audio_input": True, "audio_output": True, "full_duplex": True, "cancellation": True},
         ),
+        MockWorkerTemplate(
+            "translation-en-fr-v1",
+            "modeldeck/mock-translation-en-fr",
+            "English to French translation mock",
+            {"streaming": False, "cancellation": True, "translation": True},
+            fixed_settings={"source_language": "en", "target_language": "fr"},
+        ),
+        MockWorkerTemplate(
+            "translation-en-de-v1",
+            "modeldeck/mock-translation-en-de",
+            "English to German translation mock",
+            {"streaming": False, "cancellation": True, "translation": True},
+            fixed_settings={"source_language": "en", "target_language": "de"},
+        ),
+        MockWorkerTemplate(
+            "speech-synthesis-v1",
+            "modeldeck/mock-speech-synthesis",
+            "Speech synthesis mock",
+            {
+                "streaming": False,
+                "cancellation": True,
+                "audio_output": True,
+                "speech_synthesis": True,
+            },
+            fixed_settings={"sample_rate_hz": 24000},
+        ),
     )
 }
 
@@ -105,4 +132,6 @@ def legacy_mock_contract(model_id: str, family: GenerationFamily) -> str | None:
         GenerationFamily.TEXT_DIFFUSION: "text-diffusion-v1",
         GenerationFamily.VISION_LANGUAGE: "scene-analysis-v1",
         GenerationFamily.SPEECH_CONVERSATION: "speech-conversation-v1",
+        GenerationFamily.TEXT_TRANSLATION: None,
+        GenerationFamily.SPEECH_SYNTHESIS: "speech-synthesis-v1",
     }.get(family)

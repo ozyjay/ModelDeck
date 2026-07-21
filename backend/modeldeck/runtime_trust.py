@@ -177,6 +177,43 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             ),
             cache_settings=frozenset({"cache_root"}),
         ),
+        TrustedRuntimeImplementation(
+            id="marian-transformers-cpu",
+            display_name="Marian Transformers CPU",
+            generation_family=GenerationFamily.TEXT_TRANSLATION,
+            capabilities=frozenset({"translation", "cancellation"}),
+            template_settings=frozenset(
+                {
+                    "maximum_input_characters",
+                    "maximum_input_tokens",
+                    "maximum_new_tokens",
+                    "generation_timeout_seconds",
+                    "startup_timeout_seconds",
+                    "warmup_timeout_seconds",
+                }
+            ),
+            cache_settings=frozenset({"cache_root"}),
+        ),
+        TrustedRuntimeImplementation(
+            id="qwen3-tts-rocm",
+            display_name="Qwen3-TTS ROCm",
+            generation_family=GenerationFamily.SPEECH_SYNTHESIS,
+            capabilities=frozenset({"speech_synthesis", "audio_output", "cancellation"}),
+            template_settings=frozenset(
+                {
+                    "sample_rate_hz",
+                    "channels",
+                    "maximum_input_characters",
+                    "maximum_codec_tokens",
+                    "maximum_audio_seconds",
+                    "generation_timeout_seconds",
+                    "startup_timeout_seconds",
+                    "warmup_timeout_seconds",
+                    "hardware_verification_required",
+                }
+            ),
+            cache_settings=frozenset({"cache_root"}),
+        ),
     )
 }
 

@@ -8,6 +8,7 @@ from typing import Any
 
 from modeldeck.hardware.probe import cache_candidates
 from modeldeck.q4_release import Q4ReleaseError, inspect_modeldeck_q4_release
+from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS, validate_speechshift_snapshot
 
 
 def resolve_cache_paths(env: Mapping[str, str] | None = None) -> list[Path]:
@@ -24,11 +25,8 @@ def resolve_cache_paths(env: Mapping[str, str] | None = None) -> list[Path]:
 
 
 def _revision(model_dir: Path, snapshot: Path) -> str:
-    refs_main = model_dir / "refs/main"
-    try:
-        return refs_main.read_text(encoding="utf-8").strip() or snapshot.name
-    except OSError:
-        return snapshot.name
+    del model_dir
+    return snapshot.name
 
 
 def _snapshot_complete(snapshot: Path) -> bool:
@@ -101,6 +99,8 @@ def _physical_size(paths: Iterable[Path]) -> int:
 
 
 def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
+    if spec := SPEECHSHIFT_MODEL_SPECS.get(repo_id):
+        return spec.generation_family
     if repo_id == "kyutai/moshiko-pytorch-bf16":
         return "speech-conversation"
     if repo_id == "ggml-org/gpt-oss-120b-GGUF":
@@ -135,10 +135,20 @@ def _capability_hints(generation_family: str | None) -> list[str]:
             "seeded-generation",
         ],
         "speech-conversation": ["audio-input", "audio-output", "full-duplex"],
+        "text-translation": ["translation"],
+        "speech-synthesis": ["audio-output", "speech-synthesis"],
     }.get(generation_family, [])
 
 
-def _configuration_support(snapshot: Path, repo_id: str = "") -> tuple[str | None, str]:
+def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = "") -> tuple[str | None, str]:
+    if spec := SPEECHSHIFT_MODEL_SPECS.get(repo_id):
+        if error := validate_speechshift_snapshot(snapshot, repo_id, revision):
+            return None, error
+        if spec.generation_family == "text-translation":
+            return spec.configuration_support, (
+                f"Supported by the pinned OPUS {spec.source_language}→{spec.target_language} CPU worker."
+            )
+        return spec.configuration_support, "Supported by the isolated Qwen3-TTS ROCm worker."
     if repo_id == "kyutai/moshiko-pytorch-bf16":
         required = {
             "model.safetensors",
@@ -219,11 +229,22 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             partial = any(model_dir.rglob("*.incomplete")) or bool(snapshots and not complete)
             if not snapshots and not partial:
                 continue
-            chosen = complete[-1] if complete else (snapshots[-1] if snapshots else None)
             repo_id = model_dir.name.removeprefix("models--").replace("--", "/")
+            pinned_spec = SPEECHSHIFT_MODEL_SPECS.get(repo_id)
+            pinned_snapshot = model_dir / "snapshots" / pinned_spec.revision if pinned_spec else None
+            chosen = (
+                pinned_snapshot
+                if pinned_snapshot is not None and pinned_snapshot in complete
+                else complete[-1]
+                if complete
+                else snapshots[-1]
+                if snapshots
+                else None
+            )
             state = "partial" if partial and not complete else "installed-untested" if complete else "partial"
+            revision = _revision(model_dir, chosen) if chosen else None
             support, support_reason = (
-                _configuration_support(chosen, repo_id)
+                _configuration_support(chosen, repo_id, revision or "")
                 if chosen and complete
                 else (None, "Finish the local snapshot before configuring a runtime.")
             )
@@ -235,7 +256,7 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             models.append(
                 {
                     "model_id": repo_id,
-                    "revision": _revision(model_dir, chosen) if chosen else None,
+                    "revision": revision,
                     "cache_location": str(model_dir),
                     "snapshot_location": str(chosen) if chosen else None,
                     "physical_size_bytes": _physical_size((model_dir,)),

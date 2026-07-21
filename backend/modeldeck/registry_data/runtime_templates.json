@@ -80,6 +80,28 @@
       "cache_setting": "cache_root",
       "lifecycle": "exclusive",
       "dtype": "bfloat16"
+    },
+    {
+      "id": "opus-translation-cpu",
+      "display_name": "OPUS Marian translation CPU",
+      "runtime": "marian-transformers-cpu",
+      "generation_family": "text-translation",
+      "capabilities": {"streaming": false, "cancellation": true, "translation": true},
+      "settings": {"maximum_input_characters": 4000, "maximum_input_tokens": 512, "maximum_new_tokens": 512, "generation_timeout_seconds": 60, "startup_timeout_seconds": 300, "warmup_timeout_seconds": 60},
+      "cache_setting": "cache_root",
+      "lifecycle": "resident",
+      "dtype": "float32"
+    },
+    {
+      "id": "qwen3-tts-rocm",
+      "display_name": "Qwen3-TTS ROCm",
+      "runtime": "qwen3-tts-rocm",
+      "generation_family": "speech-synthesis",
+      "capabilities": {"streaming": false, "cancellation": true, "audio_output": true, "speech_synthesis": true},
+      "settings": {"sample_rate_hz": 24000, "channels": 1, "maximum_input_characters": 2000, "maximum_codec_tokens": 1200, "maximum_audio_seconds": 90, "generation_timeout_seconds": 120, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 240, "hardware_verification_required": true},
+      "cache_setting": "cache_root",
+      "lifecycle": "resident",
+      "dtype": "bfloat16"
     }
   ]
 }

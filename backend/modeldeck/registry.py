@@ -25,6 +25,10 @@ BOUNDED_INTEGER_SETTINGS = {
     "channels": (1, 2),
     "maximum_sessions": (1, 8),
     "maximum_buffer_ms": (10, 5000),
+    "maximum_input_characters": (1, 20_000),
+    "maximum_input_tokens": (1, 4096),
+    "maximum_codec_tokens": (1, 4096),
+    "maximum_audio_seconds": (1, 300),
 }
 
 
@@ -40,7 +44,7 @@ class RuntimeTemplate(BaseModel):
     cache_setting: Literal["cache_root", "q4_checkpoint_dir", "artifact_path"]
     include_cache_root: bool = False
     lifecycle: LifecycleClass | None = None
-    dtype: Literal["float16", "bfloat16"] | None = None
+    dtype: Literal["float16", "bfloat16", "float32"] | None = None
     uses_base_model_identity: bool = False
 
     @model_validator(mode="after")

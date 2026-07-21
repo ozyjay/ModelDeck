@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
+import math
 import random
 import re
+import struct
 import time
 import uuid
+import wave
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from modeldeck.contracts.scenechat import SceneAnalysis, SceneObject
@@ -41,6 +45,23 @@ class DiffusionRequest(BaseModel):
     temperature: float = Field(default=0.2, ge=0, le=2)
     seed: int = 11
     stream_intermediate_frames: bool = True
+
+
+class TranslationRequest(BaseModel):
+    request_id: str
+    model: str
+    input: str = Field(min_length=1, max_length=4000)
+    source_language: str
+    target_language: str
+
+
+class SpeechSynthesisRequest(BaseModel):
+    request_id: str
+    model: str
+    input: str = Field(min_length=1, max_length=2000)
+    voice: str
+    language: str
+    response_format: str = "wav"
 
 
 def capabilities(family: GenerationFamily, contract_id: str | None = None) -> CapabilitySet:
@@ -284,6 +305,67 @@ def create_app(
         _require_contract(contract_id, {"speech-conversation-v1"})
         return {"ok": True, "output_kind": "audio", "mock": True}
 
+    @app.post("/v1/translations")
+    async def translation(body: TranslationRequest):
+        _require_family(family, GenerationFamily.TEXT_TRANSLATION)
+        _require_contract(contract_id, {"translation-en-fr-v1", "translation-en-de-v1"})
+        template = MOCK_WORKER_TEMPLATES[str(contract_id)]
+        settings = template.fixed_settings or {}
+        if body.source_language != settings.get("source_language") or body.target_language != settings.get(
+            "target_language"
+        ):
+            raise HTTPException(422, "The requested language direction does not match this Worker")
+        translated = "Bonjour depuis ModelDeck." if body.target_language == "fr" else "Hallo von ModelDeck."
+        return {
+            "id": body.request_id,
+            "object": "translation",
+            "model": body.model,
+            "source_language": body.source_language,
+            "target_language": body.target_language,
+            "output_text": translated,
+            "usage": {
+                "input_tokens": len(body.input.split()),
+                "output_tokens": len(translated.split()),
+            },
+            "mock": True,
+        }
+
+    @app.post("/v1/audio/speech")
+    async def speech_synthesis(body: SpeechSynthesisRequest):
+        _require_family(family, GenerationFamily.SPEECH_SYNTHESIS)
+        _require_contract(contract_id, {"speech-synthesis-v1"})
+        if body.voice not in {"ryan", "aiden"} or body.language not in {"en", "fr", "de"}:
+            raise HTTPException(422, "The requested voice or language is not allowlisted")
+        if body.response_format != "wav":
+            raise HTTPException(422, "Speech synthesis response_format must be wav")
+        return Response(
+            content=_deterministic_wav(),
+            media_type="audio/wav",
+            headers={
+                "x-request-id": body.request_id,
+                "x-modeldeck-mock": "true",
+                "x-modeldeck-sample-rate-hz": "24000",
+                "x-modeldeck-audio-duration-seconds": "0.25",
+            },
+        )
+
+    @app.post("/native/text-translation/smoke")
+    async def translation_smoke():
+        _require_family(family, GenerationFamily.TEXT_TRANSLATION)
+        return {"ok": True, "output_kind": "translation", "mock": True}
+
+    @app.post("/native/speech-synthesis/smoke")
+    async def synthesis_smoke():
+        _require_family(family, GenerationFamily.SPEECH_SYNTHESIS)
+        return {
+            "ok": True,
+            "output_kind": "audio",
+            "sample_rate_hz": 24000,
+            "channels": 1,
+            "audio_bytes": len(_deterministic_wav()),
+            "mock": True,
+        }
+
     @app.websocket("/v1/speech/conversations")
     async def speech_conversation(client: WebSocket):
         await client.accept()
@@ -318,15 +400,7 @@ def create_app(
             await client.send_bytes(bytes(640))
             await client.send_json({"type": "transcript.final", "text": "Mock local speech response."})
             await client.send_json({"type": "response.completed", "reason": "mock"})
-            while True:
-                message = await client.receive()
-                if message["type"] == "websocket.disconnect":
-                    return
-                if message.get("text"):
-                    control = json.loads(message["text"])
-                    if control.get("type") == "session.close":
-                        await client.close()
-                        return
+            await client.close()
         except (HTTPException, ValueError, WebSocketDisconnect):
             if client.client_state.name != "DISCONNECTED":
                 await client.close(code=1008)
@@ -360,6 +434,10 @@ def _is_mock_request_path(path: str) -> bool:
         "/v1/refine",
         "/v1/diffuse",
         "/smoke",
+        "/v1/translations",
+        "/v1/audio/speech",
+        "/native/text-translation/smoke",
+        "/native/speech-synthesis/smoke",
     } or path.startswith("/v1/jobs/")
 
 
@@ -517,6 +595,22 @@ def _content_text(content: Any) -> str:
 def _mock_tokenise(text: str) -> tuple[list[int], list[str]]:
     tokens = re.findall(r"\s+|[^\s]+", text)
     return list(range(len(tokens))), tokens
+
+
+def _deterministic_wav() -> bytes:
+    sample_rate = 24_000
+    sample_count = sample_rate // 4
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(sample_rate)
+        frames = bytearray()
+        for index in range(sample_count):
+            sample = round(2400 * math.sin(2 * math.pi * 440 * index / sample_rate))
+            frames.extend(struct.pack("<h", sample))
+        writer.writeframes(frames)
+    return output.getvalue()
 
 
 def _diffusion_frames(body: DiffusionRequest, job_id: str):

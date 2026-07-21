@@ -235,3 +235,86 @@ def test_speech_mock_request_failure_uses_a_fixed_error_event() -> None:
         with client.websocket_connect("/v1/speech/conversations") as socket:
             socket.send_json({"model": "speech-mock"})
             assert socket.receive_json()["code"] == "mock_request_failure"
+
+
+@pytest.mark.asyncio
+async def test_translation_mock_enforces_its_registered_direction() -> None:
+    app = create_app(
+        worker_id="test-translation",
+        model_id="modeldeck/mock-translation-en-fr",
+        revision="fixture-v1",
+        family=GenerationFamily.TEXT_TRANSLATION,
+        contract_id="translation-en-fr-v1",
+        startup_delay=0,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/translations",
+                json={
+                    "request_id": "translation-1",
+                    "model": "visitor-translation",
+                    "input": "The service is ready.",
+                    "source_language": "en",
+                    "target_language": "fr",
+                },
+            )
+            wrong = await client.post(
+                "/v1/translations",
+                json={
+                    "request_id": "translation-2",
+                    "model": "visitor-translation",
+                    "input": "Hallo",
+                    "source_language": "en",
+                    "target_language": "de",
+                },
+            )
+
+    assert response.status_code == 200
+    assert response.json()["output_text"] == "Bonjour depuis ModelDeck."
+    assert wrong.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_speech_synthesis_mock_returns_deterministic_24khz_wav() -> None:
+    app = create_app(
+        worker_id="test-tts",
+        model_id="modeldeck/mock-speech-synthesis",
+        revision="fixture-v1",
+        family=GenerationFamily.SPEECH_SYNTHESIS,
+        contract_id="speech-synthesis-v1",
+        startup_delay=0,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post(
+                "/v1/audio/speech",
+                json={
+                    "request_id": "speech-1",
+                    "model": "visitor-voice",
+                    "input": "Ready.",
+                    "voice": "ryan",
+                    "language": "en",
+                    "response_format": "wav",
+                },
+            )
+            second = await client.post(
+                "/v1/audio/speech",
+                json={
+                    "request_id": "speech-2",
+                    "model": "visitor-voice",
+                    "input": "A different request.",
+                    "voice": "aiden",
+                    "language": "de",
+                    "response_format": "wav",
+                },
+            )
+
+    assert first.status_code == 200
+    assert first.headers["content-type"] == "audio/wav"
+    assert first.headers["x-modeldeck-sample-rate-hz"] == "24000"
+    assert first.content == second.content

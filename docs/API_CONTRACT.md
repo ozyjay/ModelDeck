@@ -79,6 +79,8 @@ Model identifiers.
 - `POST /v1/jobs/{job_id}/cancel`
 - `POST /v1/requests/{request_id}/cancel`
 - `POST /v1/vision/analyse`
+- `POST /v1/translations`
+- `POST /v1/audio/speech`
 - `WS /v1/speech/conversations`
 
 Clients always supply a published Route `public_name` in the `model` field. Routes are

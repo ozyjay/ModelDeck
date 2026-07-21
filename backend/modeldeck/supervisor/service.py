@@ -542,6 +542,84 @@ def _moshiko_launch(profile: ModelProfile, environment: dict[str, str], common: 
     )
 
 
+def _translation_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    python = Path(os.environ.get("MODELDECK_MARIAN_PYTHON", ".venv-marian-cpu/bin/python")).expanduser()
+    if not python.is_file():
+        raise ValueError(
+            "Marian CPU runtime is missing; run pwsh -NoProfile -File scripts/setup_marian_cpu.ps1"
+        )
+    cache_root = profile.settings.get("cache_root")
+    source = profile.settings.get("source_language")
+    target = profile.settings.get("target_language")
+    if not cache_root or (source, target) not in {("en", "fr"), ("en", "de")}:
+        raise ValueError("Translation Worker requires an allowlisted cache root and language direction")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    return WorkerLaunch(
+        command=[
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.translation_worker",
+            *common,
+            "--alias",
+            profile.alias,
+            "--cache-root",
+            str(cache_root),
+            "--source-language",
+            str(source),
+            "--target-language",
+            str(target),
+            "--maximum-input-characters",
+            str(profile.settings.get("maximum_input_characters", 4000)),
+            "--maximum-input-tokens",
+            str(profile.settings.get("maximum_input_tokens", 512)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 512)),
+            "--generation-timeout-seconds",
+            str(profile.settings.get("generation_timeout_seconds", 60)),
+        ],
+        environment=environment,
+    )
+
+
+def _qwen_tts_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
+    python = Path(
+        os.environ.get("MODELDECK_QWEN_TTS_PYTHON", ".venv-qwen3-tts-rocm72/bin/python")
+    ).expanduser()
+    if not python.is_file():
+        raise ValueError(
+            "Qwen3-TTS ROCm runtime is missing; run pwsh -NoProfile -File scripts/setup_qwen3_tts_rocm72.ps1"
+        )
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Qwen3-TTS Worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    environment.pop("HSA_OVERRIDE_GFX_VERSION", None)
+    environment.pop("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", None)
+    return WorkerLaunch(
+        command=[
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.tts_worker",
+            *common,
+            "--alias",
+            profile.alias,
+            "--cache-root",
+            str(cache_root),
+            "--maximum-input-characters",
+            str(profile.settings.get("maximum_input_characters", 2000)),
+            "--maximum-codec-tokens",
+            str(profile.settings.get("maximum_codec_tokens", 1200)),
+            "--maximum-audio-seconds",
+            str(profile.settings.get("maximum_audio_seconds", 90)),
+            "--generation-timeout-seconds",
+            str(profile.settings.get("generation_timeout_seconds", 120)),
+        ],
+        environment=environment,
+    )
+
+
 def _text_diffusion_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -602,6 +680,8 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "text-diffusion-gptq-rocm": _text_diffusion_launch,
     "llama-vulkan": _llama_vulkan_launch,
     "moshiko-rocm": _moshiko_launch,
+    "marian-transformers-cpu": _translation_launch,
+    "qwen3-tts-rocm": _qwen_tts_launch,
 }
 
 

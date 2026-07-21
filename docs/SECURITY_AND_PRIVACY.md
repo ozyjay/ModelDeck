@@ -28,6 +28,13 @@ API-key, and token-shaped fields before persisting JSON Lines files under
 capture is not implemented in this slice. SQLite holds configuration and compatibility
 evidence, not content history.
 
+SpeechShift translation text and generated waveform bytes remain request-scoped in memory.
+The workers retain only content-free timings, token or byte counts, outcomes and temperature
+metrics. Cancellation ownership is in memory, keyed by a caller-supplied request ID, and is
+released at completion. Speech synthesis fails closed when either required temperature
+sensor is unavailable; no request may start above the code-owned 55 °C GPU or 75 °C CPU
+limits, and active generation is cancelled at 80 °C GPU or 95 °C CPU.
+
 The SceneChat worker accepts visitor images only as strict base64 JPEG or PNG data URLs.
 It rejects network/file URLs, SVG, mismatched MIME and magic bytes, multiple images,
 requests over 12 MiB, decoded images over 8 MiB, dimensions over 4096 pixels, and images

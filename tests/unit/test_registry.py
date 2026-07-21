@@ -22,6 +22,8 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "diffusiongemma-modeldeck-q4",
         "gpt-oss-llama-vulkan",
         "moshiko-speech",
+        "opus-translation-cpu",
+        "qwen3-tts-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
     assert registrations["autoregressive-transformers"].source == "packaged"
@@ -107,6 +109,23 @@ def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verificatio
     assert template.settings["context_length"] == 8192
     assert template.settings["visual_token_budget"] == 280
     assert template.settings["hardware_verification_required"] is True
+
+
+def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:
+    translation = runtime_templates()["opus-translation-cpu"]
+    synthesis = runtime_templates()["qwen3-tts-rocm"]
+
+    assert translation.runtime == "marian-transformers-cpu"
+    assert translation.generation_family.value == "text-translation"
+    assert translation.capabilities.translation is True
+    assert translation.dtype == "float32"
+    assert translation.settings["maximum_input_characters"] == 4_000
+    assert synthesis.runtime == "qwen3-tts-rocm"
+    assert synthesis.generation_family.value == "speech-synthesis"
+    assert synthesis.capabilities.speech_synthesis is True
+    assert synthesis.capabilities.cancellation is True
+    assert synthesis.settings["sample_rate_hz"] == 24_000
+    assert synthesis.settings["hardware_verification_required"] is True
 
 
 def test_unknown_runtime_template_cannot_create_a_profile(tmp_path) -> None:

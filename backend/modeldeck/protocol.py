@@ -31,6 +31,8 @@ class GenerationFamily(StrEnum):
     VISION_DETECTION = "vision-detection"
     FEATURE_EXTRACTION = "feature-extraction"
     SPEECH_CONVERSATION = "speech-conversation"
+    TEXT_TRANSLATION = "text-translation"
+    SPEECH_SYNTHESIS = "speech-synthesis"
 
 
 class LifecycleClass(StrEnum):
@@ -57,6 +59,8 @@ class CapabilitySet(BaseModel):
     audio_input: bool = False
     audio_output: bool = False
     full_duplex: bool = False
+    translation: bool = False
+    speech_synthesis: bool = False
 
 
 class WorkerHealth(BaseModel):

@@ -1,0 +1,11 @@
+# Isolated Qwen3-TTS runtime for the Framework Desktop ROCm 7.2 stack.
+--find-links https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.1/
+torch==2.9.1+rocm7.2.1.lw.gitff65f5bc
+torchaudio==2.9.0+rocm7.2.1.gite3c6ee2b
+triton==3.5.1+rocm7.2.1.gita272dfa8
+qwen-tts==0.1.1
+transformers==4.57.3
+accelerate==1.12.0
+numpy==2.3.5
+fastapi==0.139.0
+uvicorn==0.51.0

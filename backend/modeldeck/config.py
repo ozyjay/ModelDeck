@@ -24,6 +24,8 @@ class Settings:
     diagnostic_capture: bool = False
     diffusion_timeout_seconds: float = 900.0
     scenechat_timeout_seconds: float = 75.0
+    translation_timeout_seconds: float = 65.0
+    speech_synthesis_timeout_seconds: float = 130.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -40,4 +42,8 @@ class Settings:
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
             diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),
             scenechat_timeout_seconds=float(os.getenv("MODELDECK_SCENECHAT_TIMEOUT_SECONDS", "75")),
+            translation_timeout_seconds=float(os.getenv("MODELDECK_TRANSLATION_TIMEOUT_SECONDS", "65")),
+            speech_synthesis_timeout_seconds=float(
+                os.getenv("MODELDECK_SPEECH_SYNTHESIS_TIMEOUT_SECONDS", "130")
+            ),
         )

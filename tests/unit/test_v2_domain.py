@@ -125,6 +125,31 @@ def test_worker_smoke_requests_generate_for_each_supported_engine():
     assert body["max_tokens"] == 4
     assert headers is None
 
+    translation = autoregressive.model_copy(
+        update={
+            "generation_family": "text-translation",
+            "runtime": "marian-transformers-cpu",
+            "capabilities": {"translation": True, "cancellation": True},
+            "settings": {"source_language": "en", "target_language": "fr"},
+        }
+    )
+    assert _worker_smoke_request(translation) == ("/native/text-translation/smoke", None, None)
+
+    synthesis = autoregressive.model_copy(
+        update={
+            "generation_family": "speech-synthesis",
+            "runtime": "qwen3-tts-rocm",
+            "capabilities": {
+                "speech_synthesis": True,
+                "audio_output": True,
+                "cancellation": True,
+                "streaming": False,
+            },
+            "settings": {"sample_rate_hz": 24_000},
+        }
+    )
+    assert _worker_smoke_request(synthesis) == ("/native/speech-synthesis/smoke", None, None)
+
     diffusion = autoregressive.model_copy(
         update={
             "generation_family": "text-diffusion",
@@ -136,6 +161,24 @@ def test_worker_smoke_requests_generate_for_each_supported_engine():
     assert path == "/v1/refine"
     assert body["denoising_steps"] == 4
     assert headers is None
+
+
+def test_translation_contract_rejects_a_worker_for_the_wrong_direction() -> None:
+    worker = worker_definition().model_copy(
+        update={
+            "generation_family": "text-translation",
+            "runtime": "marian-transformers-cpu",
+            "capabilities": {"translation": True, "cancellation": True},
+            "settings": {"source_language": "en", "target_language": "de"},
+        }
+    )
+    event = event_definition(worker.id)
+    event.routes[0].protocol_contract = "translation-en-fr-v1"
+
+    validation = validate_event(event, [worker], [])
+
+    assert validation["valid"] is False
+    assert "target_language=fr" in validation["errors"][0]["message"]
 
 
 @pytest.mark.asyncio

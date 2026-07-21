@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -12,6 +13,7 @@ from modeldeck.domain import WorkerDefinition
 from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
     invalid_trace_metadata,
+    proxy_binary_request,
     proxy_request,
     route_candidates,
     trace_token_metadata_error,
@@ -156,7 +158,13 @@ def gateway_request(payload: dict) -> Request:
             return {"type": "http.request", "body": encoded, "more_body": False}
         return {"type": "http.disconnect"}
 
-    app = SimpleNamespace(state=SimpleNamespace(last_request_diagnostics=None))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            last_request_diagnostics=None,
+            active_request_workers={},
+            active_request_lock=asyncio.Lock(),
+        )
+    )
     return Request({"type": "http", "method": "POST", "headers": [], "app": app}, receive)
 
 
@@ -194,6 +202,57 @@ class FakeGatewayClient:
 
     async def aclose(self) -> None:
         pass
+
+
+class FakeBinaryGatewayClient:
+    def __init__(self, profile, payload: bytes) -> None:
+        self.profile = profile
+        self.payload = payload
+        self.forwarded_json = None
+        self.forwarded_headers = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, _url: str):
+        return SimpleNamespace(json=lambda: {"ready": True, "busy": False}, is_success=True)
+
+    async def post(self, url: str, *, json: dict, headers: dict):
+        self.forwarded_json = json
+        self.forwarded_headers = headers
+        return httpx.Response(
+            200,
+            content=self.payload,
+            headers={
+                "content-type": "audio/wav",
+                "x-request-id": json["request_id"],
+                "x-modeldeck-sample-rate-hz": "24000",
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+class FakeCancellationClient:
+    def __init__(self) -> None:
+        self.url = ""
+        self.payload = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, url: str, *, json: dict):
+        self.url = url
+        self.payload = json
+        return SimpleNamespace(
+            is_success=True,
+            json=lambda: {"ok": True, "request_id": json["request_id"], "state": "cancelling"},
+        )
 
 
 @pytest.mark.asyncio
@@ -257,6 +316,134 @@ async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
     diagnostic = request.app.state.last_request_diagnostics
     assert diagnostic["error_code"] == "gateway_timeout"
     assert diagnostic["total_gateway_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_translation_gateway_preserves_public_model_and_forwards_internal_alias(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "generation_family": "text-translation",
+                "capabilities": {"translation": True, "cancellation": True},
+                "settings": {"source_language": "en", "target_language": "fr"},
+            }
+        )
+        .to_profile()
+    )
+    fake = FakeGatewayClient(
+        {"ready": True, "busy": False},
+        response_payload={
+            "id": "translation-1",
+            "object": "translation",
+            "model": profile.alias,
+            "source_language": "en",
+            "target_language": "fr",
+            "output_text": "Bonjour",
+        },
+    )
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request(
+        {
+            "request_id": "translation-1",
+            "model": "visitor-translation",
+            "input": "Hello",
+            "source_language": "en",
+            "target_language": "fr",
+        }
+    )
+
+    response = await proxy_request(
+        request,
+        {"visitor-translation": [profile]},
+        "/v1/translations",
+        None,
+    )
+
+    payload = json.loads(response.body)
+    assert payload["model"] == "visitor-translation"
+    assert payload["output_text"] == "Bonjour"
+    assert request.app.state.active_request_workers == {}
+
+
+@pytest.mark.asyncio
+async def test_speech_gateway_returns_wav_and_labels_a_mock_fallback(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "generation_family": "speech-synthesis",
+                "capabilities": {
+                    "speech_synthesis": True,
+                    "audio_output": True,
+                    "cancellation": True,
+                    "streaming": False,
+                },
+                "settings": {"sample_rate_hz": 24_000},
+            }
+        )
+        .to_profile()
+    )
+    fake = FakeBinaryGatewayClient(profile, b"RIFFmock-wav")
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request(
+        {
+            "request_id": "speech-1",
+            "model": "visitor-voice",
+            "input": "Hello",
+            "voice": "ryan",
+            "language": "en",
+            "response_format": "wav",
+        }
+    )
+
+    response = await proxy_binary_request(
+        request,
+        {"visitor-voice": [profile]},
+        "/v1/audio/speech",
+        timeout_seconds=120,
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"RIFFmock-wav"
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.headers["x-modeldeck-fallback"] == "mock"
+    assert fake.forwarded_json["model"] == profile.alias
+    assert fake.forwarded_headers["X-Request-ID"] == "speech-1"
+    assert request.app.state.active_request_workers == {}
+
+
+@pytest.mark.asyncio
+async def test_cancellation_targets_only_the_worker_that_owns_the_active_request(
+    monkeypatch, tmp_path
+) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().to_profile()
+    gateway = create_gateway_app(
+        {"visitor-chat": [profile]},
+        settings=Settings(data_dir=tmp_path),
+    )
+    gateway.state.active_request_workers["active-1"] = profile
+    fake = FakeCancellationClient()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+    ) as client:
+        monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+        response = await client.post("/v1/requests/active-1/cancel")
+
+    assert response.json() == {
+        "ok": True,
+        "request_id": "active-1",
+        "state": "cancelling",
+        "worker_id": profile.id,
+    }
+    assert fake.url == f"http://127.0.0.1:{profile.port}/cancel"
+    assert fake.payload == {"request_id": "active-1"}
 
 
 @pytest.mark.asyncio

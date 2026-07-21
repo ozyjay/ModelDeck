@@ -793,6 +793,58 @@ describe("ModelDeck v2 operator console", () => {
     });
   });
 
+  it("uses the pinned OPUS CPU runtime without irrelevant generation controls", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [{
+      ...catalogueModel("Helsinki-NLP/opus-mt-en-fr", ["translation"]),
+      generation_family_hint: "text-translation",
+      configuration_support: "opus-translation-cpu",
+    }], downloads_started: false };
+    payloads["/api/runtime-templates"] = { templates: [{
+      id: "opus-translation-cpu", display_name: "OPUS translation CPU",
+      implementation: "marian-transformers-cpu", generation_family: "text-translation",
+      cache_setting: "cache_root", uses_base_model_identity: false,
+      lifecycle: "resident", dtype: "float32",
+      settings: { maximum_input_characters: 4000, maximum_input_tokens: 512 },
+      package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
+      publisher: "ModelDeck", source: "packaged", digest: "digest",
+    }] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
+
+    expect(screen.getByRole("combobox", { name: "Data type" })).toHaveValue("float32");
+    expect(screen.getByRole("combobox", { name: "Data type" })).toBeDisabled();
+    expect(screen.queryByRole("spinbutton", { name: "Maximum output" })).not.toBeInTheDocument();
+  });
+
+  it("keeps Qwen TTS voice synthesis controls contract-owned", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { models: [{
+      ...catalogueModel("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", ["speech-synthesis", "audio-output"]),
+      generation_family_hint: "speech-synthesis",
+      configuration_support: "qwen3-tts-rocm",
+    }], downloads_started: false };
+    payloads["/api/runtime-templates"] = { templates: [{
+      id: "qwen3-tts-rocm", display_name: "Qwen3-TTS ROCm",
+      implementation: "qwen3-tts-rocm", generation_family: "speech-synthesis",
+      cache_setting: "cache_root", uses_base_model_identity: false,
+      lifecycle: "resident", dtype: "bfloat16",
+      settings: { sample_rate_hz: 24000, maximum_audio_seconds: 90 },
+      package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
+      publisher: "ModelDeck", source: "packaged", digest: "digest",
+    }] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
+
+    expect(screen.getByRole("combobox", { name: "Data type" })).toHaveValue("bfloat16");
+    expect(screen.queryByRole("spinbutton", { name: "Maximum output" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Sampling controls such as temperature/)).toBeInTheDocument();
+  });
+
   it("creates an immutable replacement and can rebind draft Event routes", async () => {
     const payloads = responses(true);
     payloads["/api/runtime-templates"] = { templates: [{

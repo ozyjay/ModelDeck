@@ -10,6 +10,7 @@ from modeldeck.registry import (
     RuntimeTemplateRegistration,
     runtime_template_registrations,
 )
+from modeldeck.speechshift import QWEN_TTS_LANGUAGES, QWEN_TTS_VOICES, SPEECHSHIFT_MODEL_SPECS
 
 from .models import ModelProfile
 
@@ -23,7 +24,7 @@ class LocalProfileRequest(BaseModel):
     revision: str = Field(min_length=1, max_length=128)
     alias: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
     profile_name: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
-    dtype: Literal["float16", "bfloat16"] = "float16"
+    dtype: Literal["float16", "bfloat16", "float32"] = "float16"
     lifecycle: Literal["resident", "on-demand", "exclusive"] = "on-demand"
     context_length: int = Field(default=2048, ge=256, le=32768)
     maximum_new_tokens: int = Field(default=128, ge=1, le=512)
@@ -73,7 +74,12 @@ def create_local_profile(
     settings = dict(template.settings)
     if request.model_id == "google/gemma-4-12B-it":
         settings["hardware_verification_required"] = True
-    if template.generation_family.value != "speech-conversation":
+    if template.generation_family.value in {
+        "autoregressive",
+        "vision-language",
+        "text-diffusion",
+        "text-translation",
+    }:
         settings["maximum_new_tokens"] = request.maximum_new_tokens
     if template.generation_family.value == "autoregressive":
         settings["context_length"] = request.context_length
@@ -82,6 +88,15 @@ def create_local_profile(
         settings["visual_token_budget"] = request.visual_token_budget
     elif template.generation_family.value == "text-diffusion":
         settings["maximum_denoising_steps"] = request.maximum_denoising_steps
+    elif template.generation_family.value == "text-translation":
+        spec = SPEECHSHIFT_MODEL_SPECS.get(request.model_id)
+        if spec is None or spec.source_language is None or spec.target_language is None:
+            raise ValueError("The translation direction is not allowlisted")
+        settings["source_language"] = spec.source_language
+        settings["target_language"] = spec.target_language
+    elif template.generation_family.value == "speech-synthesis":
+        settings["allowed_voices"] = ",".join(QWEN_TTS_VOICES)
+        settings["allowed_languages"] = ",".join(QWEN_TTS_LANGUAGES)
     if template.cache_setting == "artifact_path" and artifact_path is None:
         raise ValueError("This runtime requires a discovered allowlisted artefact")
     selected_path = (

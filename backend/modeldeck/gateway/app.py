@@ -4,19 +4,19 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.profiles import ModelProfile
-from modeldeck.protocol import CapabilitySet
+from modeldeck.protocol import CapabilitySet, GenerationFamily
 
 
 def create_gateway_app(
@@ -26,6 +26,8 @@ def create_gateway_app(
     configured = settings or Settings.from_env()
     app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
     app.state.last_request_diagnostics = None
+    app.state.active_request_workers = {}
+    app.state.active_request_lock = asyncio.Lock()
     base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
@@ -154,6 +156,25 @@ def create_gateway_app(
     async def completions(request: Request):
         return await proxy_request(request, active_routes({"openai-completions-v1"}), "/v1/completions", None)
 
+    @app.post("/v1/translations")
+    async def translations(request: Request):
+        return await proxy_request(
+            request,
+            active_routes({"translation-en-fr-v1", "translation-en-de-v1"}),
+            "/v1/translations",
+            None,
+            timeout_seconds=configured.translation_timeout_seconds,
+        )
+
+    @app.post("/v1/audio/speech")
+    async def speech_synthesis(request: Request):
+        return await proxy_binary_request(
+            request,
+            active_routes({"speech-synthesis-v1"}),
+            "/v1/audio/speech",
+            timeout_seconds=configured.speech_synthesis_timeout_seconds,
+        )
+
     @app.post("/native/autoregressive/trace")
     async def trace(request: Request):
         return await proxy_request(
@@ -205,23 +226,33 @@ def create_gateway_app(
         return await proxy_job_request(worker, f"/v1/jobs/{job_id}/cancel", method="POST")
 
     @app.post("/v1/requests/{request_id}/cancel")
-    async def cancel(request_id: str):
-        cancelled = []
-        profiles = {profile.id: profile for candidates in active_routes().values() for profile in candidates}
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            for profile in profiles.values():
-                health_payload, _ready = await worker_health(client, profile)
-                if not health_payload:
-                    continue
-                try:
-                    response = await client.post(
-                        f"{endpoint(profile)}/cancel", json={"request_id": request_id}
-                    )
-                    if response.is_success and response.json().get("ok"):
-                        cancelled.append(profile.id)
-                except (httpx.HTTPError, ValueError):
-                    continue
-        return {"ok": bool(cancelled), "request_id": request_id, "workers": cancelled}
+    async def cancel(request_id: str, request: Request):
+        async with request.app.state.active_request_lock:
+            profile = request.app.state.active_request_workers.get(request_id)
+        if profile is None:
+            return {
+                "ok": False,
+                "request_id": request_id,
+                "state": "not-found",
+                "worker_id": None,
+            }
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                response = await client.post(f"{endpoint(profile)}/cancel", json={"request_id": request_id})
+                payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            return {
+                "ok": False,
+                "request_id": request_id,
+                "state": "worker-unavailable",
+                "worker_id": profile.id,
+            }
+        return {
+            "ok": response.is_success and payload.get("ok") is True,
+            "request_id": request_id,
+            "state": payload.get("state", "cancelling" if payload.get("ok") else "not-found"),
+            "worker_id": profile.id,
+        }
 
     @app.post("/v1/vision/analyse")
     async def vision(request: Request):
@@ -318,6 +349,8 @@ async def proxy_request(
         return unavailable(alias, "unknown")
     client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
     selected = None
+    request_id = str(body.get("request_id") or "")
+    request_claimed = False
     health_results: list[dict[str, Any] | None] = []
     try:
         for profile in candidates:
@@ -341,16 +374,28 @@ async def proxy_request(
                 return response
             _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
             return unavailable(alias, candidates[0].generation_family.value)
-        body["model"] = upstream_model(selected, alias)
+        if request_id:
+            request_claimed = await claim_active_request(request, request_id, selected)
+            if not request_claimed:
+                await client.aclose()
+                return gateway_error(
+                    409,
+                    "duplicate_request_id",
+                    f"Request ID '{request_id}' is already active.",
+                    alias,
+                )
+        body["model"] = selected.alias if path == "/v1/translations" else upstream_model(selected, alias)
         upstream = client.build_request(
             "POST",
             f"{endpoint(selected)}{path}",
             json=body,
-            headers=upstream_headers(selected),
+            headers=upstream_headers(selected, request_id),
         )
         response = await client.send(upstream, stream=bool(body.get("stream")))
     except httpx.TimeoutException:
         await client.aclose()
+        if request_claimed:
+            await release_active_request(request, request_id, selected)
         _record_gateway_diagnostic(request, alias, started, "error", "gateway_timeout")
         return gateway_error(
             504,
@@ -360,11 +405,17 @@ async def proxy_request(
         )
     except (httpx.HTTPError, ValueError):
         await client.aclose()
+        if request_claimed:
+            await release_active_request(request, request_id, selected)
         _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
         return unavailable(alias, candidates[0].generation_family.value)
     if body.get("stream"):
         return StreamingResponse(
-            forward_stream(response, client),
+            forward_stream(
+                response,
+                client,
+                (lambda: release_active_request(request, request_id, selected) if request_claimed else None),
+            ),
             status_code=response.status_code,
             media_type=response.headers.get("content-type", "text/event-stream"),
             headers=worker_response_headers(selected),
@@ -372,6 +423,8 @@ async def proxy_request(
     try:
         payload = await response.aread()
         response_payload = json_loads(payload)
+        if path == "/v1/translations" and response.is_success and isinstance(response_payload, dict):
+            response_payload["model"] = alias
         if path == "/native/autoregressive/trace" and response.is_success:
             metadata_error = trace_token_metadata_error(response_payload)
             if metadata_error:
@@ -396,15 +449,139 @@ async def proxy_request(
     finally:
         await response.aclose()
         await client.aclose()
+        if request_claimed:
+            await release_active_request(request, request_id, selected)
 
 
-async def forward_stream(response: httpx.Response, client: httpx.AsyncClient) -> AsyncIterator[bytes]:
+async def proxy_binary_request(
+    request: Request,
+    routes: dict[str, list[ModelProfile]],
+    path: str,
+    *,
+    timeout_seconds: float,
+) -> Response:
+    started = time.perf_counter()
+    try:
+        body = await request.json()
+    except ValueError:
+        return gateway_error(422, "invalid_request", "The request body must be JSON.", "")
+    alias = str(body.get("model") or "")
+    request_id = str(body.get("request_id") or "")
+    if not request_id:
+        return gateway_error(422, "invalid_request_id", "Supply a caller-generated request_id.", alias)
+    candidates = route_candidates(routes, alias)
+    if not candidates:
+        return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
+    selected: ModelProfile | None = None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5)) as client:
+        for profile in candidates:
+            health, ready = await worker_health(client, profile)
+            if ready:
+                selected = profile
+                break
+        if selected is None:
+            _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
+            return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
+        if not await claim_active_request(request, request_id, selected):
+            return gateway_error(
+                409,
+                "duplicate_request_id",
+                f"Request ID '{request_id}' is already active.",
+                alias,
+            )
+        body["model"] = selected.alias
+        try:
+            upstream = await client.post(
+                f"{endpoint(selected)}{path}",
+                json=body,
+                headers=upstream_headers(selected, request_id),
+            )
+        except httpx.TimeoutException:
+            _record_gateway_diagnostic(request, alias, started, "error", "gateway_timeout")
+            return gateway_error(
+                504,
+                "gateway_timeout",
+                f"The local Worker for Route '{alias}' did not respond within the gateway deadline.",
+                alias,
+            )
+        except httpx.HTTPError:
+            _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
+            return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
+        finally:
+            await release_active_request(request, request_id, selected)
+    response_headers = {
+        key: upstream.headers[key]
+        for key in (
+            "x-request-id",
+            "x-modeldeck-sample-rate-hz",
+            "x-modeldeck-audio-duration-seconds",
+        )
+        if key in upstream.headers
+    }
+    response_headers.update(worker_response_headers(selected))
+    if not upstream.is_success:
+        try:
+            payload = upstream.json()
+        except ValueError:
+            payload = {
+                "error": {
+                    "code": "invalid_worker_response",
+                    "message": "The local speech synthesis Worker returned an invalid error response.",
+                }
+            }
+        error_code = (
+            payload.get("error", {}).get("code")
+            if isinstance(payload, dict) and isinstance(payload.get("error"), dict)
+            else None
+        )
+        _record_gateway_diagnostic(request, alias, started, "error", error_code)
+        return JSONResponse(payload, status_code=upstream.status_code, headers=response_headers)
+    if upstream.headers.get("content-type", "").split(";", 1)[0].strip() != "audio/wav":
+        _record_gateway_diagnostic(request, alias, started, "error", "invalid_worker_audio")
+        return gateway_error(
+            502,
+            "invalid_worker_audio",
+            "The local speech synthesis Worker did not return WAV audio.",
+            alias,
+        )
+    _record_gateway_diagnostic(request, alias, started, "success", None)
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type="audio/wav",
+        headers=response_headers,
+    )
+
+
+async def claim_active_request(request: Request, request_id: str, profile: ModelProfile) -> bool:
+    async with request.app.state.active_request_lock:
+        if request_id in request.app.state.active_request_workers:
+            return False
+        request.app.state.active_request_workers[request_id] = profile
+        return True
+
+
+async def release_active_request(request: Request, request_id: str, profile: ModelProfile | None) -> None:
+    async with request.app.state.active_request_lock:
+        if request.app.state.active_request_workers.get(request_id) is profile:
+            request.app.state.active_request_workers.pop(request_id, None)
+
+
+async def forward_stream(
+    response: httpx.Response,
+    client: httpx.AsyncClient,
+    on_complete: Callable[[], Awaitable[None] | None] | None = None,
+) -> AsyncIterator[bytes]:
     try:
         async for chunk in response.aiter_bytes():
             yield chunk
     finally:
         await response.aclose()
         await client.aclose()
+        if on_complete is not None:
+            completion = on_complete()
+            if completion is not None:
+                await completion
 
 
 async def resolve_job_worker(
@@ -504,10 +681,13 @@ def upstream_model(profile: ModelProfile, alias: str) -> str:
     return alias
 
 
-def upstream_headers(profile: ModelProfile) -> dict[str, str]:
-    if profile.generation_family.value != "vision-language":
-        return {}
-    return {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")}
+def upstream_headers(profile: ModelProfile, request_id: str = "") -> dict[str, str]:
+    headers = {}
+    if profile.generation_family.value == "vision-language":
+        headers["Authorization"] = "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    return headers
 
 
 def worker_response_headers(profile: ModelProfile) -> dict[str, str]:

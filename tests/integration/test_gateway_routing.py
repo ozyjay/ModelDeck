@@ -80,8 +80,12 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
         assert "hidden" not in trace.json()["user_prompt_tokens"]
         assert len(trace.json()["prompt_token_ids"]) == len(trace.json()["prompt_tokens"])
         assert len(trace.json()["user_prompt_token_ids"]) == len(trace.json()["user_prompt_tokens"])
-        assert cancellation.json()["ok"] is True
-        assert cancellation.json()["workers"] == ["mock-ar"]
+        assert cancellation.json() == {
+            "ok": False,
+            "request_id": "gateway-stream",
+            "state": "not-found",
+            "worker_id": None,
+        }
     finally:
         await supervisor.stop_all()
 

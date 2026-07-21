@@ -26,7 +26,7 @@ class WorkerCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     model_id: str = Field(min_length=3, max_length=256)
     revision: str = Field(min_length=1, max_length=128)
-    dtype: Literal["float16", "bfloat16"] | None = None
+    dtype: Literal["float16", "bfloat16", "float32"] | None = None
     lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
     context_length: int | None = Field(default=None, ge=256, le=32768)
     maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
@@ -76,7 +76,7 @@ class WorkerReplacementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=80)
-    dtype: Literal["float16", "bfloat16"] | None = None
+    dtype: Literal["float16", "bfloat16", "float32"] | None = None
     lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
     context_length: int | None = Field(default=None, ge=256, le=32768)
     maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
@@ -97,6 +97,7 @@ def create_v2_router() -> APIRouter:
                     "display_name": contract.display_name,
                     "generation_family": contract.generation_family,
                     "required_capabilities": list(contract.required_capabilities),
+                    "required_worker_settings": contract.required_worker_settings,
                     "surfaces": list(contract.surfaces),
                 }
                 for contract in PROTOCOL_CONTRACTS.values()
@@ -262,6 +263,7 @@ def create_v2_router() -> APIRouter:
                 "mock_contract_id": payload.protocol_contract,
                 "mock_scenario": payload.scenario,
                 **({"mock_delay_ms": payload.delay_ms} if payload.delay_ms is not None else {}),
+                **(template.fixed_settings or {}),
                 **(
                     {"visual_token_budget": visual_token_budget}
                     if payload.protocol_contract == "scene-analysis-v1"
@@ -554,18 +556,28 @@ def create_v2_router() -> APIRouter:
             raise HTTPException(404, "The Route is not in the live Event revision")
         path, body = _route_smoke_request(route)
         settings = request.app.state.settings
-        timeout = (
-            settings.diffusion_timeout_seconds
-            if route["protocol_contract"] == "text-diffusion-v1"
-            else max(60.0, settings.scenechat_timeout_seconds)
-        )
+        if route["protocol_contract"] == "text-diffusion-v1":
+            timeout = settings.diffusion_timeout_seconds
+        elif route["protocol_contract"] == "speech-synthesis-v1":
+            timeout = settings.speech_synthesis_timeout_seconds
+        elif route["protocol_contract"].startswith("translation-"):
+            timeout = settings.translation_timeout_seconds
+        else:
+            timeout = max(60.0, settings.scenechat_timeout_seconds)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"http://{settings.host}:{settings.gateway_port}{path}", json=body
                 )
             response.raise_for_status()
-            result = response.json()
+            if route["protocol_contract"] == "speech-synthesis-v1":
+                if not response.headers.get("content-type", "").startswith("audio/wav"):
+                    raise ValueError("speech synthesis smoke test did not return audio/wav")
+                if not response.content.startswith(b"RIFF"):
+                    raise ValueError("speech synthesis smoke test did not return a WAV payload")
+                result = {"audio": True}
+            else:
+                result = response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise HTTPException(503, f"Gateway Route smoke test failed: {error}") from error
         return {
@@ -574,7 +586,11 @@ def create_v2_router() -> APIRouter:
             "route_id": route_id,
             "public_name": route["public_name"],
             "evidence": next(
-                (name for name in ("choices", "events", "frames", "ok") if result.get(name)),
+                (
+                    name
+                    for name in ("choices", "events", "frames", "ok", "output_text", "audio")
+                    if result.get(name)
+                ),
                 "response",
             ),
         }
@@ -798,6 +814,24 @@ def _route_smoke_request(route):
             "denoising_steps": 4,
             "seed": 7,
         }
+    if contract in {"translation-en-fr-v1", "translation-en-de-v1"}:
+        target_language = "fr" if contract == "translation-en-fr-v1" else "de"
+        return "/v1/translations", {
+            "request_id": "modeldeck-route-smoke",
+            "model": public_name,
+            "input": "The local Worker is ready.",
+            "source_language": "en",
+            "target_language": target_language,
+        }
+    if contract == "speech-synthesis-v1":
+        return "/v1/audio/speech", {
+            "request_id": "modeldeck-route-smoke",
+            "model": public_name,
+            "input": "The local Worker is ready.",
+            "voice": "ryan",
+            "language": "en",
+            "response_format": "wav",
+        }
     raise HTTPException(409, "This protocol requires an interactive smoke-test client")
 
 
@@ -847,4 +881,8 @@ def _worker_smoke_request(definition: WorkerDefinition):
             },
             None,
         )
+    if definition.generation_family == "text-translation":
+        return "/native/text-translation/smoke", None, None
+    if definition.generation_family == "speech-synthesis":
+        return "/native/speech-synthesis/smoke", None, None
     raise HTTPException(409, "This Worker family does not support an automatic smoke test")

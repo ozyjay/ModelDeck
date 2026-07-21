@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from modeldeck.catalogue import discover_huggingface_models, resolve_cache_paths
+from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
 
 
 def test_cache_path_precedence(tmp_path: Path) -> None:
@@ -114,6 +115,51 @@ def test_ignores_metadata_only_repository_without_a_snapshot(tmp_path: Path) -> 
     reference.write_text("missing-snapshot", encoding="utf-8")
 
     assert discover_huggingface_models([tmp_path]) == []
+
+
+@pytest.mark.parametrize(
+    ("model_id", "family", "runtime"),
+    [
+        ("Helsinki-NLP/opus-mt-en-fr", "text-translation", "opus-translation-cpu"),
+        ("Helsinki-NLP/opus-mt-en-de", "text-translation", "opus-translation-cpu"),
+        (
+            "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+            "speech-synthesis",
+            "qwen3-tts-rocm",
+        ),
+    ],
+)
+def test_recognises_only_complete_pinned_speechshift_snapshots(
+    tmp_path: Path,
+    model_id: str,
+    family: str,
+    runtime: str,
+) -> None:
+    spec = SPEECHSHIFT_MODEL_SPECS[model_id]
+    snapshot = tmp_path / f"models--{model_id.replace('/', '--')}" / "snapshots" / spec.revision
+    snapshot.mkdir(parents=True)
+    for filename in spec.required_files:
+        path = snapshot / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if filename == "config.json":
+            path.write_text(
+                json.dumps(
+                    {
+                        "architectures": [spec.architecture],
+                        "model_type": spec.model_type,
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            path.write_bytes(b"local")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["revision"] == spec.revision
+    assert model["generation_family_hint"] == family
+    assert model["configuration_support"] == runtime
+    assert model["configuration_support_reason"].startswith("Supported by")
 
 
 def test_identifies_gemma4_as_vision_language_without_claiming_readiness(tmp_path: Path) -> None:

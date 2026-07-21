@@ -212,6 +212,13 @@ def validate_event(
                 ]
                 if missing:
                     messages.append(f"Missing capabilities: {', '.join(missing)}")
+                mismatched_settings = [
+                    f"{name}={expected}"
+                    for name, expected in contract.required_worker_settings.items()
+                    if worker.settings.get(name) != expected
+                ]
+                if mismatched_settings:
+                    messages.append("Requires Worker settings: " + ", ".join(mismatched_settings))
                 if definition.qualification == "tested-working" and not _has_matching_success(worker, tests):
                     messages.append("No matching tested-working evidence is recorded")
             for message in messages:

@@ -97,7 +97,9 @@ The Model library turns a recognised, complete Hugging Face snapshot into a loca
 when its architecture matches an installed trusted runtime. Supported
 paths are causal-language-model Transformers, SceneChat Gemma 4 and the official Qwen3.5
 0.8B, 2B, 4B and 9B checkpoints, DiffusionGemma block diffusion, and self-contained
-ModelDeck DiffusionGemma Q4 format 2 releases. Q4 releases
+ModelDeck DiffusionGemma Q4 format 2 releases. SpeechShift additionally recognises the
+exact pinned OPUS English-to-French and English-to-German snapshots plus Qwen3-TTS
+CustomVoice; see [SpeechShift runtimes](docs/SPEECHSHIFT_RUNTIMES.md). Q4 releases
 must retain their manifests, quality evidence, complete file inventory, and checksums;
 generic GPTQ repositories are not accepted. ModelDeck derives the cache root, port,
 capabilities and safe launch argument array. Archiving a Worker never removes the cached

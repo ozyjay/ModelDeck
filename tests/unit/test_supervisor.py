@@ -7,6 +7,7 @@ import pytest
 from modeldeck.profiles import LocalProfileRequest, create_local_profile
 from modeldeck.protocol import LifecycleClass
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
+from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
 from modeldeck.supervisor.service import (
     TRUSTED_LAUNCH_BUILDERS,
     WorkerSupervisor,
@@ -93,7 +94,7 @@ async def test_supervisor_registers_and_removes_only_stopped_profiles() -> None:
 def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     runtime_python = tmp_path / "bin/python"
-    runtime_python.parent.mkdir()
+    runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(sys.executable)
     monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
     launch = build_worker_launch(profile)
@@ -105,7 +106,7 @@ def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_p
 def test_qwen_launches_are_allowlisted_offline_and_cache_pinned(monkeypatch, tmp_path, profile_id) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == profile_id)
     runtime_python = tmp_path / "bin/python"
-    runtime_python.parent.mkdir()
+    runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(sys.executable)
     monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
 
@@ -196,6 +197,67 @@ def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
+
+
+def test_opus_translation_launch_is_isolated_directional_and_offline(monkeypatch, tmp_path) -> None:
+    spec = SPEECHSHIFT_MODEL_SPECS["Helsinki-NLP/opus-mt-en-fr"]
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id=spec.model_id,
+            revision=spec.revision,
+            alias="speechshift-en-fr",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="opus-translation-cpu",
+    )
+    runtime_python = tmp_path / "marian/bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_MARIAN_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.translation_worker",
+    ]
+    assert launch.command[launch.command.index("--source-language") + 1] == "en"
+    assert launch.command[launch.command.index("--target-language") + 1] == "fr"
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_qwen_tts_launch_is_isolated_offline_and_has_no_arch_override(monkeypatch, tmp_path) -> None:
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id=spec.model_id,
+            revision=spec.revision,
+            alias="speechshift-voice",
+        ),
+        cache_root=tmp_path,
+        port=8631,
+        configuration_support="qwen3-tts-rocm",
+    )
+    runtime_python = tmp_path / "tts/bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_QWEN_TTS_PYTHON", str(runtime_python))
+    monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "unsafe")
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.tts_worker",
+    ]
+    assert launch.command[launch.command.index("--maximum-audio-seconds") + 1] == "90"
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert "HSA_OVERRIDE_GFX_VERSION" not in launch.environment
 
 
 def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, tmp_path) -> None:

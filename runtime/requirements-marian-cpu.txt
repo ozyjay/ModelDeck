@@ -1,0 +1,7 @@
+# Isolated CPU runtime for the two pinned OPUS Marian translation models.
+torch==2.9.1
+transformers==4.57.3
+sentencepiece==0.2.1
+sacremoses==0.1.1
+fastapi==0.139.0
+uvicorn==0.51.0

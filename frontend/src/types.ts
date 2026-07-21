@@ -72,6 +72,7 @@ export interface ProtocolContract {
   display_name: string;
   generation_family: string;
   required_capabilities: string[];
+  required_worker_settings: Record<string, string | number>;
   surfaces: string[];
 }
 
@@ -112,7 +113,7 @@ export interface RuntimeTemplate {
   cache_setting: "cache_root" | "q4_checkpoint_dir" | "artifact_path";
   uses_base_model_identity: boolean;
   lifecycle: "resident" | "on-demand" | "exclusive" | null;
-  dtype: "float16" | "bfloat16" | null;
+  dtype: "float16" | "bfloat16" | "float32" | null;
   settings: Record<string, string | number | boolean>;
   package_id: string;
   package_version: string;

@@ -490,7 +490,7 @@ function CollapsibleEditorCard({ sectionId, label, className = "", heading, acce
 }
 
 interface WorkerParameterValues {
-  dtype: "float16" | "bfloat16";
+  dtype: "float16" | "bfloat16" | "float32";
   lifecycle: "resident" | "on-demand" | "exclusive";
   contextLength: number;
   maximumNewTokens: number;
@@ -505,7 +505,9 @@ function integerSetting(settings: RuntimeTemplate["settings"] | Worker["settings
 
 function runtimeParameterDefaults(template?: RuntimeTemplate, worker?: Worker): WorkerParameterValues {
   return {
-    dtype: worker?.dtype === "bfloat16" ? "bfloat16" : template?.dtype ?? "float16",
+    dtype: (["float16", "bfloat16", "float32"] as const).includes(
+      worker?.dtype as "float16" | "bfloat16" | "float32",
+    ) ? worker!.dtype as WorkerParameterValues["dtype"] : template?.dtype ?? "float16",
     lifecycle: worker?.lifecycle ?? template?.lifecycle ?? "on-demand",
     contextLength: integerSetting(worker?.settings, "context_length", integerSetting(template?.settings, "context_length", 2048)),
     maximumNewTokens: integerSetting(worker?.settings, "maximum_new_tokens", integerSetting(template?.settings, "maximum_new_tokens", 128)),
@@ -519,7 +521,9 @@ function workerParameterPayload(template: RuntimeTemplate, values: WorkerParamet
     dtype: values.dtype,
     lifecycle: values.lifecycle,
     ...(["autoregressive", "vision-language"].includes(template.generation_family) ? { context_length: values.contextLength } : {}),
-    ...(template.generation_family !== "speech-conversation" ? { maximum_new_tokens: values.maximumNewTokens } : {}),
+    ...(!["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family)
+      ? { maximum_new_tokens: values.maximumNewTokens }
+      : {}),
     ...(template.generation_family === "text-diffusion" ? { maximum_denoising_steps: values.maximumDenoisingSteps } : {}),
     ...(template.generation_family === "vision-language" ? { visual_token_budget: values.visualTokenBudget } : {}),
   };
@@ -528,7 +532,7 @@ function workerParameterPayload(template: RuntimeTemplate, values: WorkerParamet
 function parametersAreValid(template: RuntimeTemplate, values: WorkerParameterValues) {
   const validContext = !["autoregressive", "vision-language"].includes(template.generation_family)
     || (values.contextLength >= 256 && values.contextLength <= 32768);
-  const validOutput = template.generation_family === "speech-conversation"
+  const validOutput = ["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family)
     || (values.maximumNewTokens >= 1 && values.maximumNewTokens <= 512);
   const validDenoising = template.generation_family !== "text-diffusion"
     || (values.maximumDenoisingSteps >= 1 && values.maximumDenoisingSteps <= 48);
@@ -544,14 +548,14 @@ function WorkerParameterFields({ template, values, onChange }: {
 }) {
   const update = (change: Partial<WorkerParameterValues>) => onChange({ ...values, ...change });
   const hasContext = ["autoregressive", "vision-language"].includes(template.generation_family);
-  const hasOutput = template.generation_family !== "speech-conversation";
+  const hasOutput = !["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family);
   const hasDenoising = template.generation_family === "text-diffusion";
   const hasVisualBudget = template.generation_family === "vision-language";
   return <>
     <div className="runtime-fields worker-parameter-fields">
       <label>Data type{template.dtype && <small>Required by trusted runtime</small>}
         <select aria-label="Data type" value={values.dtype} disabled={template.dtype !== null} onChange={(event) => update({ dtype: event.target.value as WorkerParameterValues["dtype"] })}>
-          <option value="float16">Float16</option><option value="bfloat16">BFloat16</option>
+          <option value="float16">Float16</option><option value="bfloat16">BFloat16</option><option value="float32">Float32</option>
         </select>
       </label>
       <label>Lifecycle{template.lifecycle && <small>Required by trusted runtime</small>}
