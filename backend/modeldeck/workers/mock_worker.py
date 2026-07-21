@@ -12,11 +12,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from modeldeck.contracts.scenechat import SceneAnalysis, SceneObject
+from modeldeck.mock_templates import MOCK_SCENARIOS, MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
 
 
@@ -42,7 +43,9 @@ class DiffusionRequest(BaseModel):
     stream_intermediate_frames: bool = True
 
 
-def capabilities(family: GenerationFamily) -> CapabilitySet:
+def capabilities(family: GenerationFamily, contract_id: str | None = None) -> CapabilitySet:
+    if contract_id:
+        return CapabilitySet.model_validate(MOCK_WORKER_TEMPLATES[contract_id].capabilities)
     if family == GenerationFamily.AUTOREGRESSIVE:
         return CapabilitySet(chat=True, completions=True, logits=True, top_k_trace=True)
     if family == GenerationFamily.VISION_LANGUAGE:
@@ -66,8 +69,20 @@ def create_app(
     model_id: str,
     revision: str,
     family: GenerationFamily,
+    contract_id: str | None = None,
+    scenario: str = "success",
+    delay_ms: int = 0,
     startup_delay: float = 0.08,
 ) -> FastAPI:
+    if contract_id is not None:
+        template = MOCK_WORKER_TEMPLATES.get(contract_id)
+        if template is None or template.contract.generation_family != family:
+            raise ValueError("Mock contract does not match the configured generation family")
+    if scenario not in MOCK_SCENARIOS:
+        raise ValueError("Unknown mock scenario")
+    if scenario == "delayed" and not 1 <= delay_ms <= 120_000:
+        raise ValueError("Delayed mock scenario requires delay_ms from 1 to 120000")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.worker_state = WorkerState.LOADING
@@ -81,6 +96,23 @@ def create_app(
 
     app = FastAPI(title=f"ModelDeck mock worker: {worker_id}", lifespan=lifespan)
     app.state.shutdown_callback = None
+
+    @app.middleware("http")
+    async def apply_mock_scenario(request: Request, call_next):
+        if _is_mock_request_path(request.url.path):
+            if scenario == "delayed":
+                await asyncio.sleep(delay_ms / 1000)
+            elif scenario == "request-error":
+                return JSONResponse(
+                    {
+                        "error": {
+                            "code": "mock_request_failure",
+                            "message": "The configured mock Worker returned a deterministic failure.",
+                        }
+                    },
+                    status_code=503,
+                )
+        return await call_next(request)
 
     @app.get("/health", response_model=WorkerHealth)
     async def health(request: Request) -> WorkerHealth:
@@ -96,7 +128,13 @@ def create_app(
 
     @app.get("/capabilities")
     async def get_capabilities() -> dict[str, Any]:
-        return {"protocol_version": "1", "generation_family": family, **capabilities(family).model_dump()}
+        return {
+            "protocol_version": "1",
+            "generation_family": family,
+            "mock_contract_id": contract_id,
+            "mock_scenario": scenario,
+            **capabilities(family, contract_id).model_dump(),
+        }
 
     @app.get("/metrics")
     async def metrics() -> dict[str, Any]:
@@ -133,6 +171,7 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat(body: CompletionRequest):
         _require_one_of(family, {GenerationFamily.AUTOREGRESSIVE, GenerationFamily.VISION_LANGUAGE})
+        _require_contract(contract_id, {"openai-chat-v1", "scene-analysis-v1"})
         if family == GenerationFamily.VISION_LANGUAGE:
             if body.stream:
                 raise HTTPException(400, "Mock SceneChat does not stream")
@@ -142,11 +181,12 @@ def create_app(
                 _stream_completion(body, worker_id, app.state.cancelled),
                 media_type="text/event-stream",
             )
-        return _completion_response(body, worker_id)
+        return _chat_completion_response(body, worker_id)
 
     @app.post("/native/vision-language/smoke")
     async def vision_language_smoke():
         _require_family(family, GenerationFamily.VISION_LANGUAGE)
+        _require_contract(contract_id, {"scene-analysis-v1"})
         return {
             "ok": True,
             "model_id": model_id,
@@ -157,16 +197,18 @@ def create_app(
     @app.post("/v1/completions")
     async def completion(body: CompletionRequest):
         _require_family(family, GenerationFamily.AUTOREGRESSIVE)
+        _require_contract(contract_id, {"openai-completions-v1"})
         if body.stream:
             return StreamingResponse(
-                _stream_completion(body, worker_id, app.state.cancelled),
+                _stream_completion(body, worker_id, app.state.cancelled, chat=False),
                 media_type="text/event-stream",
             )
-        return _completion_response(body, worker_id)
+        return _legacy_completion_response(body, worker_id)
 
     @app.post("/native/autoregressive/trace")
     async def trace(body: CompletionRequest):
         _require_family(family, GenerationFamily.AUTOREGRESSIVE)
+        _require_contract(contract_id, {"native-ar-trace-v1"})
         prompt = body.prompt or " ".join(message.get("content", "") for message in body.messages or [])
         prompt_token_ids, prompt_tokens = _mock_tokenise(prompt)
         user_prompt = _latest_mock_user_prompt(body)
@@ -190,12 +232,14 @@ def create_app(
     @app.post("/v1/refine")
     async def refine(body: DiffusionRequest):
         _require_family(family, GenerationFamily.TEXT_DIFFUSION)
+        _require_contract(contract_id, {"text-diffusion-v1"})
         frames = list(_diffusion_frames(body, "sync"))
         return {"model": model_id, "text": frames[-1]["text"], "frames": frames, "seed": body.seed}
 
     @app.post("/v1/diffuse")
     async def diffuse(body: DiffusionRequest):
         _require_family(family, GenerationFamily.TEXT_DIFFUSION)
+        _require_contract(contract_id, {"text-diffusion-v1"})
         job_id = str(uuid.uuid4())
         frames = list(_diffusion_frames(body, job_id))
         app.state.jobs[job_id] = {"state": "complete", "request": body, "frames": frames}
@@ -204,6 +248,7 @@ def create_app(
     @app.get("/v1/jobs/{job_id}")
     async def job(job_id: str):
         _require_family(family, GenerationFamily.TEXT_DIFFUSION)
+        _require_contract(contract_id, {"text-diffusion-v1"})
         if job_id not in app.state.jobs:
             raise HTTPException(404, "Unknown diffusion job")
         job = app.state.jobs[job_id]
@@ -211,6 +256,7 @@ def create_app(
 
     @app.post("/v1/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str):
+        _require_contract(contract_id, {"text-diffusion-v1"})
         if job_id not in app.state.jobs:
             raise HTTPException(404, "Unknown diffusion job")
         app.state.jobs[job_id]["state"] = "cancelled"
@@ -218,6 +264,7 @@ def create_app(
 
     @app.get("/v1/jobs/{job_id}/events")
     async def job_events(job_id: str):
+        _require_contract(contract_id, {"text-diffusion-v1"})
         if job_id not in app.state.jobs:
             raise HTTPException(404, "Unknown diffusion job")
 
@@ -230,6 +277,59 @@ def create_app(
                 await asyncio.sleep(0)
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/smoke")
+    async def speech_smoke():
+        _require_family(family, GenerationFamily.SPEECH_CONVERSATION)
+        _require_contract(contract_id, {"speech-conversation-v1"})
+        return {"ok": True, "output_kind": "audio", "mock": True}
+
+    @app.websocket("/v1/speech/conversations")
+    async def speech_conversation(client: WebSocket):
+        await client.accept()
+        try:
+            _require_family(family, GenerationFamily.SPEECH_CONVERSATION)
+            _require_contract(contract_id, {"speech-conversation-v1"})
+            start = json.loads(await client.receive_text())
+            if scenario == "delayed":
+                await asyncio.sleep(delay_ms / 1000)
+            if scenario == "request-error":
+                await client.send_json(
+                    {
+                        "type": "error",
+                        "code": "mock_request_failure",
+                        "message": "The configured mock Worker returned a deterministic failure.",
+                    }
+                )
+                await client.close(code=1011)
+                return
+            await client.send_json(
+                {
+                    "type": "session.ready",
+                    "model": start.get("model", model_id),
+                    "audio": {"encoding": "pcm_s16le", "sample_rate_hz": 16000, "channels": 1},
+                    "voice": "mock",
+                    "language": "en",
+                    "mock": True,
+                }
+            )
+            await client.send_json({"type": "response.started"})
+            await client.send_json({"type": "transcript.delta", "delta": "Mock local speech response."})
+            await client.send_bytes(bytes(640))
+            await client.send_json({"type": "transcript.final", "text": "Mock local speech response."})
+            await client.send_json({"type": "response.completed", "reason": "mock"})
+            while True:
+                message = await client.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+                if message.get("text"):
+                    control = json.loads(message["text"])
+                    if control.get("type") == "session.close":
+                        await client.close()
+                        return
+        except (HTTPException, ValueError, WebSocketDisconnect):
+            if client.client_state.name != "DISCONNECTED":
+                await client.close(code=1008)
 
     return app
 
@@ -246,7 +346,24 @@ def _require_one_of(actual: GenerationFamily, expected: set[GenerationFamily]) -
         )
 
 
-def _completion_response(body: CompletionRequest, worker_id: str) -> dict[str, Any]:
+def _require_contract(actual: str | None, expected: set[str]) -> None:
+    if actual is not None and actual not in expected:
+        raise HTTPException(404, "Route is not supplied by this mock contract")
+
+
+def _is_mock_request_path(path: str) -> bool:
+    return path in {
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/native/autoregressive/trace",
+        "/native/vision-language/smoke",
+        "/v1/refine",
+        "/v1/diffuse",
+        "/smoke",
+    } or path.startswith("/v1/jobs/")
+
+
+def _chat_completion_response(body: CompletionRequest, worker_id: str) -> dict[str, Any]:
     request_id = body.request_id or str(uuid.uuid4())
     prompt = body.prompt or _message_text(body.messages)
     text = f"Mock local response: {prompt.strip() or 'ready'}"[: body.max_tokens * 8]
@@ -257,6 +374,21 @@ def _completion_response(body: CompletionRequest, worker_id: str) -> dict[str, A
         "model": body.model,
         "provider": worker_id,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(text.split())},
+    }
+
+
+def _legacy_completion_response(body: CompletionRequest, worker_id: str) -> dict[str, Any]:
+    request_id = body.request_id or str(uuid.uuid4())
+    prompt = body.prompt or _message_text(body.messages)
+    text = f"Mock local response: {prompt.strip() or 'ready'}"[: body.max_tokens * 8]
+    return {
+        "id": request_id,
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": body.model,
+        "provider": worker_id,
+        "choices": [{"index": 0, "text": text, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": len(text.split())},
     }
 
@@ -297,6 +429,8 @@ async def _stream_completion(
     body: CompletionRequest,
     worker_id: str,
     cancelled: set[str],
+    *,
+    chat: bool = True,
 ) -> AsyncIterator[str]:
     request_id = body.request_id or str(uuid.uuid4())
     prompt = body.prompt or _message_text(body.messages)
@@ -306,12 +440,17 @@ async def _stream_completion(
             payload = {"id": request_id, "object": "chat.completion.cancelled", "provider": worker_id}
             yield f"event: cancelled\ndata: {json.dumps(payload)}\n\n"
             return
+        choice = (
+            {"index": 0, "delta": {"content": f"{token} "}, "finish_reason": None}
+            if chat
+            else {"index": 0, "text": f"{token} ", "finish_reason": None}
+        )
         payload = {
             "id": request_id,
-            "object": "chat.completion.chunk",
+            "object": "chat.completion.chunk" if chat else "text_completion",
             "model": body.model,
             "provider": worker_id,
-            "choices": [{"index": 0, "delta": {"content": f"{token} "}, "finish_reason": None}],
+            "choices": [choice],
         }
         yield f"event: token\ndata: {json.dumps(payload)}\n\n"
         await asyncio.sleep(0.005)
@@ -406,6 +545,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--family", required=True, choices=[family.value for family in GenerationFamily])
+    parser.add_argument("--contract", choices=tuple(MOCK_WORKER_TEMPLATES))
+    parser.add_argument("--scenario", choices=MOCK_SCENARIOS, default="success")
+    parser.add_argument("--delay-ms", type=int, default=0)
     parser.add_argument("--port", required=True, type=int)
     return parser.parse_args()
 
@@ -421,6 +563,9 @@ def main() -> None:
         model_id=args.model_id,
         revision=args.revision,
         family=GenerationFamily(args.family),
+        contract_id=args.contract,
+        scenario=args.scenario,
+        delay_ms=args.delay_ms,
     )
     config = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)

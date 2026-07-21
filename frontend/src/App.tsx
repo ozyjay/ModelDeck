@@ -5,7 +5,7 @@ import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./a
 import type {
   CompatibilityTest, EventDefinition, EventRecord, EventRevision, EventValidation,
   GatewayStatus, HardwareProbe, LiveState, ManagementHealth, ModelEntry,
-  ProtocolContract, RuntimeTemplate, Telemetry, Worker, WorkerLog,
+  MockScenario, MockWorkerTemplate, ProtocolContract, RuntimeTemplate, Telemetry, Worker, WorkerLog,
 } from "./types";
 
 type View = "live" | "events" | "workers" | "models" | "advanced";
@@ -121,6 +121,7 @@ export default function App() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [contracts, setContracts] = useState<ProtocolContract[]>([]);
+  const [mockTemplates, setMockTemplates] = useState<MockWorkerTemplate[]>([]);
   const [templates, setTemplates] = useState<RuntimeTemplate[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,7 +148,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextLive, nextWorkers,
-      nextEvents, catalogue, contractResponse, templateResponse, tests] = await Promise.all([
+      nextEvents, catalogue, contractResponse, mockTemplateResponse, templateResponse, tests] = await Promise.all([
       getJson<ManagementHealth>("/api/health"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<HardwareProbe>("/api/hardware"),
@@ -157,13 +158,14 @@ export default function App() {
       getJson<{ events: EventRecord[] }>("/api/events"),
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
       getJson<{ contracts: ProtocolContract[] }>("/api/protocol-contracts"),
+      getJson<{ templates: MockWorkerTemplate[] }>("/api/mock-worker-templates"),
       getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
       getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
     ]);
     setHealth(nextHealth); setGateway(nextGateway); setHardware(nextHardware);
     setTelemetry(nextTelemetry); setLive(nextLive); setWorkers(nextWorkers);
     setEvents(nextEvents.events); setModels(catalogue.models);
-    setContracts(contractResponse.contracts); setTemplates(templateResponse.templates);
+    setContracts(contractResponse.contracts); setMockTemplates(mockTemplateResponse.templates); setTemplates(templateResponse.templates);
     setCompatibility(tests.tests);
   }, []);
 
@@ -232,8 +234,8 @@ export default function App() {
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
         {!health || !hardware || !telemetry || !gateway ? <Unavailable retry={refresh} />
           : view === "live" ? <LiveView live={live} workers={workers} models={models} operate={operate} pending={pending} />
-          : view === "events" ? <EventsView events={events} workers={workers} contracts={contracts} openDay={health.open_day} refresh={refresh} />
-          : view === "workers" ? <WorkersView workers={workers} templates={templates} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
+          : view === "events" ? <EventsView events={events} workers={workers} contracts={contracts} mockTemplates={mockTemplates} openDay={health.open_day} refresh={refresh} />
+          : view === "workers" ? <WorkersView workers={workers} templates={templates} mockTemplates={mockTemplates} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.open_day} />
           : <AdvancedView hardware={hardware} telemetry={telemetry} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
@@ -276,8 +278,8 @@ function LiveView({ live, workers, models, operate, pending }: {
   </div>;
 }
 
-function EventsView({ events, workers, contracts, openDay, refresh }: {
-  events: EventRecord[]; workers: Worker[]; contracts: ProtocolContract[]; openDay: boolean; refresh: () => Promise<void>;
+function EventsView({ events, workers, contracts, mockTemplates, openDay, refresh }: {
+  events: EventRecord[]; workers: Worker[]; contracts: ProtocolContract[]; mockTemplates: MockWorkerTemplate[]; openDay: boolean; refresh: () => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState(events[0]?.definition.id ?? "");
   const selected = events.find((event) => event.definition.id === selectedId) ?? events[0];
@@ -350,6 +352,26 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
       route_ids: included ? [...demo.route_ids, routeId] : demo.route_ids.filter((id) => id !== routeId),
     } : demo),
   }));
+  const assignCreatedMock = async (routeId: string, worker: Worker) => {
+    if (!draft) return;
+    const nextDraft = {
+      ...draft,
+      routes: draft.routes.map((route) => route.id === routeId
+        ? { ...route, worker_ids: [...route.worker_ids, worker.id] }
+        : route),
+    };
+    try {
+      setSaveState("Saving…");
+      await putJson(`/api/events/${draft.id}/draft`, nextDraft);
+      setDraft(nextDraft);
+      setSaveState("Saved");
+      setFeedback(`Created mock Worker “${worker.name}” and added it as the last Route backup. Publish the draft when ready.`);
+    } catch (reason) {
+      setSaveState("Save failed");
+      setFeedback(`Mock Worker “${worker.name}” was created, but it could not be assigned to the Route: ${messageFrom(reason)}`);
+    }
+    await refresh();
+  };
   const assignedRouteIds = new Set(draft?.demos.flatMap((demo) => demo.route_ids) ?? []);
   const unassignedRoutes = draft?.routes.filter((route) => !assignedRouteIds.has(route.id)) ?? [];
 
@@ -372,7 +394,7 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
             <section className="unassigned-routes" aria-labelledby="unassigned-routes-heading"><div><h4 id="unassigned-routes-heading">Unassigned Routes</h4><small>Shared Routes that are not used by any Demo.</small></div>{unassignedRoutes.length ? <div className="compact-route-reference-list">{unassignedRoutes.map((route) => <div className="compact-route-reference" key={route.id}><strong>{route.display_name}</strong><code>{route.public_name}</code></div>)}</div> : <p className="muted">{draft.routes.length ? "Every shared Route is used by at least one Demo." : "No shared Routes have been created."}</p>}</section>
             <div className="route-editor-list">{draft.routes.map((route) => { const publicNameConflict = publicNameConflicts.get(route.id); return <CollapsibleEditorCard sectionId={`event-route-${draft.id}-${route.id}`} label={`Route ${route.display_name}`} heading={<h4>{route.display_name}</h4>} accessory={<button className="secondary danger" disabled={openDay} onClick={() => removeRoute(route.id)}>Remove</button>} key={route.id}><div className="field-grid"><label>Route Label<input value={route.display_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { display_name: event.target.value })} /></label><label>API Model ID<small className="field-help">Sent by clients in the <code>model</code> field and must be unique within this Event.</small><input aria-label="API Model ID" aria-invalid={Boolean(publicNameConflict)} aria-describedby={publicNameConflict ? `route-public-name-error-${route.id}` : undefined} value={route.public_name} disabled={openDay} onChange={(event) => updateRoute(route.id, { public_name: event.target.value })} />{publicNameConflict && <small className="field-error" id={`route-public-name-error-${route.id}`}>“{route.public_name}” is already used by {publicNameConflict}. Choose a unique API Model ID.</small>}</label><label>Protocol contract<select value={route.protocol_contract} disabled={openDay} onChange={(event) => updateRoute(route.id, { protocol_contract: event.target.value })}>{contracts.map((contract) => <option value={contract.id} key={contract.id}>{contract.display_name}</option>)}</select></label></div>
             <h4>Worker order</h4><p className="provider-priority-help">{contractRequirement(route.protocol_contract, contracts)}</p><div className="worker-order-list">{route.worker_ids.map((workerId, index) => <div key={`${workerId}-${index}`}><span className="order-label">{index === 0 ? "Primary" : `Backup ${index}`}</span><select value={workerId} disabled={openDay} onChange={(event) => { const next = [...route.worker_ids]; next[index] = event.target.value; updateRoute(route.id, { worker_ids: next }); }}>{workers.map((worker) => { const compatible = workerSupportsContract(worker, route.protocol_contract, contracts); return <option key={worker.id} value={worker.id} disabled={(route.worker_ids.includes(worker.id) && worker.id !== workerId) || (!compatible && worker.id !== workerId)}>{worker.name} · {worker.model_id}{compatible ? "" : " · incompatible"}</option>; })}</select><button className="secondary" disabled={openDay || index === 0} onClick={() => { const next = [...route.worker_ids]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateRoute(route.id, { worker_ids: next }); }}>↑</button><button className="secondary" disabled={openDay || index === route.worker_ids.length - 1} onClick={() => { const next = [...route.worker_ids]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; updateRoute(route.id, { worker_ids: next }); }}>↓</button><button className="secondary danger" disabled={openDay || index === 0} onClick={() => updateRoute(route.id, { worker_ids: route.worker_ids.filter((_, item) => item !== index) })}>Remove</button></div>)}</div>
-            <button className="secondary" disabled={openDay || !workers.some((worker) => !route.worker_ids.includes(worker.id) && workerSupportsContract(worker, route.protocol_contract, contracts))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id) && workerSupportsContract(item, route.protocol_contract, contracts)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add compatible backup</button>
+            <div className="route-backup-actions"><button className="secondary" disabled={openDay || !workers.some((worker) => !route.worker_ids.includes(worker.id) && workerSupportsContract(worker, route.protocol_contract, contracts))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id) && workerSupportsContract(item, route.protocol_contract, contracts)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add compatible backup</button><MockWorkerCreator templates={mockTemplates} fixedContract={route.protocol_contract} disabled={openDay} buttonLabel="Create mock backup" onCreated={(worker) => assignCreatedMock(route.id, worker)} /></div>
             </CollapsibleEditorCard>; })}</div>
           </CollapsibleEditorSection>
         </div>
@@ -545,7 +567,59 @@ function confirmArchiveWorker(worker: Worker) {
   );
 }
 
-function WorkersView({ workers, templates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+function MockWorkerCreator({ templates, fixedContract, disabled, buttonLabel = "Create mock Worker", onCreated }: {
+  templates: MockWorkerTemplate[];
+  fixedContract?: string;
+  disabled: boolean;
+  buttonLabel?: string;
+  onCreated: (worker: Worker) => Promise<void>;
+}) {
+  const [contract, setContract] = useState(fixedContract ?? templates[0]?.protocol_contract ?? "");
+  const [scenario, setScenario] = useState<MockScenario>("success");
+  const [name, setName] = useState("");
+  const [delayMs, setDelayMs] = useState(1000);
+  const [visualTokenBudget, setVisualTokenBudget] = useState(70);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selected = templates.find((template) => template.protocol_contract === (fixedContract ?? contract));
+  useEffect(() => { if (fixedContract) setContract(fixedContract); }, [fixedContract]);
+  useEffect(() => {
+    const option = selected?.options.find((item) => item.id === "visual_token_budget");
+    if (option) setVisualTokenBudget(option.default);
+  }, [selected]);
+  const create = async () => {
+    if (!selected) throw new Error("This Route contract has no trusted mock implementation.");
+    setCreating(true); setError(null);
+    try {
+      const worker = await postJson<Worker>("/api/workers/mocks", {
+        protocol_contract: selected.protocol_contract,
+        scenario,
+        ...(name.trim() ? { name: name.trim() } : {}),
+        ...(scenario === "delayed" ? { delay_ms: delayMs } : {}),
+        ...(selected.options.some((item) => item.id === "visual_token_budget") ? { visual_token_budget: visualTokenBudget } : {}),
+      });
+      await onCreated(worker);
+      setName("");
+    } catch (reason) {
+      const message = reason instanceof ApiError && reason.status === 405
+        ? "The running ModelDeck management service does not support generic mock Workers yet. Restart ModelDeck, then try again."
+        : messageFrom(reason);
+      setError(message);
+    } finally { setCreating(false); }
+  };
+  return <section className={`mock-worker-creator${fixedContract ? " compact" : ""}`} aria-label={fixedContract ? `Mock backup for ${fixedContract}` : "Create mock Worker"}>
+    {!fixedContract && <div><strong>Mock Worker</strong><small>Deterministic CPU fallback for Route rehearsal; it never performs physical model inference.</small></div>}
+    <label>Contract<select aria-label="Mock contract" value={fixedContract ?? contract} disabled={disabled || creating || Boolean(fixedContract)} onChange={(event) => setContract(event.target.value)}>{templates.map((template) => <option value={template.protocol_contract} key={template.id}>{template.display_name}</option>)}</select></label>
+    <label>Scenario<select aria-label={fixedContract ? `Mock scenario for ${fixedContract}` : "Mock scenario"} value={scenario} disabled={disabled || creating} onChange={(event) => setScenario(event.target.value as MockScenario)}><option value="success">Success</option><option value="delayed">Delayed success</option><option value="request-error">Request failure</option></select></label>
+    {!fixedContract && <label>Worker name<input aria-label="Mock Worker name" value={name} maxLength={80} placeholder={selected?.default_name ?? "Mock Worker"} disabled={disabled || creating} onChange={(event) => setName(event.target.value)} /></label>}
+    {scenario === "delayed" && <label>Delay (ms)<input aria-label={fixedContract ? `Mock delay for ${fixedContract}` : "Mock delay"} type="number" min={1} max={120000} value={delayMs} disabled={disabled || creating} onChange={(event) => setDelayMs(event.target.valueAsNumber)} /></label>}
+    {selected?.options.some((item) => item.id === "visual_token_budget") && <label>Visual tokens<select aria-label={fixedContract ? `Mock visual tokens for ${fixedContract}` : "Mock visual tokens"} value={visualTokenBudget} disabled={disabled || creating} onChange={(event) => setVisualTokenBudget(Number(event.target.value))}>{selected.options.find((item) => item.id === "visual_token_budget")?.choices.map((choice) => <option value={choice} key={choice}>{choice}</option>)}</select></label>}
+    <button disabled={disabled || creating || !selected || (scenario === "delayed" && (!Number.isInteger(delayMs) || delayMs < 1 || delayMs > 120000))} onClick={() => void create()}>{creating ? "Creating…" : buttonLabel}</button>
+    {error && <small className="inline-error">{error}</small>}
+  </section>;
+}
+
+function WorkersView({ workers, templates, mockTemplates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; mockTemplates: MockWorkerTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const collapseControls = useContext(CollapseContext);
   if (!collapseControls) throw new Error("Collapse controls are unavailable");
   const [libraryPreferences, setLibraryPreferences] = useStoredPreferences(WORKER_LIBRARY_STORAGE_KEY, loadWorkerLibraryPreferences);
@@ -555,8 +629,6 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
   const [replacementWorkerName, setReplacementWorkerName] = useState("");
   const [replacementParameters, setReplacementParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [rebindDrafts, setRebindDrafts] = useState(true);
-  const [mockVisualTokenBudget, setMockVisualTokenBudget] = useState(70);
-  const [creatingMock, setCreatingMock] = useState(false);
   const states = useMemo(() => [...new Set(workers.map((worker) => worker.state))].sort(), [workers]);
   const runtimes = useMemo(() => [...new Set(workers.map((worker) => worker.runtime))].sort(), [workers]);
   const filteredWorkers = useMemo(() => {
@@ -594,18 +666,8 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
     setFeedback(`Created replacement Worker “${result.replacement.name}”. ${rebound} draft Event${rebound === 1 ? " was" : "s were"} updated; published routing is unchanged until you publish a draft.`);
     await refresh();
   };
-  const createSceneChatMock = async () => {
-    setCreatingMock(true);
-    try {
-      const worker = await postJson<Worker>("/api/workers/mock-scenechat", { visual_token_budget: mockVisualTokenBudget });
-      setFeedback(`Created ${worker.name}. Mock output is deterministic and is labelled as fallback traffic.`);
-      await refresh();
-    } finally {
-      setCreatingMock(false);
-    }
-  };
   return <div className="view-stack"><div className="view-actions worker-view-heading"><p>A Worker is one configured, startable service. Its name is editable; its execution identity is not. Use Replace to change safe model limits without mutating the original Worker.</p></div>
-    <section className="mock-worker-creator" aria-label="SceneChat mock Workers"><div><strong>SceneChat mock Worker</strong><small>Deterministic CPU fallback for Route rehearsal only; it does not inspect the supplied image.</small></div><label>Visual tokens<select value={mockVisualTokenBudget} disabled={openDay || creatingMock} onChange={(event) => setMockVisualTokenBudget(Number(event.target.value))}>{[70, 140, 280, 560, 1120].map((budget) => <option value={budget} key={budget}>{budget}</option>)}</select></label><button disabled={openDay || creatingMock} onClick={() => void createSceneChatMock().catch((reason) => setFeedback(sceneChatMockErrorMessage(reason)))}>{creatingMock ? "Creating…" : "Create SceneChat mock"}</button></section>
+    <MockWorkerCreator templates={mockTemplates} disabled={openDay} onCreated={async (worker) => { setFeedback(`Created ${worker.name}. Mock output is deterministic and is labelled as fallback traffic.`); await refresh(); }} />
     {!!workers.length && <div className="worker-toolbar" aria-label="Worker search and filters"><label>Search workers<input type="search" value={query} placeholder="Name, model or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>State<select value={stateFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, state: event.target.value }))}><option value="">All states</option>{stateFilter && !states.includes(stateFilter as Worker["state"]) && <option value={stateFilter}>{stateFilter.replaceAll("-", " ")} (not currently present)</option>}{states.map((state) => <option key={state} value={state}>{state.replaceAll("-", " ")}</option>)}</select></label><label>Runtime<select value={runtimeFilter} onChange={(event) => setLibraryPreferences((current) => ({ ...current, runtime: event.target.value }))}><option value="">All runtimes</option>{runtimeFilter && !runtimes.includes(runtimeFilter) && <option value={runtimeFilter}>{runtimeFilter} (not currently present)</option>}{runtimes.map((runtime) => <option key={runtime} value={runtime}>{runtime}</option>)}</select></label><label>Sort workers<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as WorkerSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="model-asc">Model</option><option value="runtime-asc">Runtime</option><option value="state">State</option></select></label><div className="worker-filter-summary" role="status"><span>{sorted.length} of {workers.length} Worker{workers.length === 1 ? "" : "s"}</span><button className="secondary compact-button" disabled={!filtersActive} onClick={clearFilters}>Clear filters</button></div></div>}
     {feedback && <div className="configuration-feedback">{feedback}</div>}
     {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : !sorted.length ? <section className="empty-state compact"><h2>No Workers match these filters</h2><p>Try a different name, model, capability, state or runtime.</p><button className="secondary" onClick={clearFilters}>Clear filters</button></section> : <div className="worker-grid">{sorted.map((worker) => {
@@ -613,7 +675,7 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
       const template = templates.find((item) => item.id === worker.runtime_template_id);
       const sectionId = `worker-${worker.id}`;
       const collapsed = collapseControls.preferences.sections[sectionId] ?? collapseControls.preferences.allCollapsed;
-      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => collapseControls.toggleSection(sectionId)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
+      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.runtime === "mock" ? `${worker.generation_family} · mock` : worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => collapseControls.toggleSection(sectionId)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}{worker.runtime === "mock" ? ` · ${humanise(String(worker.settings.mock_contract_id ?? "legacy contract"))} · ${humanise(String(worker.settings.mock_scenario ?? "success"))}` : ""}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ...(worker.runtime === "mock" ? [["Mock contract", String(worker.settings.mock_contract_id ?? "Legacy family mock")], ["Mock scenario", String(worker.settings.mock_scenario ?? "success")], ["Mock delay", worker.settings.mock_delay_ms ? `${worker.settings.mock_delay_ms} ms` : "None"]] as Array<[string, string]> : []), ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
         {replacing === worker.id && template && <div className="runtime-form worker-replacement-form"><div className="runtime-form-heading"><strong>Replace this Worker</strong><small>The Model, revision and trusted runtime stay fixed. The original Worker is kept.</small></div><div className="runtime-fields"><label>Replacement name<input value={replacementWorkerName} maxLength={80} onChange={(event) => setReplacementWorkerName(event.target.value)} /></label><label>Model<input value={worker.artifact_model_id ?? worker.model_id} disabled /></label><label>Runtime<input value={template.display_name} disabled /></label></div><WorkerParameterFields template={template} values={replacementParameters} onChange={setReplacementParameters} /><label className="rebind-option"><input type="checkbox" checked={rebindDrafts} onChange={(event) => setRebindDrafts(event.target.checked)} /> Rebind draft Event routes to the replacement</label><p className="manifest-note">Published Event revisions always keep the original Worker until you explicitly publish an updated draft.</p><div className="runtime-form-actions"><button disabled={!replacementWorkerName.trim() || !parametersAreValid(template, replacementParameters)} onClick={() => void replace(worker, template).catch((reason) => setFeedback(messageFrom(reason)))}>Create replacement</button><button className="secondary" onClick={() => setReplacing(null)}>Cancel</button></div></div>}</div>
       </article>;
     })}</div>}
@@ -759,10 +821,4 @@ function formatBytes(value: number) { if (!Number.isFinite(value) || value <= 0)
 function humanise(value: string) { return value.replaceAll("_", " ").replaceAll("-", " "); }
 function messageFrom(reason: unknown) { return reason instanceof Error ? reason.message : "The operation failed."; }
 
-function sceneChatMockErrorMessage(reason: unknown) {
-  if (reason instanceof ApiError && reason.status === 405) {
-    return "The running ModelDeck management service does not support SceneChat mock Workers yet. Restart ModelDeck, then try again.";
-  }
-  return messageFrom(reason);
-}
 function workerOperationPending(pending: ReadonlySet<string>, workerId: string) { return [...pending].some((key) => key.startsWith(`${workerId}:`)); }

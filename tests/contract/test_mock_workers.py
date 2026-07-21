@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from modeldeck.contracts.scenechat import SceneAnalysis
+from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import GenerationFamily
+from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.workers.mock_worker import create_app
+
+
+def test_every_trusted_contract_has_a_mock_template() -> None:
+    assert set(MOCK_WORKER_TEMPLATES) == set(PROTOCOL_CONTRACTS)
+    for contract_id, template in MOCK_WORKER_TEMPLATES.items():
+        contract = PROTOCOL_CONTRACTS[contract_id]
+        assert template.contract.generation_family == contract.generation_family
+        assert all(template.capabilities[capability] is True for capability in contract.required_capabilities)
 
 
 @pytest.mark.asyncio
@@ -123,3 +134,104 @@ async def test_scenechat_contract_returns_labelled_deterministic_structured_outp
         "mock": True,
         "visual_contract": "scene-analysis-v1",
     }
+
+
+@pytest.mark.asyncio
+async def test_exact_completion_contract_uses_legacy_completion_shape() -> None:
+    app = create_app(
+        worker_id="test-completions",
+        model_id="modeldeck/mock-openai-completions",
+        revision="fixture-v1",
+        family=GenerationFamily.AUTOREGRESSIVE,
+        contract_id="openai-completions-v1",
+        startup_delay=0,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            completion = await client.post("/v1/completions", json={"prompt": "Hello"})
+            wrong_surface = await client.post("/v1/chat/completions", json={"prompt": "Hello"})
+
+    assert completion.status_code == 200
+    assert completion.json()["object"] == "text_completion"
+    assert "text" in completion.json()["choices"][0]
+    assert "message" not in completion.json()["choices"][0]
+    assert wrong_surface.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_mock_delay_and_request_failure_do_not_affect_health() -> None:
+    delayed = create_app(
+        worker_id="test-delayed",
+        model_id="modeldeck/mock-openai-chat",
+        revision="fixture-v1",
+        family=GenerationFamily.AUTOREGRESSIVE,
+        contract_id="openai-chat-v1",
+        scenario="delayed",
+        delay_ms=1,
+        startup_delay=0,
+    )
+    failing = create_app(
+        worker_id="test-failing",
+        model_id="modeldeck/mock-openai-chat",
+        revision="fixture-v1",
+        family=GenerationFamily.AUTOREGRESSIVE,
+        contract_id="openai-chat-v1",
+        scenario="request-error",
+        startup_delay=0,
+    )
+    async with delayed.router.lifespan_context(delayed):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=delayed), base_url="http://test"
+        ) as client:
+            assert (await client.get("/health")).status_code == 200
+            assert (await client.post("/v1/chat/completions", json={"prompt": "Hello"})).status_code == 200
+    async with failing.router.lifespan_context(failing):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=failing), base_url="http://test"
+        ) as client:
+            assert (await client.get("/health")).status_code == 200
+            response = await client.post("/v1/chat/completions", json={"prompt": "Hello"})
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "mock_request_failure"
+
+
+def test_speech_mock_emits_deterministic_transcript_and_pcm() -> None:
+    app = create_app(
+        worker_id="test-speech",
+        model_id="modeldeck/mock-speech-conversation",
+        revision="fixture-v1",
+        family=GenerationFamily.SPEECH_CONVERSATION,
+        contract_id="speech-conversation-v1",
+        startup_delay=0,
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/v1/speech/conversations") as socket:
+            socket.send_json({"model": "speech-mock"})
+            assert socket.receive_json()["type"] == "session.ready"
+            assert socket.receive_json()["type"] == "response.started"
+            assert socket.receive_json() == {
+                "type": "transcript.delta",
+                "delta": "Mock local speech response.",
+            }
+            assert socket.receive_bytes() == bytes(640)
+            assert socket.receive_json()["type"] == "transcript.final"
+            assert socket.receive_json()["type"] == "response.completed"
+            socket.send_json({"type": "session.close"})
+
+
+def test_speech_mock_request_failure_uses_a_fixed_error_event() -> None:
+    app = create_app(
+        worker_id="test-speech-error",
+        model_id="modeldeck/mock-speech-conversation",
+        revision="fixture-v1",
+        family=GenerationFamily.SPEECH_CONVERSATION,
+        contract_id="speech-conversation-v1",
+        scenario="request-error",
+        startup_delay=0,
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/v1/speech/conversations") as socket:
+            socket.send_json({"model": "speech-mock"})
+            assert socket.receive_json()["code"] == "mock_request_failure"

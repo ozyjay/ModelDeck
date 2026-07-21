@@ -17,7 +17,9 @@ complete, locally discovered revision using an installed trusted runtime templat
 ### Workers
 
 - `GET|POST /api/workers`
-- `POST /api/workers/mock-scenechat` creates an explicit deterministic vision-language mock
+- `GET /api/mock-worker-templates` lists code-owned mock implementations and bounded options
+- `POST /api/workers/mocks` creates a contract-specific deterministic mock Worker
+- `POST /api/workers/mock-scenechat` is the deprecated SceneChat compatibility creator
 - `GET|PATCH|DELETE /api/workers/{worker_id}`
 - `GET /api/workers/{worker_id}/usage`
 - `POST /api/workers/{worker_id}/start|stop|restart|smoke`
@@ -36,6 +38,12 @@ removed by Worker operations.
 
 Smoke testing requires a ready Worker and performs health, Model, metrics and bounded
 generation requests. Both successful and failed evidence is persisted.
+
+Mock Workers are allowlisted by protocol contract and support `success`, `delayed` and
+`request-error` scenarios. Delay is bounded to 1–120,000 ms; arbitrary fixtures, paths,
+commands, headers, status codes and environment variables are not accepted. Stop a mock
+Worker to rehearse an unavailable provider. Gateway responses from mock Workers carry
+`x-modeldeck-fallback: mock`.
 
 ### Events and live routing
 

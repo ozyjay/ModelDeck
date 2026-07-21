@@ -71,6 +71,7 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
             cancellation = await client.post("/v1/requests/gateway-stream/cancel")
         assert stream.status_code == 200
         assert "x-modeldeck-worker" not in stream.headers
+        assert stream.headers["x-modeldeck-fallback"] == "mock"
         assert "event: token" in stream.text
         assert trace.status_code == 200
         assert "x-modeldeck-worker" not in trace.headers
@@ -105,6 +106,7 @@ async def test_gateway_forwards_diffusion_job_status_events_and_cancellation() -
             cancellation = await client.post(f"/v1/jobs/{job_id}/cancel")
 
         assert "x-modeldeck-worker" not in queued.headers
+        assert queued.headers["x-modeldeck-fallback"] == "mock"
         assert status.status_code == 200
         assert "x-modeldeck-worker" not in status.headers
         assert status.json()["state"] == "complete"

@@ -161,9 +161,18 @@ def gateway_request(payload: dict) -> Request:
 
 
 class FakeGatewayClient:
-    def __init__(self, health: dict, *, timeout: bool = False) -> None:
+    def __init__(
+        self,
+        health: dict,
+        *,
+        timeout: bool = False,
+        response_status: int = 200,
+        response_payload: dict | None = None,
+    ) -> None:
         self.health = health
         self.timeout = timeout
+        self.response_status = response_status
+        self.response_payload = response_payload or {"ok": True}
 
     async def get(self, _url: str):
         return SimpleNamespace(
@@ -177,7 +186,11 @@ class FakeGatewayClient:
     async def send(self, request: httpx.Request, *, stream: bool = False):
         if self.timeout:
             raise httpx.ReadTimeout("benchmark deadline", request=request)
-        return httpx.Response(200, json={"ok": True}, request=request)
+        return httpx.Response(
+            self.response_status,
+            json=self.response_payload,
+            request=request,
+        )
 
     async def aclose(self) -> None:
         pass
@@ -244,3 +257,34 @@ async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
     diagnostic = request.app.state.last_request_diagnostics
     assert diagnostic["error_code"] == "gateway_timeout"
     assert diagnostic["total_gateway_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_propagates_mock_failure_and_labels_fallback(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().to_profile()
+    fake = FakeGatewayClient(
+        {"ready": True, "busy": False},
+        response_status=503,
+        response_payload={
+            "error": {
+                "code": "mock_request_failure",
+                "message": "Deterministic failure",
+            }
+        },
+    )
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request({"model": "visitor-chat", "messages": []})
+
+    response = await proxy_request(
+        request,
+        {"visitor-chat": [profile]},
+        "/v1/chat/completions",
+        None,
+    )
+
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"]["code"] == "mock_request_failure"
+    assert response.headers["x-modeldeck-fallback"] == "mock"
+    assert request.app.state.last_request_diagnostics["error_code"] == "mock_request_failure"

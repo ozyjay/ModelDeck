@@ -75,6 +75,24 @@ export interface ProtocolContract {
   surfaces: string[];
 }
 
+export type MockScenario = "success" | "delayed" | "request-error";
+export interface MockWorkerOption {
+  id: "visual_token_budget";
+  label: string;
+  type: "select";
+  default: number;
+  choices: number[];
+}
+export interface MockWorkerTemplate {
+  id: string;
+  protocol_contract: string;
+  display_name: string;
+  generation_family: string;
+  default_name: string;
+  scenarios: MockScenario[];
+  options: MockWorkerOption[];
+}
+
 export interface LiveWorker { id: string; name: string; state: WorkerState }
 export interface LiveRoute extends Route {
   workers: Worker[];

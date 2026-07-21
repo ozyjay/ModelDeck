@@ -374,6 +374,16 @@ LaunchBuilder = Callable[[ModelProfile, dict[str, str], list[str]], WorkerLaunch
 
 
 def _mock_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
+    from modeldeck.mock_templates import legacy_mock_contract
+
+    contract_id = profile.settings.get("mock_contract_id") or legacy_mock_contract(
+        profile.model_id, profile.generation_family
+    )
+    mock_options = ["--scenario", str(profile.settings.get("mock_scenario", "success"))]
+    if contract_id:
+        mock_options.extend(["--contract", str(contract_id)])
+    if delay_ms := profile.settings.get("mock_delay_ms"):
+        mock_options.extend(["--delay-ms", str(delay_ms)])
     return WorkerLaunch(
         command=[
             sys.executable,
@@ -382,6 +392,7 @@ def _mock_launch(profile: ModelProfile, environment: dict[str, str], common: lis
             *common,
             "--family",
             profile.generation_family.value,
+            *mock_options,
         ],
         environment=environment,
     )

@@ -104,6 +104,48 @@ async def test_management_creates_distinct_scenechat_mock_workers_on_demand(tmp_
 
 
 @pytest.mark.asyncio
+async def test_management_lists_and_creates_contract_driven_mock_workers(tmp_path) -> None:
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            templates = await client.get("/api/mock-worker-templates")
+            delayed = await client.post(
+                "/api/workers/mocks",
+                json={
+                    "protocol_contract": "openai-completions-v1",
+                    "scenario": "delayed",
+                    "delay_ms": 25,
+                },
+            )
+            invalid_option = await client.post(
+                "/api/workers/mocks",
+                json={"protocol_contract": "openai-chat-v1", "visual_token_budget": 70},
+            )
+            missing_delay = await client.post(
+                "/api/workers/mocks",
+                json={"protocol_contract": "openai-chat-v1", "scenario": "delayed"},
+            )
+            arbitrary_setting = await client.post(
+                "/api/workers/mocks",
+                json={"protocol_contract": "openai-chat-v1", "command": "anything"},
+            )
+
+    assert len(templates.json()["templates"]) == 6
+    assert delayed.status_code == 201, delayed.text
+    assert delayed.json()["capabilities"]["completions"] is True
+    assert delayed.json()["settings"] == {
+        "mock_contract_id": "openai-completions-v1",
+        "mock_scenario": "delayed",
+        "mock_delay_ms": 25,
+    }
+    assert invalid_option.status_code == 422
+    assert missing_delay.status_code == 422
+    assert arbitrary_setting.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_worker_name_is_editable_and_persists_without_changing_identity(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
@@ -375,7 +417,12 @@ async def test_open_day_mode_locks_configuration_but_not_reads(tmp_path) -> None
                     "routes": [],
                 },
             )
+            blocked_mock = await client.post(
+                "/api/workers/mocks",
+                json={"protocol_contract": "openai-chat-v1"},
+            )
     assert blocked.status_code == 423
+    assert blocked_mock.status_code == 423
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,25 @@ def test_worker_command_is_an_argument_array_with_allowlisted_values() -> None:
     assert all(";" not in argument for argument in command)
 
 
+def test_mock_launch_includes_only_persisted_contract_scenario_options() -> None:
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    profile = base.model_copy(
+        update={
+            "settings": {
+                "mock_contract_id": "openai-chat-v1",
+                "mock_scenario": "delayed",
+                "mock_delay_ms": 1250,
+            }
+        }
+    )
+
+    command = build_mock_worker_command(profile)
+
+    assert command[command.index("--contract") + 1] == "openai-chat-v1"
+    assert command[command.index("--scenario") + 1] == "delayed"
+    assert command[command.index("--delay-ms") + 1] == "1250"
+
+
 def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     missing = tmp_path / "missing-python"

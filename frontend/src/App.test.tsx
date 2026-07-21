@@ -60,6 +60,10 @@ function responses(includeConfiguration = false): Record<string, unknown> {
     "/api/events": { events },
     "/api/catalogue": { models: [], downloads_started: false },
     "/api/protocol-contracts": { contracts: [{ id: "native-ar-trace-v1", display_name: "Native autoregressive trace", generation_family: "autoregressive", required_capabilities: ["top_k_trace"], surfaces: ["POST /native/autoregressive/trace"] }] },
+    "/api/mock-worker-templates": { templates: [
+      { id: "native-ar-trace-v1", protocol_contract: "native-ar-trace-v1", display_name: "Native autoregressive trace", generation_family: "autoregressive", default_name: "Autoregressive trace mock", scenarios: ["success", "delayed", "request-error"], options: [] },
+      { id: "scene-analysis-v1", protocol_contract: "scene-analysis-v1", display_name: "Scene analysis", generation_family: "vision-language", default_name: "Scene analysis mock", scenarios: ["success", "delayed", "request-error"], options: [{ id: "visual_token_budget", label: "Visual tokens", type: "select", default: 70, choices: [70, 140, 280, 560, 1120] }] },
+    ] },
     "/api/runtime-templates": { templates: [] },
     "/api/compatibility": { tests: [] },
   };
@@ -138,7 +142,7 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
   });
 
-  it("creates explicit SceneChat mock Workers with a selected visual-token budget", async () => {
+  it("creates contract-driven mock Workers with scenario-specific options", async () => {
     const mockWorker: Worker = {
       ...worker,
       id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
@@ -152,34 +156,88 @@ describe("ModelDeck v2 operator console", () => {
       port: 8632,
     };
     const payloads = responses(true);
-    payloads["/api/workers/mock-scenechat"] = mockWorker;
+    payloads["/api/workers/mocks"] = mockWorker;
     const fetchMock = mockFetch(payloads);
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Visual tokens" }), { target: { value: "280" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create SceneChat mock" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Mock contract" }), { target: { value: "scene-analysis-v1" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Mock scenario" }), { target: { value: "delayed" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Mock delay" }), { target: { value: "2500" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Mock visual tokens" }), { target: { value: "280" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create mock Worker" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
-      String(input).endsWith("/api/workers/mock-scenechat")
+      String(input).endsWith("/api/workers/mocks")
       && init?.method === "POST"
-      && init.body === JSON.stringify({ visual_token_budget: 280 })
+      && init.body === JSON.stringify({ protocol_contract: "scene-analysis-v1", scenario: "delayed", delay_ms: 2500, visual_token_budget: 280 })
     )).toBe(true));
     expect(await screen.findByText(/Created SceneChat mock 280/)).toBeInTheDocument();
-    expect(screen.getByText(/does not inspect the supplied image/)).toBeInTheDocument();
+    expect(screen.getByText(/never performs physical model inference/)).toBeInTheDocument();
   });
 
-  it("explains that a 405 creating a SceneChat mock requires a service restart", async () => {
+  it("explains that a 405 creating a generic mock requires a service restart", async () => {
     const payloads = responses(true);
-    payloads["/api/workers/mock-scenechat"] = new Response(JSON.stringify({ detail: "Method Not Allowed" }), {
+    payloads["/api/workers/mocks"] = new Response(JSON.stringify({ detail: "Method Not Allowed" }), {
       status: 405,
       headers: { "Content-Type": "application/json" },
     });
     mockFetch(payloads);
     render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create SceneChat mock" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create mock Worker" }));
 
     expect(await screen.findByText(/Restart ModelDeck, then try again/)).toBeInTheDocument();
+  });
+
+  it("creates and saves a contract-matched mock as the last Route backup", async () => {
+    const mockWorker: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "Autoregressive trace mock",
+      model_id: "modeldeck/mock-autoregressive-trace",
+      runtime: "mock",
+      capabilities: { top_k_trace: true, cancellation: true },
+      settings: { mock_contract_id: "native-ar-trace-v1", mock_scenario: "success" },
+      port: 8632,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers/mocks"] = mockWorker;
+    payloads[`/api/events/${eventRecord.definition.id}/draft`] = {};
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create mock backup" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => {
+      if (!String(input).endsWith(`/api/events/${eventRecord.definition.id}/draft`) || init?.method !== "PUT") return false;
+      const body = JSON.parse(String(init.body));
+      return body.routes[0].worker_ids.at(-1) === mockWorker.id;
+    })).toBe(true));
+    expect(await screen.findByText(/added it as the last Route backup/)).toBeInTheDocument();
+  });
+
+  it("reports when a Route mock is created but draft assignment fails", async () => {
+    const mockWorker: Worker = {
+      ...worker,
+      id: "d054e57f-b1fd-4575-8f55-9cfaf1f55380",
+      name: "Autoregressive trace mock",
+      model_id: "modeldeck/mock-autoregressive-trace",
+      runtime: "mock",
+      capabilities: { top_k_trace: true },
+      settings: { mock_contract_id: "native-ar-trace-v1", mock_scenario: "success" },
+    };
+    const payloads = responses(true);
+    payloads["/api/workers/mocks"] = mockWorker;
+    payloads[`/api/events/${eventRecord.definition.id}/draft`] = new Response(
+      JSON.stringify({ detail: "Draft storage unavailable" }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create mock backup" }));
+
+    expect(await screen.findByText(/was created, but it could not be assigned/)).toHaveTextContent("Draft storage unavailable");
   });
 
   it("searches and filters Workers, reports the result count and clears the filters", async () => {

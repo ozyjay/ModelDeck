@@ -14,6 +14,7 @@ from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.domain import EventDefinition, WorkerDefinition, routing_snapshot, validate_event
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.hardware import probe_environment
+from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES, MockWorkerTemplate
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
@@ -39,6 +40,30 @@ class MockSceneChatWorkerCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     visual_token_budget: VisualTokenBudget = 70
+
+
+class MockWorkerCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_contract: str
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    scenario: Literal["success", "delayed", "request-error"] = "success"
+    delay_ms: int | None = Field(default=None, ge=1, le=120_000)
+    visual_token_budget: VisualTokenBudget | None = None
+
+    def validated_template(self) -> MockWorkerTemplate:
+        template = MOCK_WORKER_TEMPLATES.get(self.protocol_contract)
+        if template is None:
+            raise ValueError("protocol contract has no trusted mock implementation")
+        if self.scenario == "delayed" and self.delay_ms is None:
+            raise ValueError("delayed mock Workers require delay_ms")
+        if self.scenario != "delayed" and self.delay_ms is not None:
+            raise ValueError("delay_ms is only valid for delayed mock Workers")
+        if self.protocol_contract == "scene-analysis-v1":
+            return template
+        if self.visual_token_budget is not None:
+            raise ValueError("visual_token_budget is only valid for scene-analysis-v1")
+        return template
 
 
 class WorkerRenameRequest(BaseModel):
@@ -77,6 +102,10 @@ def create_v2_router() -> APIRouter:
                 for contract in PROTOCOL_CONTRACTS.values()
             ]
         }
+
+    @router.get("/mock-worker-templates")
+    async def mock_worker_templates():
+        return {"templates": [template.public_dict() for template in MOCK_WORKER_TEMPLATES.values()]}
 
     @router.get("/workers")
     async def list_workers(request: Request):
@@ -190,16 +219,28 @@ def create_v2_router() -> APIRouter:
         request.app.state.worker_definitions[worker_id] = definition
         return _worker_response(request, store.get_worker_definition(worker_id))
 
-    @router.post("/workers/mock-scenechat", status_code=201)
-    async def create_mock_scenechat_worker(payload: MockSceneChatWorkerCreateRequest, request: Request):
+    async def create_mock_worker(payload: MockWorkerCreateRequest, request: Request):
         _require_mutable(request)
+        try:
+            template = payload.validated_template()
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
         records = _worker_records(request, include_archived=True)
         used_ports = {int(record["definition"]["port"]) for record in records}
         port = next((candidate for candidate in LOCAL_PORT_RANGE if candidate not in used_ports), None)
         if port is None:
             raise HTTPException(409, "No local ModelDeck Worker ports are available")
         active_names = {str(record["definition"]["name"]).casefold() for record in _worker_records(request)}
-        base_name = f"SceneChat mock {payload.visual_token_budget}"
+        requested_name = " ".join(payload.name.split()) if payload.name else ""
+        visual_option = next(
+            (option for option in template.options if option["id"] == "visual_token_budget"), None
+        )
+        visual_token_budget = payload.visual_token_budget or (
+            int(visual_option["default"]) if visual_option else None
+        )
+        base_name = requested_name or template.default_name
+        if payload.protocol_contract == "scene-analysis-v1" and not requested_name:
+            base_name += f" {visual_token_budget}"
         name = base_name
         suffix = 2
         while name.casefold() in active_names:
@@ -209,24 +250,23 @@ def create_v2_router() -> APIRouter:
         definition = WorkerDefinition(
             id=worker_id,
             name=name,
-            model_id="modeldeck/mock-scenechat-vision",
+            model_id=template.model_id,
             revision="fixture-v1",
-            generation_family="vision-language",
+            generation_family=template.contract.generation_family,
             runtime="mock",
             lifecycle="on-demand",
             port=port,
             dtype="auto",
-            capabilities={
-                "chat": "compatibility-only",
-                "streaming": False,
-                "cancellation": True,
-                "image_input": True,
-                "structured_output": True,
-            },
+            capabilities=template.capabilities,
             settings={
-                "context_length": 8192,
-                "maximum_new_tokens": 512,
-                "visual_token_budget": payload.visual_token_budget,
+                "mock_contract_id": payload.protocol_contract,
+                "mock_scenario": payload.scenario,
+                **({"mock_delay_ms": payload.delay_ms} if payload.delay_ms is not None else {}),
+                **(
+                    {"visual_token_budget": visual_token_budget}
+                    if payload.protocol_contract == "scene-analysis-v1"
+                    else {}
+                ),
             },
         )
         store = request.app.state.compatibility_store
@@ -238,6 +278,19 @@ def create_v2_router() -> APIRouter:
             raise HTTPException(409, str(error)) from error
         request.app.state.worker_definitions[worker_id] = definition
         return _worker_response(request, store.get_worker_definition(worker_id))
+
+    router.add_api_route("/workers/mocks", create_mock_worker, methods=["POST"], status_code=201)
+
+    @router.post("/workers/mock-scenechat", status_code=201, deprecated=True)
+    async def create_mock_scenechat_worker(payload: MockSceneChatWorkerCreateRequest, request: Request):
+        return await create_mock_worker(
+            MockWorkerCreateRequest(
+                protocol_contract="scene-analysis-v1",
+                name=f"SceneChat mock {payload.visual_token_budget}",
+                visual_token_budget=payload.visual_token_budget,
+            ),
+            request,
+        )
 
     @router.get("/workers/{worker_id}")
     async def get_worker(worker_id: str, request: Request):

@@ -136,7 +136,11 @@ nav { display: grid; gap: 0.3rem; }
 .mock-worker-creator strong, .mock-worker-creator small { display: block; }
 .mock-worker-creator small { margin-top: 0.25rem; color: var(--muted); }
 .mock-worker-creator label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
-.mock-worker-creator select { min-width: 130px; }
+.mock-worker-creator select, .mock-worker-creator input { min-width: 130px; }
+.mock-worker-creator.compact { flex-wrap: wrap; align-items: end; margin-top: 0.7rem; border-color: var(--line-soft); }
+.mock-worker-creator.compact label { flex: 1 1 150px; }
+.mock-worker-creator .inline-error { flex-basis: 100%; color: #ffc1c7; }
+.route-backup-actions { display: grid; gap: 0.65rem; }
 .event-layout { display: grid; grid-template-columns: minmax(240px, 0.32fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
 .event-list { display: grid; gap: 0.65rem; position: sticky; top: 1rem; }
 .event-select { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; width: 100%; padding: 0.75rem; border: 1px solid var(--line-soft); background: #0e1621; text-align: left; }
