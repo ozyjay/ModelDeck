@@ -24,6 +24,17 @@ class SafeThermalGuard:
     def __init__(self, _maximum_celsius: float) -> None:
         self.maximum_observed_celsius = 60.0
         self.maximum_gpu_celsius = 55.0
+        self.maximum_observed_sensor = {
+            "source": "k10temp",
+            "label": "Tctl",
+            "celsius": 60.0,
+        }
+        self.maximum_gpu_sensor = {
+            "source": "amdgpu",
+            "label": "edge",
+            "celsius": 55.0,
+        }
+        self.trigger_sensor = None
         self.sample_count = 2
         self.abort_reason = None
         self.triggered = threading.Event()
@@ -34,6 +45,10 @@ class SafeThermalGuard:
 
     def close(self) -> None:
         pass
+
+    def wait_for_cooldown(self, _target: float, maximum_wait_seconds: float = 600) -> float:
+        del maximum_wait_seconds
+        return 1.5
 
 
 def test_benchmark_summary_retains_metrics_but_not_descriptions() -> None:
@@ -117,6 +132,7 @@ def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None
         human_review=False,
         maximum_temperature_celsius=80,
         cooldown_temperature_celsius=65,
+        requests_per_thermal_batch=2,
     )
 
     assert calls == 4
@@ -128,9 +144,25 @@ def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None
         "cooldown_target_celsius": 65,
         "maximum_observed_celsius": 60.0,
         "maximum_gpu_celsius": 55.0,
+        "maximum_observed_sensor": {
+            "source": "k10temp",
+            "label": "Tctl",
+            "celsius": 60.0,
+        },
+        "maximum_gpu_sensor": {
+            "source": "amdgpu",
+            "label": "edge",
+            "celsius": 55.0,
+        },
         "sample_count": 2,
         "abort": False,
         "abort_reason": None,
+        "trigger_sensor": None,
+    }
+    assert result["pacing"] == {
+        "requests_per_batch": 2,
+        "cooldown_events": 1,
+        "total_cooldown_seconds": 1.5,
     }
 
 
@@ -159,6 +191,21 @@ def test_thermal_guard_stops_worker_at_temperature_limit(monkeypatch) -> None:
     assert guard.abort_reason == "temperature_limit"
     assert guard.maximum_observed_celsius == 80.0
     assert guard.maximum_gpu_celsius == 72.5
+    assert guard.maximum_observed_sensor == {
+        "source": "k10temp",
+        "label": "k10temp",
+        "celsius": 80.0,
+    }
+    assert guard.maximum_gpu_sensor == {
+        "source": "amdgpu",
+        "label": "amdgpu",
+        "celsius": 72.5,
+    }
+    assert guard.trigger_sensor == {
+        "source": "k10temp",
+        "label": "k10temp",
+        "celsius": 80.0,
+    }
     assert guard.sample_count == 1
     assert stopped == [
         ("http://127.0.0.1:3600/api/workers/worker-140/stop", 30),

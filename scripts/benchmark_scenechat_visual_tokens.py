@@ -105,6 +105,10 @@ class ThermalGuard:
         self.maximum_celsius = maximum_celsius
         self.maximum_observed_celsius: float | None = None
         self.maximum_gpu_celsius: float | None = None
+        self.maximum_observed_sensor: dict[str, Any] | None = None
+        self.maximum_gpu_sensor: dict[str, Any] | None = None
+        self.trigger_sensor: dict[str, Any] | None = None
+        self.current_temperature_celsius: float | None = None
         self.sample_count = 0
         self.abort_reason: str | None = None
         self.triggered = threading.Event()
@@ -119,15 +123,32 @@ class ThermalGuard:
         self.finished.set()
         self.thread.join(timeout=35)
 
-    def _abort(self, reason: str) -> None:
+    def _abort(self, reason: str, sensor: dict[str, Any] | None = None) -> None:
         worker_id = self.worker_id
         self.abort_reason = reason
+        self.trigger_sensor = sensor
         self.triggered.set()
         if worker_id:
             try:
                 _post(f"{MANAGEMENT_URL}/api/workers/{worker_id}/stop", timeout=30)
             except (HTTPError, URLError, TimeoutError, OSError):
                 pass
+
+    def wait_for_cooldown(self, target: float, maximum_wait_seconds: float = 600) -> float:
+        started = time.monotonic()
+        initial_sample_count = self.sample_count
+        while time.monotonic() - started < maximum_wait_seconds:
+            if self.triggered.is_set():
+                return time.monotonic() - started
+            if (
+                self.sample_count > initial_sample_count
+                and self.current_temperature_celsius is not None
+                and self.current_temperature_celsius <= target
+            ):
+                return time.monotonic() - started
+            self.finished.wait(0.25)
+        self._abort("cooldown_timeout")
+        return time.monotonic() - started
 
     def _monitor(self) -> None:
         while not self.finished.wait(0.5):
@@ -140,16 +161,37 @@ class ThermalGuard:
             if maximum is None:
                 self._abort("temperature_sensors_unavailable")
                 return
+            hottest = max(readings, key=lambda reading: float(reading["celsius"]))
+            hottest_sensor = {
+                "source": str(hottest.get("source") or "unknown"),
+                "label": str(hottest.get("label") or hottest.get("source") or "unknown"),
+                "celsius": float(hottest["celsius"]),
+            }
+            gpu_readings = [reading for reading in readings if reading.get("source") == "amdgpu"]
+            hottest_gpu = (
+                max(gpu_readings, key=lambda reading: float(reading["celsius"])) if gpu_readings else None
+            )
             gpu = _gpu_temperature(readings)
             self.sample_count += 1
+            self.current_temperature_celsius = maximum
             self.maximum_observed_celsius = max(
                 maximum,
                 self.maximum_observed_celsius or maximum,
             )
+            if self.maximum_observed_sensor is None or maximum > float(
+                self.maximum_observed_sensor["celsius"]
+            ):
+                self.maximum_observed_sensor = hottest_sensor
             if gpu is not None:
                 self.maximum_gpu_celsius = max(gpu, self.maximum_gpu_celsius or gpu)
+                if self.maximum_gpu_sensor is None or gpu > float(self.maximum_gpu_sensor["celsius"]):
+                    self.maximum_gpu_sensor = {
+                        "source": str(hottest_gpu.get("source") or "amdgpu"),
+                        "label": str(hottest_gpu.get("label") or "amdgpu"),
+                        "celsius": gpu,
+                    }
             if maximum >= self.maximum_celsius:
-                self._abort("temperature_limit")
+                self._abort("temperature_limit", hottest_sensor)
                 return
 
 
@@ -163,9 +205,12 @@ def _thermal_summary(
         "cooldown_target_celsius": cooldown_temperature_celsius,
         "maximum_observed_celsius": guard.maximum_observed_celsius,
         "maximum_gpu_celsius": guard.maximum_gpu_celsius,
+        "maximum_observed_sensor": guard.maximum_observed_sensor,
+        "maximum_gpu_sensor": guard.maximum_gpu_sensor,
         "sample_count": guard.sample_count,
         "abort": guard.triggered.is_set(),
         "abort_reason": guard.abort_reason,
+        "trigger_sensor": guard.trigger_sensor,
     }
 
 
@@ -177,6 +222,17 @@ def _finish_guarded_arm(worker: dict[str, Any], guard: ThermalGuard) -> None:
             pass
     guard.worker_id = None
     guard.close()
+
+
+def _pace_requests(
+    guard: ThermalGuard,
+    cooldown_temperature_celsius: float,
+    pacing: dict[str, Any],
+) -> bool:
+    elapsed = guard.wait_for_cooldown(cooldown_temperature_celsius)
+    pacing["cooldown_events"] += 1
+    pacing["total_cooldown_seconds"] = round(pacing["total_cooldown_seconds"] + elapsed, 4)
+    return not guard.triggered.is_set()
 
 
 def _worker_by_id(workers: list[dict[str, Any]], worker_id: str) -> dict[str, Any]:
@@ -344,18 +400,31 @@ def _benchmark_arm(
     human_review: bool,
     maximum_temperature_celsius: float,
     cooldown_temperature_celsius: float,
+    requests_per_thermal_batch: int,
 ) -> dict[str, Any]:
     _post(f"{MANAGEMENT_URL}/api/workers/{other['id']}/stop")
     _wait_for_cooldown(cooldown_temperature_celsius)
     guard = ThermalGuard(maximum_temperature_celsius)
     guard.worker_id = worker["id"]
     guard.start()
+    pacing = {
+        "requests_per_batch": requests_per_thermal_batch,
+        "cooldown_events": 0,
+        "total_cooldown_seconds": 0.0,
+    }
+    requests_since_cooldown = 0
     try:
         _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/start")
         warmup_failures: Counter[str] = Counter()
         valid_warmups = 0
         for _ in range(warmups):
+            if requests_since_cooldown >= requests_per_thermal_batch:
+                if not _pace_requests(guard, cooldown_temperature_celsius, pacing):
+                    warmup_failures[guard.abort_reason or "thermal_abort"] += 1
+                    break
+                requests_since_cooldown = 0
             warmup_sample, warmup_failure = _run_request(gateway_url, payload)
+            requests_since_cooldown += 1
             if guard.triggered.is_set():
                 warmup_failures[guard.abort_reason or "thermal_abort"] += 1
                 break
@@ -375,6 +444,7 @@ def _benchmark_arm(
                 "warmup_failure_categories": dict(sorted(warmup_failures.items())),
                 **_summary([], Counter()),
                 "human_review": None,
+                "pacing": pacing,
                 "thermal": _thermal_summary(
                     guard,
                     maximum_temperature_celsius,
@@ -384,7 +454,13 @@ def _benchmark_arm(
         samples: list[dict[str, Any]] = []
         failures: Counter[str] = Counter()
         for _ in range(runs):
+            if requests_since_cooldown >= requests_per_thermal_batch:
+                if not _pace_requests(guard, cooldown_temperature_celsius, pacing):
+                    failures[guard.abort_reason or "thermal_abort"] += 1
+                    break
+                requests_since_cooldown = 0
             sample, failure = _run_request(gateway_url, payload)
+            requests_since_cooldown += 1
             if guard.triggered.is_set():
                 failures[guard.abort_reason or "thermal_abort"] += 1
                 break
@@ -401,6 +477,7 @@ def _benchmark_arm(
         result["human_review"] = (
             _review(samples, budget) if human_review and not guard.triggered.is_set() else None
         )
+        result["pacing"] = pacing
         result["thermal"] = _thermal_summary(
             guard,
             maximum_temperature_celsius,
@@ -423,6 +500,7 @@ def main() -> None:
     parser.add_argument("--human-review", action="store_true")
     parser.add_argument("--maximum-temperature-celsius", type=float, default=80)
     parser.add_argument("--cooldown-temperature-celsius", type=float, default=65)
+    parser.add_argument("--requests-per-thermal-batch", type=int, default=2)
     arguments = parser.parse_args()
     if arguments.runs < 50:
         parser.error("--runs must be at least 50")
@@ -432,6 +510,8 @@ def main() -> None:
         parser.error("--cooldown-temperature-celsius must be between 45 and 75")
     if arguments.cooldown_temperature_celsius >= arguments.maximum_temperature_celsius:
         parser.error("cooldown temperature must be below maximum temperature")
+    if not 1 <= arguments.requests_per_thermal_batch <= 10:
+        parser.error("--requests-per-thermal-batch must be between 1 and 10")
 
     workers = _json_request(f"{MANAGEMENT_URL}/api/workers")
     worker_280 = _worker_by_id(workers, arguments.worker_280)
@@ -476,6 +556,7 @@ def main() -> None:
                 arguments.human_review,
                 arguments.maximum_temperature_celsius,
                 arguments.cooldown_temperature_celsius,
+                arguments.requests_per_thermal_batch,
             )
             results.append(result)
             if result["thermal"]["abort"]:
@@ -505,6 +586,7 @@ def main() -> None:
         "request_deadline_seconds": REQUEST_DEADLINE_SECONDS,
         "maximum_temperature_celsius": arguments.maximum_temperature_celsius,
         "cooldown_temperature_celsius": arguments.cooldown_temperature_celsius,
+        "requests_per_thermal_batch": arguments.requests_per_thermal_batch,
         "thermal_abort": thermal_abort,
         "arms": results,
         "privacy": "No image data, prompt text, model descriptions or credentials are retained.",

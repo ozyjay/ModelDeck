@@ -56,11 +56,13 @@ pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
 ```
 
 The focused benchmark waits until the hottest reported sensor is at or below 65°C before
-each arm, then samples live Fedora hwmon telemetry every 0.5 seconds. It records the hottest
-overall and AMD GPU readings. At the default 80°C ceiling, or if live telemetry becomes
-unavailable, it stops the active Worker, omits the remaining arm, writes a partial report and
-exits non-zero. Use `-MaximumTemperatureCelsius` and `-CooldownTemperatureCelsius` to apply
-different guarded limits.
+each arm, then samples live Fedora hwmon telemetry every 0.5 seconds. By default it pauses
+after every two requests until the hottest sensor returns to 65°C. Reports retain the peak
+and triggering sensor source, label and temperature, plus the hottest AMD GPU reading and
+total cooldown time. At the default 80°C ceiling, or if live telemetry becomes unavailable,
+it stops the active Worker, omits the remaining arm, writes a partial report and exits
+non-zero. Use `-RequestsPerThermalBatch`, `-MaximumTemperatureCelsius` and
+`-CooldownTemperatureCelsius` to tune pacing and guarded limits.
 
 ## Workloads and measurements
 

@@ -6,7 +6,8 @@ param(
     [ValidateRange(50, 1000)][int]$Runs = 50,
     [switch]$HumanReview,
     [ValidateRange(65, 90)][double]$MaximumTemperatureCelsius = 80,
-    [ValidateRange(45, 75)][double]$CooldownTemperatureCelsius = 65
+    [ValidateRange(45, 75)][double]$CooldownTemperatureCelsius = 65,
+    [ValidateRange(1, 10)][int]$RequestsPerThermalBatch = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +24,8 @@ $Arguments = @(
     '--warmups', $Warmups,
     '--runs', $Runs,
     '--maximum-temperature-celsius', $MaximumTemperatureCelsius,
-    '--cooldown-temperature-celsius', $CooldownTemperatureCelsius
+    '--cooldown-temperature-celsius', $CooldownTemperatureCelsius,
+    '--requests-per-thermal-batch', $RequestsPerThermalBatch
 )
 if ($HumanReview) { $Arguments += '--human-review' }
 & .venv/bin/python @Arguments
