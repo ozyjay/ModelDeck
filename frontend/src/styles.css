@@ -211,7 +211,17 @@ nav { display: grid; gap: 0.3rem; }
 .validation-summary { margin: 0.8rem 0; padding: 0.8rem; border: 1px solid var(--line); border-radius: 0.65rem; background: #101a27; }
 .validation-summary.good { border-color: #285844; background: #10231c; }
 .validation-summary.bad { border-color: #653944; background: #2b171d; }
-.validation-summary ul { margin-bottom: 0; color: var(--muted); }
+.validation-summary section { margin-top: 0.8rem; }
+.validation-summary section h3 { margin: 0 0 0.45rem; color: var(--muted); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.validation-summary ul { display: grid; gap: 0.55rem; margin: 0; padding: 0; list-style: none; }
+.validation-issue { padding: 0.65rem 0.75rem; border: 1px solid #623b45; border-radius: 0.55rem; background: #25161b; }
+.validation-summary.good .validation-issue { border-color: #285844; background: #0e211a; }
+.validation-location { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.4rem 1rem; }
+.validation-location strong { font-size: 0.8rem; }
+.validation-location code, .validation-issue small { color: var(--muted); font-size: 0.72rem; overflow-wrap: anywhere; }
+.validation-issue p { margin: 0.3rem 0 0; color: #ffd0d4; font-size: 0.82rem; }
+.validation-summary.good .validation-issue p { color: var(--text); }
+.validation-issue small { display: block; margin-top: 0.3rem; }
 .event-editor { display: grid; gap: 1rem; }
 .event-editor textarea { min-height: 5rem; resize: vertical; }
 .editor-section-heading { align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--line-soft); }

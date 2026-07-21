@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { deleteJson, getJson, patchJson, postJson, putJson } from "./api";
+import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
   CompatibilityTest, EventDefinition, EventRecord, EventRevision, EventValidation,
   GatewayStatus, HardwareProbe, LiveState, ManagementHealth, ModelEntry,
@@ -258,7 +258,19 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
     const record = await postJson<EventRecord>("/api/events", definition); await refresh(); setSelectedId(record.definition.id);
   };
   const validate = async () => { if (!draft) return; setValidation(await postJson(`/api/events/${draft.id}/validate`)); };
-  const publish = async () => { if (!draft) return; await putJson(`/api/events/${draft.id}/draft`, draft); await postJson(`/api/events/${draft.id}/publish`); setFeedback("Routing published. No Workers were started or stopped."); await refresh(); };
+  const publish = async () => {
+    if (!draft) return;
+    await putJson(`/api/events/${draft.id}/draft`, draft);
+    try {
+      await postJson(`/api/events/${draft.id}/publish`);
+    } catch (reason) {
+      const failedValidation = validationFromApiError(reason);
+      if (failedValidation) setValidation(failedValidation);
+      throw reason;
+    }
+    setFeedback("Routing published. No Workers were started or stopped.");
+    await refresh();
+  };
   const discard = async () => { if (!draft) return; await deleteJson(`/api/events/${draft.id}/draft`); await refresh(); };
   const deleteEvent = async () => { if (!draft || selected?.latest_revision || !window.confirm(`Delete draft-only Event “${draft.name}”?`)) return; await deleteJson(`/api/events/${draft.id}`); setSelectedId(""); await refresh(); };
   const loadRevisions = async () => { if (!draft) return; const result = await getJson<{ revisions: EventRevision[] }>(`/api/events/${draft.id}/revisions`); setRevisions(result.revisions); };
@@ -281,7 +293,7 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
       <CollapsiblePanel sectionId={`event-${draft.id}`} title={draft.name} detail={`${selected.active ? `Live revision ${selected.active_revision}` : "Draft"} · ${saveState}`} className="event-detail" accessory={<StateBadge state={selected.active ? "ready" : "stopped"} />}>
         {feedback && <div className="configuration-feedback">{feedback}</div>}
         <div className="button-row event-actions"><button className="secondary" onClick={() => void validate()}>Validate</button><button disabled={openDay || saveState === "Saving…"} onClick={() => void publish().catch((reason) => setFeedback(messageFrom(reason)))}>Publish routing</button><button className="secondary" disabled={openDay || !selected.latest_revision} onClick={() => void discard().catch((reason) => setFeedback(messageFrom(reason)))}>Discard draft</button><button className="secondary" onClick={() => void loadRevisions()}>History</button><button className="secondary danger" disabled={openDay || Boolean(selected.latest_revision)} onClick={() => void deleteEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Delete Event</button></div>
-        {validation && <div className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Ready to publish" : "Validation needs attention"}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`warning-${index}`}>Note: {warning.message}</li>)}</ul>}</div>}
+        {validation && <div className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Ready to publish" : "Validation needs attention"}</strong>{validation.errors.length > 0 && <section aria-label="Validation errors"><h3>{validation.errors.length} error{validation.errors.length === 1 ? "" : "s"}</h3><ul>{validation.errors.map((error, index) => <ValidationIssue key={index} issue={error} draft={draft} workers={workers} />)}</ul></section>}{validation.warnings.length > 0 && <section aria-label="Validation notes"><h3>{validation.warnings.length} note{validation.warnings.length === 1 ? "" : "s"}</h3><ul>{validation.warnings.map((warning, index) => <ValidationIssue key={`warning-${index}`} issue={warning} draft={draft} workers={workers} note />)}</ul></section>}</div>}
         {revisions.length > 0 && <details className="revision-history" open><summary>Published revisions</summary><div>{revisions.map((revision) => <article key={revision.revision}><span><strong>Revision {revision.revision}</strong><small>{new Date(revision.published_at).toLocaleString()}</small></span><button className="secondary" disabled={revision.active || openDay} onClick={() => void postJson(`/api/events/${draft.id}/revisions/${revision.revision}/publish`).then(refresh)}>Make live</button></article>)}</div></details>}
         <div className="event-editor">
           <div className="field-grid"><label>Event name<input value={draft.name} disabled={openDay} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>Qualification<select value={draft.qualification} disabled={openDay} onChange={(event) => setDraft({ ...draft, qualification: event.target.value as EventDefinition["qualification"] })}><option value="compatible">Protocol compatible</option><option value="tested-working">Tested working (Open Day)</option></select></label></div>
@@ -300,6 +312,32 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
       </CollapsiblePanel>
     </div>}
   </div>;
+}
+
+function validationFromApiError(reason: unknown): EventValidation | null {
+  if (!(reason instanceof ApiError) || !reason.detail || typeof reason.detail !== "object" || !("validation" in reason.detail)) return null;
+  const validation = (reason.detail as { validation: unknown }).validation;
+  if (!validation || typeof validation !== "object") return null;
+  const candidate = validation as Partial<EventValidation>;
+  return typeof candidate.valid === "boolean" && Array.isArray(candidate.errors) && Array.isArray(candidate.warnings)
+    ? candidate as EventValidation
+    : null;
+}
+
+function ValidationIssue({ issue, draft, workers, note = false }: { issue: EventValidation["errors"][number] | EventValidation["warnings"][number]; draft: EventDefinition; workers: Worker[]; note?: boolean }) {
+  const route = issue.route_id ? draft.routes.find((item) => item.id === issue.route_id) : undefined;
+  const demo = "demo_id" in issue && issue.demo_id ? draft.demos.find((item) => item.id === issue.demo_id) : undefined;
+  const worker = "worker_id" in issue && issue.worker_id ? workers.find((item) => item.id === issue.worker_id) : undefined;
+  const workerIndex = route && "worker_id" in issue ? route.worker_ids.indexOf(issue.worker_id ?? "") : -1;
+  const workerRole = workerIndex === 0 ? "Primary Worker" : workerIndex > 0 ? `Backup ${workerIndex} Worker` : "Worker";
+  const location = demo
+    ? `Demos → ${demo.name}`
+    : route && worker
+      ? `Routes → ${route.display_name} → Worker order → ${workerRole}`
+      : route
+        ? `Routes → ${route.display_name}`
+        : "Event";
+  return <li className="validation-issue"><div className="validation-location"><strong>{location}</strong>{route && <code>{route.public_name}</code>}</div><p>{note ? "Note: " : ""}{issue.message}</p>{worker && <small>{worker.name} · {worker.model_id} · {worker.runtime}</small>}{!worker && "worker_id" in issue && issue.worker_id && <small>Worker ID: {issue.worker_id}</small>}</li>;
 }
 
 function CollapsibleEditorSection({ sectionId, title, description, accessory, children }: { sectionId: string; title: string; description: string; accessory: ReactNode; children: ReactNode }) {

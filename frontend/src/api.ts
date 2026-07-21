@@ -1,3 +1,10 @@
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Accept: "application/json" } });
   return readResponse<T>(response);
@@ -56,10 +63,40 @@ async function readResponse<T>(response: Response): Promise<T> {
     const detail =
       typeof rawDetail === "string"
         ? rawDetail
+        : Array.isArray(rawDetail)
+          ? formatValidationErrors(rawDetail, response.status)
         : rawDetail && typeof rawDetail === "object" && "message" in rawDetail
           ? String((rawDetail as { message: unknown }).message)
           : `Request failed with HTTP ${response.status}.`;
-    throw new Error(detail);
+    throw new ApiError(detail, response.status, rawDetail);
   }
   return payload as T;
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  demos: "Demos",
+  display_name: "Route label",
+  name: "Name",
+  protocol_contract: "Protocol contract",
+  public_name: "API Model ID",
+  route_ids: "Routes used by this Demo",
+  routes: "Routes",
+  worker_ids: "Worker order",
+};
+
+function formatValidationErrors(details: unknown[], status: number) {
+  const messages = details.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const issue = item as { loc?: unknown; msg?: unknown };
+    if (typeof issue.msg !== "string") return [];
+    const location = Array.isArray(issue.loc)
+      ? issue.loc.filter((part) => part !== "body").map((part) =>
+          typeof part === "number" ? `item ${part + 1}` : FIELD_LABELS[String(part)] ?? String(part).replaceAll("_", " ")
+        ).join(" → ")
+      : "Request";
+    return [`${location}: ${issue.msg}`];
+  });
+  return messages.length
+    ? `Validation failed: ${messages.join("; ")}`
+    : `Request failed with HTTP ${status}.`;
 }

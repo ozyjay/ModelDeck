@@ -72,6 +72,7 @@ function mockFetch(payloads: Record<string, unknown>) {
     const payload = typeof configured === "function"
       ? await (configured as (input: RequestInfo | URL, init?: RequestInit) => unknown)(input, init)
       : configured;
+    if (payload instanceof Response) return payload;
     return new Response(JSON.stringify(payload ?? { detail: `Unexpected request: ${path}` }), {
       status: payload === undefined ? 404 : 200,
       headers: { "Content-Type": "application/json" },
@@ -362,6 +363,57 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText("Configure the Routes available to this Event. A Route can be used by multiple Demos or remain unassigned.")).toBeInTheDocument();
     expect(screen.getByText("Every shared Route is used by at least one Demo.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeInTheDocument());
+  });
+
+  it("identifies the Route, Worker role and Worker details for validation issues", async () => {
+    const payloads = responses(true);
+    payloads[`/api/events/${eventRecord.definition.id}/validate`] = {
+      valid: false,
+      errors: [
+        { route_id: eventRecord.definition.routes[0].id, worker_id: worker.id, message: "Requires text-diffusion, got autoregressive" },
+        { route_id: eventRecord.definition.routes[0].id, worker_id: worker.id, message: "Missing capabilities: image_input" },
+      ],
+      warnings: [
+        { route_id: eventRecord.definition.routes[0].id, message: "Route 'Token trace' is not used by a Demo" },
+      ],
+      routes: [],
+    };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Validate" }));
+
+    const errors = await screen.findByRole("region", { name: "Validation errors" });
+    expect(within(errors).getAllByText("Routes → Token trace → Worker order → Primary Worker")).toHaveLength(2);
+    expect(within(errors).getAllByText("qwen-0-5b")).toHaveLength(2);
+    expect(within(errors).getAllByText(/Qwen token trace · Qwen\/Qwen2.5-0.5B-Instruct · transformers-rocm/)).toHaveLength(2);
+    expect(within(errors).getByText("Missing capabilities: image_input")).toBeInTheDocument();
+
+    const notes = screen.getByRole("region", { name: "Validation notes" });
+    expect(within(notes).getByText("Routes → Token trace")).toBeInTheDocument();
+    expect(within(notes).getByText("Note: Route 'Token trace' is not used by a Demo")).toBeInTheDocument();
+  });
+
+  it("shows structured validation details when publishing fails", async () => {
+    const validation = {
+      valid: false,
+      errors: [{ route_id: eventRecord.definition.routes[0].id, worker_id: worker.id, message: "Missing capabilities: chat" }],
+      warnings: [],
+      routes: [],
+    };
+    const payloads = responses(true);
+    payloads[`/api/events/${eventRecord.definition.id}/draft`] = eventRecord;
+    payloads[`/api/events/${eventRecord.definition.id}/publish`] = () => new Response(JSON.stringify({
+      detail: { message: "Event validation failed", validation },
+    }), { status: 409, headers: { "Content-Type": "application/json" } });
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Publish routing" }));
+
+    const errors = await screen.findByRole("region", { name: "Validation errors" });
+    expect(within(errors).getByText("Routes → Token trace → Worker order → Primary Worker")).toBeInTheDocument();
+    expect(within(errors).getByText("Missing capabilities: chat")).toBeInTheDocument();
   });
 
   it("shows Routes outside every Demo as unassigned until they are included", async () => {
