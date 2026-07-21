@@ -13,6 +13,7 @@ from modeldeck.supervisor.service import (
     build_mock_worker_command,
     build_worker_launch,
     classify_log_level,
+    port_available,
     redact_log,
 )
 
@@ -23,6 +24,17 @@ def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_port_probe_uses_address_reuse_and_rejects_an_active_listener() -> None:
+    port = free_port()
+    assert port_available(port)
+
+    with socket.socket() as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", port))
+        listener.listen()
+        assert not port_available(port)
 
 
 def test_every_trusted_runtime_has_an_explicit_launch_builder() -> None:

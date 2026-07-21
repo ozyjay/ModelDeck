@@ -616,6 +616,9 @@ def classify_log_level(message: str) -> str:
 
 def port_available(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        # Worker servers also reuse their listening address. Match that behaviour here so a
+        # cleanly stopped server's short-lived TCP connections do not make its port appear busy.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:

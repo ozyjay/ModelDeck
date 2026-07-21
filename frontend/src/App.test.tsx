@@ -168,6 +168,20 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByText(/does not inspect the supplied image/)).toBeInTheDocument();
   });
 
+  it("explains that a 405 creating a SceneChat mock requires a service restart", async () => {
+    const payloads = responses(true);
+    payloads["/api/workers/mock-scenechat"] = new Response(JSON.stringify({ detail: "Method Not Allowed" }), {
+      status: 405,
+      headers: { "Content-Type": "application/json" },
+    });
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create SceneChat mock" }));
+
+    expect(await screen.findByText(/Restart ModelDeck, then try again/)).toBeInTheDocument();
+  });
+
   it("searches and filters Workers, reports the result count and clears the filters", async () => {
     const visionWorker: Worker = {
       ...worker,
