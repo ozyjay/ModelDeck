@@ -274,6 +274,7 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .model-worker-item strong, .model-worker-item small { display: block; }
 .model-worker-item strong { overflow-wrap: anywhere; }
 .model-worker-item small { margin-top: 0.18rem; color: var(--muted); font-size: 0.75rem; }
+.model-worker-item-actions { display: flex; align-items: center; gap: 0.55rem; }
 .model-stage { margin: 0.65rem 0; color: #c5d0df; font-size: 0.82rem; line-height: 1.45; }
 .model-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
 .model-actions span { color: var(--muted); font-size: 0.77rem; }

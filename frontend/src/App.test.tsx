@@ -283,6 +283,25 @@ describe("ModelDeck v2 operator console", () => {
     expect(within(summary).getByText(/140 visual tokens/)).toBeInTheDocument();
   });
 
+  it("removes a stopped Worker from its Model card without deleting the cached Model", async () => {
+    const model = catalogueModel(worker.model_id);
+    const payloads = responses(true);
+    payloads["/api/catalogue"] = { models: [{ ...model, worker_count: 1 }], downloads_started: false };
+    payloads[`/api/workers/${worker.id}`] = { ok: true, worker_id: worker.id, cache_removed: false };
+    const fetchMock = mockFetch(payloads);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    fireEvent.click(screen.getByRole("button", { name: `Remove Worker ${worker.name}` }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/cached Model files will be kept/i));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/workers/${worker.id}` && init?.method === "DELETE"
+    )).toBe(true));
+    expect(await screen.findByText(/its cached Model was kept/i)).toBeInTheDocument();
+  });
+
   it("explains and disables Worker creation while Open Day mode is active", async () => {
     const payloads = responses();
     payloads["/api/health"] = { ...(payloads["/api/health"] as object), open_day: true };

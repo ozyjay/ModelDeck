@@ -384,6 +384,15 @@ function replacementName(name: string) {
   return `${name.slice(0, 80 - suffix.length)}${suffix}`;
 }
 
+function confirmArchiveWorker(worker: Worker) {
+  return window.confirm(
+    `Archive Worker “${worker.name}”?\n\n` +
+    "It will disappear from configured Workers and cannot be restored in ModelDeck. " +
+    "Historical Event revisions and cached Model files will be kept.\n\n" +
+    "Cancel leaves the Worker unchanged.",
+  );
+}
+
 function WorkersView({ workers, templates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const collapseControls = useContext(CollapseContext);
   if (!collapseControls) throw new Error("Collapse controls are unavailable");
@@ -396,13 +405,7 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
   const sorted = useMemo(() => [...workers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [workers, sort]);
   const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
   const archive = async (worker: Worker) => {
-    const confirmed = window.confirm(
-      `Archive Worker “${worker.name}”?\n\n` +
-      "It will disappear from configured Workers and cannot be restored in ModelDeck. " +
-      "Historical Event revisions and cached Model files will be kept.\n\n" +
-      "Cancel leaves the Worker unchanged.",
-    );
-    if (!confirmed) return;
+    if (!confirmArchiveWorker(worker)) return;
     await deleteJson(`/api/workers/${worker.id}`);
     setFeedback(`Archived Worker “${worker.name}”; its cached Model was kept.`);
     await refresh();
@@ -440,14 +443,14 @@ function workersForModel(model: ModelEntry, workers: Worker[]) {
   ).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function ModelWorkerSummary({ model, workers }: { model: ModelEntry; workers: Worker[] }) {
+function ModelWorkerSummary({ model, workers, openDay, removingWorker, onRemove }: { model: ModelEntry; workers: Worker[]; openDay: boolean; removingWorker: string | null; onRemove: (worker: Worker) => Promise<void> }) {
   const configured = workersForModel(model, workers);
   const { collapsed, toggle } = useCollapse(`model-workers-${model.model_id}@${model.revision}`);
   return <section className={`model-worker-summary${configured.length ? " has-workers" : ""}`} aria-label={`Workers for ${model.model_id}`}>
     <div className="model-worker-summary-heading"><strong>Configured Workers</strong><div><span>{configured.length} configured</span><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} configured Workers for ${model.model_id}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>
     <div hidden={collapsed}>{configured.length ? <div className="model-worker-list">{configured.map((worker) => <div className="model-worker-item" key={worker.id}>
       <div><strong>{worker.name}</strong><small>{humanise(worker.runtime)} · {humanise(worker.lifecycle)}{typeof worker.settings.visual_token_budget === "number" ? ` · ${worker.settings.visual_token_budget} visual tokens` : ""}</small></div>
-      <StateBadge state={worker.state} />
+      <div className="model-worker-item-actions"><StateBadge state={worker.state} /><button className="secondary danger compact-button" disabled={openDay || removingWorker !== null || !["stopped", "failed"].includes(worker.state)} title={["stopped", "failed"].includes(worker.state) ? "Archive this Worker without removing its cached Model" : "Stop this Worker before removing it"} aria-label={`Remove Worker ${worker.name}`} onClick={() => void onRemove(worker)}>{removingWorker === worker.id ? "Removing…" : "Remove"}</button></div>
     </div>)}</div> : <p>No Workers have been configured from this Model.</p>}</div>
   </section>;
 }
@@ -469,6 +472,7 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   const [artifact, setArtifact] = useState("");
   const [parameters, setParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [removingWorker, setRemovingWorker] = useState<string | null>(null);
   const sorted = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return models.filter((model) => !needle || [model.model_id, model.generation_family_hint, model.runnable_reason, ...model.capability_hints].some((value) => value?.toLocaleLowerCase().includes(needle))).sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id));
@@ -497,6 +501,19 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
     setFeedback(`Created Worker “${name}”.`);
     await refresh();
   };
+  const removeWorker = async (worker: Worker) => {
+    if (!confirmArchiveWorker(worker)) return;
+    setRemovingWorker(worker.id);
+    try {
+      await deleteJson(`/api/workers/${worker.id}`);
+      setFeedback(`Removed Worker “${worker.name}” from ModelDeck; its cached Model was kept.`);
+      await refresh();
+    } catch (reason) {
+      setFeedback(messageFrom(reason));
+    } finally {
+      setRemovingWorker(null);
+    }
+  };
   if (configuring) {
     const model = models.find((item) => `${item.model_id}@${item.revision}` === configuring);
     const baseline = templates.find((item) => item.id === model?.configuration_support);
@@ -512,7 +529,7 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
       const selectedTemplate = availableTemplates.find((template) => template.id === runtime);
       return <ModelCardShell model={model} key={key}>
         <div className="tag-list">{model.capability_hints.map((hint) => <span className="tag" key={hint}>{humanise(hint)}</span>)}</div>
-        <ModelWorkerSummary model={model} workers={workers} />
+        <ModelWorkerSummary model={model} workers={workers} openDay={openDay} removingWorker={removingWorker} onRemove={removeWorker} />
         <p className="model-stage">{model.runnable_reason}</p>
         {configuring !== key ? <div className="model-actions"><button disabled={openDay || !model.runnable || !model.modeldeck_allowed || !model.revision} onClick={() => begin(model)}>Create Worker</button></div> : <div className="runtime-form"><div className="runtime-form-heading"><strong>Create a Worker</strong><small>The trusted runtime determines the immutable execution identity.</small></div><div className="runtime-fields"><label>Worker name<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => setRuntime(event.target.value)}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div>{selectedTemplate && <p className="manifest-note">Runtime defaults: {selectedTemplate.dtype ?? "float16"} · {String(selectedTemplate.settings.context_length ?? 2048)} context · {String(selectedTemplate.settings.maximum_new_tokens ?? 128)} max output · {selectedTemplate.lifecycle ?? "on-demand"}</p>}<div className="runtime-form-actions"><button disabled={openDay} onClick={() => void create(model).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => setConfiguring(null)}>Cancel</button></div></div>}
       </ModelCardShell>;
