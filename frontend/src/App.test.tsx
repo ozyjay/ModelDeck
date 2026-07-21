@@ -94,7 +94,7 @@ function catalogueModel(modelId: string, capabilityHints: string[] = ["text-gene
 }
 
 describe("ModelDeck v2 operator console", () => {
-  beforeEach(() => window.history.replaceState({}, "", "/"));
+  beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   it("starts with an explicit onboarding workflow and no packaged cards", async () => {
@@ -153,6 +153,27 @@ describe("ModelDeck v2 operator console", () => {
 
     expect(screen.getByRole("button", { name: "Archive" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Collapse Worker Qwen token trace" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("collapses every view and remembers that preference", async () => {
+    mockFetch(responses(true));
+    const first = render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse all" }));
+    expect(screen.getByRole("button", { name: "Expand all" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand Live Routes" })).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(window.localStorage.getItem("modeldeck-collapse-preferences-v1")).toContain('"allCollapsed":true'));
+
+    first.unmount();
+    mockFetch(responses(true));
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Expand all" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Workers" }));
+    expect(await screen.findByRole("button", { name: "Expand Worker Qwen token trace" })).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("link", { name: "Advanced" }));
+    expect(await screen.findByRole("button", { name: "Expand Detected hardware" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Expand Worker logs" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("explains the effect of archiving and leaves the Worker unchanged when cancelled", async () => {

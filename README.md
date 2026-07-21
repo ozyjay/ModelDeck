@@ -53,6 +53,10 @@ boundary.
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
+The operator console can collapse individual sections or every section at once. These
+display preferences are retained in local browser storage and do not change ModelDeck
+configuration.
+
 Use **Models** to create a Worker from a recognised cached revision. Use **Events** to
 define shared Routes, assign the primary and ordered backup Workers, group Routes into
 Demos, validate the draft and publish it. Use **Workers** for lifecycle control and real

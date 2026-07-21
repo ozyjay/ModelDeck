@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import { deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
@@ -11,6 +12,43 @@ type View = "live" | "events" | "workers" | "models" | "advanced";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
 type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc" | "readiness" | "workers";
+
+interface CollapsePreferences {
+  allCollapsed: boolean;
+  sections: Record<string, boolean>;
+}
+
+interface CollapseControls {
+  preferences: CollapsePreferences;
+  setAllCollapsed: (collapsed: boolean) => void;
+  toggleSection: (sectionId: string) => void;
+}
+
+const COLLAPSE_STORAGE_KEY = "modeldeck-collapse-preferences-v1";
+const CollapseContext = createContext<CollapseControls | null>(null);
+
+function loadCollapsePreferences(): CollapsePreferences {
+  try {
+    const stored = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    if (!stored) return { allCollapsed: false, sections: {} };
+    const parsed = JSON.parse(stored) as Partial<CollapsePreferences>;
+    return {
+      allCollapsed: parsed.allCollapsed === true,
+      sections: parsed.sections && typeof parsed.sections === "object" ? parsed.sections : {},
+    };
+  } catch {
+    return { allCollapsed: false, sections: {} };
+  }
+}
+
+function useCollapse(sectionId: string) {
+  const controls = useContext(CollapseContext);
+  if (!controls) throw new Error("Collapse controls are unavailable");
+  return {
+    collapsed: controls.preferences.sections[sectionId] ?? controls.preferences.allCollapsed,
+    toggle: () => controls.toggleSection(sectionId),
+  };
+}
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
   { view: "live", label: "Live", path: "/" },
@@ -40,6 +78,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(() => new Set());
+  const [collapsePreferences, setCollapsePreferences] = useState<CollapsePreferences>(loadCollapsePreferences);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(collapsePreferences));
+    } catch {
+      console.warn("Collapse preferences could not be saved locally.");
+    }
+  }, [collapsePreferences]);
+
+  const collapseControls = useMemo<CollapseControls>(() => ({
+    preferences: collapsePreferences,
+    setAllCollapsed: (collapsed) => setCollapsePreferences({ allCollapsed: collapsed, sections: {} }),
+    toggleSection: (sectionId) => setCollapsePreferences((current) => {
+      const collapsed = current.sections[sectionId] ?? current.allCollapsed;
+      return { ...current, sections: { ...current.sections, [sectionId]: !collapsed } };
+    }),
+  }), [collapsePreferences]);
 
   const refresh = useCallback(async () => {
     const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextLive, nextWorkers,
@@ -105,6 +161,7 @@ export default function App() {
 
   if (loading) return <Loading />;
   return (
+    <CollapseContext.Provider value={collapseControls}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">MD</span><div><strong>ModelDeck</strong><small>Operator console</small></div></div>
@@ -119,6 +176,7 @@ export default function App() {
       <main className="main-content">
         <header className="topbar"><div><p className="eyebrow">Framework Desktop · local control plane</p><h1>{NAVIGATION.find((item) => item.view === view)?.label}</h1></div>
           <div className="topbar-status">
+            <button className="secondary collapse-all-button" onClick={() => collapseControls.setAllCollapsed(!collapsePreferences.allCollapsed)}>{collapsePreferences.allCollapsed ? "Expand all" : "Collapse all"}</button>
             {health && <div className={`mode-badge ${health.open_day ? "locked" : "unlocked"}`} aria-label="Configuration status"><StatusDot state={health.open_day ? "warn" : "good"} /><span>{health.open_day ? "Open Day · configuration locked" : "Configuration unlocked"}</span></div>}
             <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}><StatusDot state={gateway?.available ? "good" : "bad"} /><span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span></div>
           </div>
@@ -132,6 +190,7 @@ export default function App() {
           : <AdvancedView hardware={hardware} telemetry={telemetry} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
     </div>
+    </CollapseContext.Provider>
   );
 }
 
@@ -153,19 +212,19 @@ function LiveView({ live, workers, models, operate, pending }: {
   if (!workers.length || !live.active_event) return (
     <div className="view-stack">
       <section className="hero-panel"><div><p className="eyebrow">Initial setup</p><h2>Build your first local route</h2><p>ModelDeck starts empty: create a Worker from a discovered Model, create an Event and Route, then publish it.</p></div></section>
-      <section className="panel"><PanelHeading title="Setup checklist" detail={`${models.length} cached Models discovered`} />
+      <CollapsiblePanel sectionId="live-setup" title="Setup checklist" detail={`${models.length} cached Models discovered`}>
         <ol className="setup-list"><li className={models.length ? "done" : ""}>Discover a cached Model</li><li className={workers.length ? "done" : ""}>Create a Worker</li><li className={live.active_event ? "done" : ""}>Create and publish an Event</li><li>Start and smoke-test the Route’s Worker</li></ol>
-      </section>
+      </CollapsiblePanel>
     </div>
   );
   return <div className="view-stack">
     <section className="hero-panel"><div><p className="eyebrow">Published Event · revision {live.active_event.revision}</p><h2>{live.active_event.name}</h2><p>Publishing controls routing only. Worker processes remain under explicit operator control.</p></div><div className="hero-status"><StatusDot state={live.routes.every((route) => route.ready) ? "good" : "warn"} /><span>{live.routes.filter((route) => route.ready).length} of {live.routes.length} Routes ready</span></div></section>
-    <section className="panel table-panel"><PanelHeading title="Live Routes" detail={`${live.routes.length} published`} />
+    <CollapsiblePanel sectionId="live-routes" title="Live Routes" detail={`${live.routes.length} published`} className="table-panel">
       {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
       {live.routes.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Public route</th><th>Route status</th><th>Protocol</th><th>Worker order</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
         {live.routes.map((route) => <tr className={route.ready ? "route-ready" : "route-unavailable"} key={route.id}><td><strong>{route.display_name}</strong><code>{route.public_name}</code></td><td><div className={`route-readiness ${route.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${route.display_name} Route status`}><StatusDot state={route.ready ? "good" : "warn"} /><span><strong>{route.ready ? "Ready" : "Not serving"}</strong><small>{route.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{route.protocol_contract}</td><td><div className="active-worker-chain">{route.workers.map((worker, index) => { const order = index === 0 ? "Primary" : `Backup ${index}`; return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><StateBadge state={worker.state} /></div>; })}</div></td><td className={route.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{route.effective_worker?.name ?? "No ready Worker"}</td><td>{route.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, route.workers[0].id) || route.workers[0].state === "ready"} onClick={() => void operate(route.workers[0], "start")}>{pending.has(`${route.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !route.ready} onClick={() => void smokeRoute(route.id)}>Rehearse Route</button></div>}</td></tr>)}
       </tbody></table></div> : <p className="muted">This Event publishes no Routes.</p>}
-    </section>
+    </CollapsiblePanel>
   </div>;
 }
 
@@ -219,7 +278,7 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
     <div className="view-actions"><p>Events describe what demos expect. Their Routes are shared and publish independently of Worker processes.</p><button disabled={openDay} onClick={() => void createEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Create Event</button></div>
     {!selected || !draft ? <section className="empty-state"><h2>No Events yet</h2><p>Create an Event after configuring at least one Worker.</p></section> : <div className="event-layout">
       <aside className="panel event-list">{events.map((event) => <button className={`event-select ${event.definition.id === draft.id ? "active" : ""}`} key={event.definition.id} onClick={() => setSelectedId(event.definition.id)}><span><strong>{event.definition.name}</strong><small>{event.active ? `Live revision ${event.active_revision}` : event.latest_revision ? `Published revision ${event.latest_revision}` : "Draft only"}</small></span></button>)}</aside>
-      <section className="panel event-detail"><div className="event-heading"><div><p className="eyebrow">{selected.active ? `Live revision ${selected.active_revision}` : "Draft"} · {saveState}</p><h2>{draft.name}</h2></div><StateBadge state={selected.active ? "ready" : "stopped"} /></div>
+      <CollapsiblePanel sectionId={`event-${draft.id}`} title={draft.name} detail={`${selected.active ? `Live revision ${selected.active_revision}` : "Draft"} · ${saveState}`} className="event-detail" accessory={<StateBadge state={selected.active ? "ready" : "stopped"} />}>
         {feedback && <div className="configuration-feedback">{feedback}</div>}
         <div className="button-row event-actions"><button className="secondary" onClick={() => void validate()}>Validate</button><button disabled={openDay || saveState === "Saving…"} onClick={() => void publish().catch((reason) => setFeedback(messageFrom(reason)))}>Publish routing</button><button className="secondary" disabled={openDay || !selected.latest_revision} onClick={() => void discard().catch((reason) => setFeedback(messageFrom(reason)))}>Discard draft</button><button className="secondary" onClick={() => void loadRevisions()}>History</button><button className="secondary danger" disabled={openDay || Boolean(selected.latest_revision)} onClick={() => void deleteEvent().catch((reason) => setFeedback(messageFrom(reason)))}>Delete Event</button></div>
         {validation && <div className={`validation-summary ${validation.valid ? "good" : "bad"}`}><strong>{validation.valid ? "Ready to publish" : "Validation needs attention"}</strong>{validation.errors.length > 0 && <ul>{validation.errors.map((error, index) => <li key={index}>{error.message}</li>)}</ul>}{validation.warnings.length > 0 && <ul>{validation.warnings.map((warning, index) => <li key={`warning-${index}`}>Note: {warning.message}</li>)}</ul>}</div>}
@@ -236,7 +295,7 @@ function EventsView({ events, workers, contracts, openDay, refresh }: {
             <button className="secondary" disabled={openDay || workers.every((worker) => route.worker_ids.includes(worker.id))} onClick={() => { const worker = workers.find((item) => !route.worker_ids.includes(item.id)); if (worker) updateRoute(route.id, { worker_ids: [...route.worker_ids, worker.id] }); }}>Add backup</button>
           </article>)}</div>
         </div>
-      </section>
+      </CollapsiblePanel>
     </div>}
   </div>;
 }
@@ -326,19 +385,15 @@ function replacementName(name: string) {
 }
 
 function WorkersView({ workers, templates, pending, operate, refresh, openDay }: { workers: Worker[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+  const collapseControls = useContext(CollapseContext);
+  if (!collapseControls) throw new Error("Collapse controls are unavailable");
   const [sort, setSort] = useState<WorkerSort>("name-asc");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
   const [replacementWorkerName, setReplacementWorkerName] = useState("");
   const [replacementParameters, setReplacementParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [rebindDrafts, setRebindDrafts] = useState(true);
-  const [collapsedWorkers, setCollapsedWorkers] = useState<ReadonlySet<string>>(() => new Set());
   const sorted = useMemo(() => [...workers].sort((a, b) => sort === "name-desc" ? b.name.localeCompare(a.name) : sort === "model-asc" ? a.model_id.localeCompare(b.model_id) : sort === "runtime-asc" ? a.runtime.localeCompare(b.runtime) : sort === "state" ? a.state.localeCompare(b.state) : a.name.localeCompare(b.name)), [workers, sort]);
-  const toggleCollapsed = (workerId: string) => setCollapsedWorkers((current) => {
-    const next = new Set(current);
-    if (next.has(workerId)) next.delete(workerId); else next.add(workerId);
-    return next;
-  });
   const rename = async (worker: Worker) => { const name = window.prompt("Worker name", worker.name)?.trim(); if (!name || name === worker.name) return; await patchJson(`/api/workers/${worker.id}`, { name }); await refresh(); };
   const archive = async (worker: Worker) => {
     const confirmed = window.confirm(
@@ -369,8 +424,9 @@ function WorkersView({ workers, templates, pending, operate, refresh, openDay }:
     {!workers.length ? <section className="empty-state"><h2>No Workers configured</h2><p>Create one from the Models view. ModelDeck does not create packaged Worker cards.</p></section> : <div className="worker-grid">{sorted.map((worker) => {
       const workerPending = workerOperationPending(pending, worker.id);
       const template = templates.find((item) => item.id === worker.runtime_template_id);
-      const collapsed = collapsedWorkers.has(worker.id);
-      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => toggleCollapsed(worker.id)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
+      const sectionId = `worker-${worker.id}`;
+      const collapsed = collapseControls.preferences.sections[sectionId] ?? collapseControls.preferences.allCollapsed;
+      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => collapseControls.toggleSection(sectionId)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details><div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
         {replacing === worker.id && template && <div className="runtime-form worker-replacement-form"><div className="runtime-form-heading"><strong>Replace this Worker</strong><small>The Model, revision and trusted runtime stay fixed. The original Worker is kept.</small></div><div className="runtime-fields"><label>Replacement name<input value={replacementWorkerName} maxLength={80} onChange={(event) => setReplacementWorkerName(event.target.value)} /></label><label>Model<input value={worker.artifact_model_id ?? worker.model_id} disabled /></label><label>Runtime<input value={template.display_name} disabled /></label></div><WorkerParameterFields template={template} values={replacementParameters} onChange={setReplacementParameters} /><label className="rebind-option"><input type="checkbox" checked={rebindDrafts} onChange={(event) => setRebindDrafts(event.target.checked)} /> Rebind draft Event routes to the replacement</label><p className="manifest-note">Published Event revisions always keep the original Worker until you explicitly publish an updated draft.</p><div className="runtime-form-actions"><button disabled={!replacementWorkerName.trim() || !parametersAreValid(template, replacementParameters)} onClick={() => void replace(worker, template).catch((reason) => setFeedback(messageFrom(reason)))}>Create replacement</button><button className="secondary" onClick={() => setReplacing(null)}>Cancel</button></div></div>}</div>
       </article>;
     })}</div>}
@@ -386,12 +442,13 @@ function workersForModel(model: ModelEntry, workers: Worker[]) {
 
 function ModelWorkerSummary({ model, workers }: { model: ModelEntry; workers: Worker[] }) {
   const configured = workersForModel(model, workers);
+  const { collapsed, toggle } = useCollapse(`model-workers-${model.model_id}@${model.revision}`);
   return <section className={`model-worker-summary${configured.length ? " has-workers" : ""}`} aria-label={`Workers for ${model.model_id}`}>
-    <div className="model-worker-summary-heading"><strong>Configured Workers</strong><span>{configured.length} configured</span></div>
-    {configured.length ? <div className="model-worker-list">{configured.map((worker) => <div className="model-worker-item" key={worker.id}>
+    <div className="model-worker-summary-heading"><strong>Configured Workers</strong><div><span>{configured.length} configured</span><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} configured Workers for ${model.model_id}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>
+    <div hidden={collapsed}>{configured.length ? <div className="model-worker-list">{configured.map((worker) => <div className="model-worker-item" key={worker.id}>
       <div><strong>{worker.name}</strong><small>{humanise(worker.runtime)} · {humanise(worker.lifecycle)}{typeof worker.settings.visual_token_budget === "number" ? ` · ${worker.settings.visual_token_budget} visual tokens` : ""}</small></div>
       <StateBadge state={worker.state} />
-    </div>)}</div> : <p>No Workers have been configured from this Model.</p>}
+    </div>)}</div> : <p>No Workers have been configured from this Model.</p>}</div>
   </section>;
 }
 
@@ -456,12 +513,24 @@ function LogsPanel({ workers }: { workers: Worker[] }) {
   const [workerId, setWorkerId] = useState(workers[0]?.id ?? "");
   const [logs, setLogs] = useState<WorkerLog[]>([]);
   useEffect(() => { if (!workerId) return; getJson<{ logs: WorkerLog[] }>(`/api/workers/${workerId}/logs`).then((value) => setLogs(value.logs)).catch(() => setLogs([])); }, [workerId]);
-  return <section className="panel log-panel"><div className="log-toolbar"><div><label htmlFor="log-worker">Worker logs</label><select id="log-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></div></div><div className="log-view">{logs.length ? logs.map((log, index) => <div className={`log-entry ${log.level}`} key={`${log.timestamp}-${index}`}><time>{new Date(log.timestamp).toLocaleTimeString()}</time><span>{log.source}</span><code>{log.message}</code></div>) : <p>No logs for this Worker.</p>}</div></section>;
+  return <CollapsiblePanel sectionId="advanced-worker-logs" title="Worker logs" detail={`${logs.length} entries`} className="log-panel"><div className="log-toolbar"><div><label htmlFor="log-worker">Worker</label><select id="log-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}</select></div></div><div className="log-view">{logs.length ? logs.map((log, index) => <div className={`log-entry ${log.level}`} key={`${log.timestamp}-${index}`}><time>{new Date(log.timestamp).toLocaleTimeString()}</time><span>{log.source}</span><code>{log.message}</code></div>) : <p>No logs for this Worker.</p>}</div></CollapsiblePanel>;
 }
 
 function Loading() { return <main className="loading-screen"><div className="brand-mark">MD</div><h1>Starting operator console</h1><p>Reading local Events, Routes, Workers and Models…</p><div className="loading-bar"><span /></div></main>; }
 function Unavailable({ retry }: { retry: () => Promise<void> }) { return <section className="empty-state"><span className="empty-icon">!</span><h2>Management data is unavailable</h2><p>No cloud service was contacted.</p><button onClick={() => void retry()}>Retry local connection</button></section>; }
-function PanelHeading({ title, detail }: { title: string; detail: string }) { return <div className="panel-heading"><h2>{title}</h2><span>{detail}</span></div>; }
+function CollapsiblePanel({ sectionId, title, detail, className = "", accessory, children }: { sectionId: string; title: string; detail: string; className?: string; accessory?: ReactNode; children: ReactNode }) {
+  const { collapsed, toggle } = useCollapse(sectionId);
+  const contentId = useId();
+  return <section className={`panel collapsible-panel${collapsed ? " collapsed" : ""}${className ? ` ${className}` : ""}`}>
+    <div className="panel-heading"><div><h2>{title}</h2><span>{detail}</span></div><div className="panel-heading-actions">{accessory}<button className="secondary compact-button" aria-controls={contentId} aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>
+    <div className="collapsible-panel-content" id={contentId} hidden={collapsed}>{children}</div>
+  </section>;
+}
+function PanelHeading({ title, detail }: { title: string; detail: string }) {
+  const sectionId = `panel-${title.toLocaleLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
+  const { collapsed, toggle } = useCollapse(sectionId);
+  return <div className="panel-heading" data-collapsed={collapsed}><div><h2>{title}</h2><span>{detail}</span></div><div className="panel-heading-actions"><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>;
+}
 function StatusDot({ state }: { state: "good" | "warn" | "bad" | "neutral" }) { return <span className={`status-dot ${state}`} aria-hidden="true" />; }
 function StateBadge({ state }: { state: string }) { return <span className={`state-badge state-${state}`}>{humanise(state)}</span>; }
 function DefinitionList({ rows }: { rows: Array<[string, string]> }) { return <dl className="definition-list compact">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>; }
