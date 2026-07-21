@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$Worker280,
-    [Parameter(Mandatory)][string]$Worker140,
+    [string]$Worker70,
+    [string]$Worker140,
+    [string]$Worker280,
     [ValidateRange(3, 5)][int]$Warmups = 4,
     [ValidateRange(50, 1000)][int]$Runs = 50,
     [switch]$HumanReview,
@@ -17,10 +18,18 @@ if ($CooldownTemperatureCelsius -ge $MaximumTemperatureCelsius) {
     throw 'CooldownTemperatureCelsius must be below MaximumTemperatureCelsius.'
 }
 
+$Workers = @(
+    if ($Worker70) { @('--worker-70', $Worker70) }
+    if ($Worker140) { @('--worker-140', $Worker140) }
+    if ($Worker280) { @('--worker-280', $Worker280) }
+)
+if ($Workers.Count -eq 0) {
+    throw 'Supply at least one of Worker70, Worker140 or Worker280.'
+}
+
 $Arguments = @(
     'scripts/benchmark_scenechat_visual_tokens.py',
-    '--worker-280', $Worker280,
-    '--worker-140', $Worker140,
+    $Workers,
     '--warmups', $Warmups,
     '--runs', $Runs,
     '--maximum-temperature-celsius', $MaximumTemperatureCelsius,

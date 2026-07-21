@@ -242,13 +242,22 @@ def _worker_by_id(workers: list[dict[str, Any]], worker_id: str) -> dict[str, An
     return matches[0]
 
 
-def _validate_workers(worker_280: dict[str, Any], worker_140: dict[str, Any]) -> None:
-    for worker, budget in ((worker_280, 280), (worker_140, 140)):
+def _validate_workers(workers: list[dict[str, Any]]) -> None:
+    if not workers:
+        raise RuntimeError("Supply at least one benchmark Worker")
+    budgets: set[int] = set()
+    for worker in workers:
+        budget = worker["settings"].get("visual_token_budget")
         if worker["generation_family"] != "vision-language":
             raise RuntimeError(f"Worker {worker['name']!r} is not a vision-language Worker")
-        if worker["settings"].get("visual_token_budget") != budget:
-            raise RuntimeError(f"Worker {worker['name']!r} does not have visual token budget {budget}")
-    identities = {(worker["model_id"], worker["revision"]) for worker in (worker_280, worker_140)}
+        if budget not in {70, 140, 280}:
+            raise RuntimeError(
+                f"Worker {worker['name']!r} does not have an allowlisted visual token budget"
+            )
+        if budget in budgets:
+            raise RuntimeError(f"More than one Worker has visual token budget {budget}")
+        budgets.add(budget)
+    identities = {(worker["model_id"], worker["revision"]) for worker in workers}
     if len(identities) != 1:
         raise RuntimeError("The benchmark Workers must use the same pinned model and revision")
 
@@ -393,7 +402,7 @@ def _review(samples: list[dict[str, Any]], budget: int) -> dict[str, int] | None
 def _benchmark_arm(
     gateway_url: str,
     worker: dict[str, Any],
-    other: dict[str, Any],
+    other_workers: list[dict[str, Any]],
     payload: dict[str, Any],
     warmups: int,
     runs: int,
@@ -402,7 +411,8 @@ def _benchmark_arm(
     cooldown_temperature_celsius: float,
     requests_per_thermal_batch: int,
 ) -> dict[str, Any]:
-    _post(f"{MANAGEMENT_URL}/api/workers/{other['id']}/stop")
+    for other in other_workers:
+        _post(f"{MANAGEMENT_URL}/api/workers/{other['id']}/stop")
     _wait_for_cooldown(cooldown_temperature_celsius)
     guard = ThermalGuard(maximum_temperature_celsius)
     guard.worker_id = worker["id"]
@@ -492,9 +502,10 @@ def _benchmark_arm(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark SceneChat Gemma 4 visual-token budgets")
-    parser.add_argument("--worker-280", required=True)
-    parser.add_argument("--worker-140", required=True)
+    parser = argparse.ArgumentParser(description="Benchmark SceneChat visual-token budgets")
+    parser.add_argument("--worker-70")
+    parser.add_argument("--worker-140")
+    parser.add_argument("--worker-280")
     parser.add_argument("--warmups", type=int, choices=range(3, 6), default=4)
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--human-review", action="store_true")
@@ -513,18 +524,22 @@ def main() -> None:
     if not 1 <= arguments.requests_per_thermal_batch <= 10:
         parser.error("--requests-per-thermal-batch must be between 1 and 10")
 
-    workers = _json_request(f"{MANAGEMENT_URL}/api/workers")
-    worker_280 = _worker_by_id(workers, arguments.worker_280)
-    worker_140 = _worker_by_id(workers, arguments.worker_140)
-    _validate_workers(worker_280, worker_140)
+    worker_arguments = [arguments.worker_70, arguments.worker_140, arguments.worker_280]
+    worker_ids = [worker_id for worker_id in worker_arguments if worker_id]
+    if not worker_ids:
+        parser.error("supply at least one of --worker-70, --worker-140 or --worker-280")
+
+    configured_workers = _json_request(f"{MANAGEMENT_URL}/api/workers")
+    workers = [_worker_by_id(configured_workers, worker_id) for worker_id in worker_ids]
+    _validate_workers(workers)
     _validate_route()
-    originally_ready = [worker for worker in (worker_280, worker_140) if worker["state"] == "ready"]
+    originally_ready = [worker for worker in workers if worker["state"] == "ready"]
     data_url, image_metadata = _image_payload()
     payload = _payload(data_url)
     gateway_port = _free_loopback_port()
     gateway_url = f"http://127.0.0.1:{gateway_port}"
     gateway_app = create_gateway_app(
-        alias_routes={ROUTE_NAME: [_profile(worker_280), _profile(worker_140)]},
+        alias_routes={ROUTE_NAME: [_profile(worker) for worker in workers]},
         settings=Settings(
             gateway_port=gateway_port,
             scenechat_timeout_seconds=REQUEST_DEADLINE_SECONDS,
@@ -545,11 +560,11 @@ def main() -> None:
     thermal_abort = False
     try:
         _wait_for(f"{gateway_url}/v1/health", timeout=15)
-        for worker, other in ((worker_140, worker_280), (worker_280, worker_140)):
+        for worker in workers:
             result = _benchmark_arm(
                 gateway_url,
                 worker,
-                other,
+                [other for other in workers if other["id"] != worker["id"]],
                 payload,
                 arguments.warmups,
                 arguments.runs,
@@ -565,7 +580,7 @@ def main() -> None:
     finally:
         server.should_exit = True
         gateway_thread.join(timeout=10)
-        for worker in (worker_280, worker_140):
+        for worker in workers:
             try:
                 _post(f"{MANAGEMENT_URL}/api/workers/{worker['id']}/stop")
             except (HTTPError, URLError, TimeoutError):
@@ -579,8 +594,8 @@ def main() -> None:
         "version": 1,
         "created_at": datetime.now(UTC).isoformat(),
         "route": ROUTE_NAME,
-        "model_id": worker_280["model_id"],
-        "revision": worker_280["revision"],
+        "model_id": workers[0]["model_id"],
+        "revision": workers[0]["revision"],
         "image": image_metadata,
         "warmups_per_arm": arguments.warmups,
         "request_deadline_seconds": REQUEST_DEADLINE_SECONDS,

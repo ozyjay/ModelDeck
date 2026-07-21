@@ -92,17 +92,17 @@ def test_benchmark_requires_matching_pinned_workers_and_exact_budgets() -> None:
         "revision": "pinned",
     }
     benchmark._validate_workers(
-        {**base, "settings": {"visual_token_budget": 280}},
-        {**base, "settings": {"visual_token_budget": 140}},
+        [
+            {**base, "settings": {"visual_token_budget": 70}},
+            {**base, "settings": {"visual_token_budget": 140}},
+            {**base, "settings": {"visual_token_budget": 280}},
+        ]
     )
 
     try:
-        benchmark._validate_workers(
-            {**base, "settings": {"visual_token_budget": 280}},
-            {**base, "settings": {"visual_token_budget": 141}},
-        )
+        benchmark._validate_workers([{**base, "settings": {"visual_token_budget": 141}}])
     except RuntimeError as error:
-        assert "budget 140" in str(error)
+        assert "allowlisted visual token budget" in str(error)
     else:
         raise AssertionError("A non-allowlisted comparison budget was accepted")
 
@@ -125,7 +125,7 @@ def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None
     result = benchmark._benchmark_arm(
         "http://gateway",
         worker,
-        other,
+        [other],
         {},
         warmups=4,
         runs=50,

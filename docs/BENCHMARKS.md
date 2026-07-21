@@ -49,11 +49,15 @@ synthetic SceneChat image through each pinned Worker 50 times:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+    -Worker70 '<70-worker-id>' `
     -Worker140 '<140-worker-id>' `
     -Worker280 '<280-worker-id>' `
     -Runs 50 `
     -HumanReview
 ```
+
+Supply any one or more of `Worker70`, `Worker140` and `Worker280`. A single Worker runs
+one focused arm; multiple Workers must use the same pinned model and revision.
 
 The focused benchmark waits until the hottest reported sensor is at or below 65°C before
 each arm, then samples live Fedora hwmon telemetry every 0.5 seconds. By default it pauses
