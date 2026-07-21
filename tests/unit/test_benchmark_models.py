@@ -193,6 +193,16 @@ def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            return response(
+                {
+                    "last_request": {
+                        "outcome": "success",
+                        "inference_seconds": 1.5,
+                        "total_worker_seconds": 1.75,
+                    }
+                }
+            )
         captured.update(json.loads(request.content))
         return response(
             {
@@ -219,11 +229,14 @@ def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:
     runner, client = runner_for(handler)
     try:
         result = runner.run_vision(
-            profile(
-                "vision-language",
-                profile_id="worker-scenechat",
-                route="scenechat-vision",
-            )
+            {
+                **profile(
+                    "vision-language",
+                    profile_id="worker-scenechat",
+                    route="scenechat-vision",
+                ),
+                "benchmark_worker_endpoint": "http://worker",
+            }
         )
     finally:
         client.close()
@@ -233,6 +246,10 @@ def test_vision_workload_uses_synthetic_image_and_approved_contract() -> None:
     assert "Describe the scene." in content[1]["text"]
     assert captured["max_tokens"] == 256
     assert result["generated_tokens"] == 30
+    assert result["worker_seconds"] == 1.75
+    assert result["first_output_seconds"] > 0
+    assert result["throughput_tokens_per_second"] == 20.0
+    assert result["throughput_basis"] == "worker_inference"
     assert "data:image" not in json.dumps(result)
     assert "A synthetic field" not in json.dumps(result)
 
@@ -374,4 +391,6 @@ def test_versioned_reports_do_not_contain_workload_content(tmp_path: Path) -> No
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["format"] == "modeldeck-benchmark"
     assert payload["format_version"] == 1
-    assert "autoregressive" in markdown_path.read_text(encoding="utf-8")
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "autoregressive" in markdown
+    assert "Median first output (s)" in markdown

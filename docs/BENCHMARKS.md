@@ -62,6 +62,11 @@ steady and peak device memory, request reliability, deterministic output hashes,
 before/after host memory, temperature, and fan readings. Summaries report minimum,
 median, nearest-rank p95, and maximum values.
 
+For non-streaming vision-language requests, time to first output is the time until the
+gateway returns its first response byte. Token throughput uses the Worker's recorded
+inference duration; a sample records `end_to_end` as its throughput basis if those Worker
+diagnostics are unavailable.
+
 Models are grouped by generation family. Latency or throughput from different generation
 families must not be treated as a common leaderboard.
 

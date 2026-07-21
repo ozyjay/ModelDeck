@@ -154,6 +154,37 @@ def request_json(
     return body, response.headers
 
 
+def timed_request_json(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], httpx.Headers, float, float]:
+    """Return JSON plus end-to-end and first-response-byte timings."""
+    started = time.perf_counter()
+    first_output_seconds: float | None = None
+    chunks: list[bytes] = []
+    with client.stream(method, url, json=payload) as response:
+        if not response.is_success:
+            raise BenchmarkError(f"{method} {url} failed with HTTP {response.status_code}")
+        headers = response.headers
+        for chunk in response.iter_bytes():
+            if first_output_seconds is None:
+                first_output_seconds = time.perf_counter() - started
+            chunks.append(chunk)
+    wall_seconds = time.perf_counter() - started
+    if first_output_seconds is None:
+        raise BenchmarkError(f"{method} {url} returned an empty response")
+    try:
+        body = json.loads(b"".join(chunks))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BenchmarkError(f"{method} {url} returned invalid JSON") from error
+    if not isinstance(body, dict):
+        raise BenchmarkError(f"{method} {url} returned a non-object response")
+    return body, headers, wall_seconds, first_output_seconds
+
+
 class BenchmarkRunner:
     def __init__(
         self,
@@ -368,21 +399,45 @@ class BenchmarkRunner:
             "response_format": {"type": "json_object"},
             "stream": False,
         }
-        started = time.perf_counter()
-        body, _ = request_json(
+        body, _, wall, first_output = timed_request_json(
             self.client, "POST", self.gateway_url + "/v1/vision/analyse", payload=payload
         )
-        wall = time.perf_counter() - started
         choices = body.get("choices") or []
         content = choices[0].get("message", {}).get("content") if choices else None
         if not content:
             raise BenchmarkError("Vision benchmark returned no structured output")
         parsed = json.loads(content)
         usage = body.get("usage") or {}
+        completion_tokens = usage.get("completion_tokens")
+        if (
+            isinstance(completion_tokens, bool)
+            or not isinstance(completion_tokens, int | float)
+            or completion_tokens <= 0
+        ):
+            raise BenchmarkError("Vision benchmark returned no generated token count")
+        worker_diagnostics: dict[str, Any] = {}
+        if endpoint := profile.get("benchmark_worker_endpoint"):
+            worker_metrics = self.worker_payload(str(endpoint), "/metrics")
+            candidate = worker_metrics.get("last_request")
+            if isinstance(candidate, dict) and candidate.get("outcome") == "success":
+                worker_diagnostics = candidate
+        inference_seconds = worker_diagnostics.get("inference_seconds")
+        throughput_basis = "worker_inference"
+        if (
+            isinstance(inference_seconds, bool)
+            or not isinstance(inference_seconds, int | float)
+            or inference_seconds <= 0
+        ):
+            inference_seconds = wall
+            throughput_basis = "end_to_end"
         return {
             "wall_seconds": wall,
+            "worker_seconds": worker_diagnostics.get("total_worker_seconds"),
+            "first_output_seconds": first_output,
+            "throughput_tokens_per_second": float(completion_tokens) / float(inference_seconds),
+            "throughput_basis": throughput_basis,
             "prompt_tokens": usage.get("prompt_tokens"),
-            "generated_tokens": usage.get("completion_tokens"),
+            "generated_tokens": completion_tokens,
             "output_sha256": output_hash(parsed),
         }
 
@@ -404,14 +459,15 @@ class BenchmarkRunner:
         try:
             worker, cold_wall = self.start_worker(profile["id"])
             endpoint = str(worker["endpoint"])
+            benchmark_profile = {**profile, "benchmark_worker_endpoint": endpoint}
             model = self.worker_payload(endpoint, "/model")
             metrics_before = safe_runtime_metrics(self.worker_payload(endpoint, "/metrics"))
-            self.run_workload(profile)  # excluded benchmark warm-up
+            self.run_workload(benchmark_profile)  # excluded benchmark warm-up
             samples: list[dict[str, Any]] = []
             failures: list[dict[str, str]] = []
             for index in range(self.preset.repetitions):
                 try:
-                    samples.append({"iteration": index + 1, **self.run_workload(profile)})
+                    samples.append({"iteration": index + 1, **self.run_workload(benchmark_profile)})
                 except Exception as error:
                     failures.append({"iteration": str(index + 1), **sanitise_error(error)})
             metrics_after = safe_runtime_metrics(self.worker_payload(endpoint, "/metrics"))
@@ -535,25 +591,28 @@ def markdown_report(report: dict[str, Any]) -> str:
                 f"## {family}",
                 "",
                 "| Worker | Status | Cold start (s) | Median request (s) | p95 request (s) "
-                "| Median throughput (tok/s) | Peak device/GTT (GiB) |",
-                "|---|---:|---:|---:|---:|---:|---:|",
+                "| Median first output (s) | Median throughput (tok/s) | Peak device/GTT (GiB) |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for item in rows:
             summary = item.get("summary") or {}
             wall = summary.get("wall_seconds") or {}
+            first_output = summary.get("first_output_seconds") or {}
             throughput = summary.get("throughput_tokens_per_second") or {}
             metrics = item.get("metrics_after") or {}
             peak = metrics.get("peak_memory_allocated_bytes")
             if peak is None:
                 peak = metrics.get("system_gtt_peak_used_bytes")
             lines.append(
-                "| {profile} | {status} | {cold} | {wall} | {p95} | {throughput} | {peak} |".format(
+                "| {profile} | {status} | {cold} | {wall} | {p95} | {first_output} "
+                "| {throughput} | {peak} |".format(
                     profile=item.get("worker_name") or item.get("worker_id", "unknown"),
                     status=item.get("status", "failed"),
                     cold=format_number(item.get("cold_start_wall_seconds")),
                     wall=format_number(wall.get("median")),
                     p95=format_number(wall.get("p95")),
+                    first_output=format_number(first_output.get("median")),
                     throughput=format_number(throughput.get("median")),
                     peak=format_number(peak / 1024**3 if isinstance(peak, int | float) else None),
                 )
