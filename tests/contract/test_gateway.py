@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from types import SimpleNamespace
@@ -408,6 +409,76 @@ async def test_translation_gateway_preserves_public_model_and_forwards_internal_
     assert payload["model"] == "visitor-translation"
     assert payload["output_text"] == "Bonjour"
     assert request.app.state.active_request_workers == {}
+
+
+@pytest.mark.asyncio
+async def test_recognition_gateway_preserves_public_model_and_forwards_bounded_audio(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "generation_family": "speech-recognition",
+                "capabilities": {
+                    "speech_recognition": True,
+                    "audio_input": True,
+                    "cancellation": True,
+                    "streaming": False,
+                },
+                "settings": {"sample_rate_hz": 16_000, "channels": 1},
+            }
+        )
+        .to_profile()
+    )
+    fake = FakeGatewayClient(
+        {"ready": True, "busy": False},
+        response_payload={
+            "id": "recognition-1",
+            "object": "audio.transcription",
+            "model": profile.alias,
+            "language": "en",
+            "text": "Ready.",
+            "metrics": {"audio_seconds": 0.1, "inference_seconds": 0.01},
+        },
+    )
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request(
+        {
+            "request_id": "recognition-1",
+            "model": "speechshift-stt",
+            "language": "en",
+            "encoding": "pcm_s16le",
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "audio_base64": base64.b64encode(bytes(3200)).decode("ascii"),
+        }
+    )
+
+    response = await proxy_request(
+        request,
+        {"speechshift-stt": [profile]},
+        "/v1/audio/transcriptions",
+        None,
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["model"] == "speechshift-stt"
+    assert request.app.state.active_request_workers == {}
+
+
+@pytest.mark.asyncio
+async def test_recognition_gateway_rejects_oversized_audio_before_routing(tmp_path) -> None:
+    app = create_gateway_app({}, settings=Settings(data_dir=tmp_path))
+    oversized = base64.b64encode(bytes(256002)).decode("ascii")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/audio/transcriptions",
+            json={"model": "speechshift-stt", "audio_base64": oversized},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_audio"
 
 
 @pytest.mark.asyncio

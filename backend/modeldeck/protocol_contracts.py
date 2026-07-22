@@ -85,5 +85,13 @@ PROTOCOL_CONTRACTS = {
             required_worker_settings={"sample_rate_hz": 24000},
             surfaces=("POST /v1/audio/speech",),
         ),
+        ProtocolContract(
+            id="speech-recognition-v1",
+            display_name="Speech recognition",
+            generation_family=GenerationFamily.SPEECH_RECOGNITION,
+            required_capabilities=("speech_recognition", "audio_input", "cancellation"),
+            required_worker_settings={"sample_rate_hz": 16000, "channels": 1},
+            surfaces=("POST /v1/audio/transcriptions",),
+        ),
     )
 }

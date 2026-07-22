@@ -260,6 +260,34 @@ def test_qwen_tts_launch_is_isolated_offline_and_has_no_arch_override(monkeypatc
     assert "HSA_OVERRIDE_GFX_VERSION" not in launch.environment
 
 
+def test_whisper_launch_is_isolated_offline_and_allowlisted(monkeypatch, tmp_path) -> None:
+    spec = SPEECHSHIFT_MODEL_SPECS["openai/whisper-small.en"]
+    profile = create_local_profile(
+        LocalProfileRequest(model_id=spec.model_id, revision=spec.revision, alias="speechshift-stt"),
+        cache_root=tmp_path,
+        port=8632,
+        configuration_support="whisper-small-en-rocm",
+    )
+    runtime_python = tmp_path / "whisper/bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_WHISPER_PYTHON", str(runtime_python))
+    monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "unsafe")
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.speech_recognition_worker",
+    ]
+    assert launch.command[launch.command.index("--recognition-timeout-seconds") + 1] == "30"
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
+    assert "HSA_OVERRIDE_GFX_VERSION" not in launch.environment
+
+
 def test_diffusion_q4_launch_uses_isolated_runtime_and_checkpoint(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-q4-rocm")
     runtime_python = tmp_path / "q4/bin/python"

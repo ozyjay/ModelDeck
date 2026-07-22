@@ -127,6 +127,7 @@ def test_ignores_metadata_only_repository_without_a_snapshot(tmp_path: Path) -> 
             "speech-synthesis",
             "qwen3-tts-rocm",
         ),
+        ("openai/whisper-small.en", "speech-recognition", "whisper-small-en-rocm"),
     ],
 )
 def test_recognises_only_complete_pinned_speechshift_snapshots(

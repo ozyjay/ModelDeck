@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -318,3 +320,34 @@ async def test_speech_synthesis_mock_returns_deterministic_24khz_wav() -> None:
     assert first.headers["content-type"] == "audio/wav"
     assert first.headers["x-modeldeck-sample-rate-hz"] == "24000"
     assert first.content == second.content
+
+
+@pytest.mark.asyncio
+async def test_speech_recognition_mock_returns_deterministic_transcript() -> None:
+    app = create_app(
+        worker_id="test-stt",
+        model_id="modeldeck/mock-speech-recognition",
+        revision="fixture-v1",
+        family=GenerationFamily.SPEECH_RECOGNITION,
+        contract_id="speech-recognition-v1",
+        startup_delay=0,
+    )
+    payload = {
+        "request_id": "recognition-1",
+        "model": "speechshift-stt",
+        "language": "en",
+        "encoding": "pcm_s16le",
+        "sample_rate_hz": 16000,
+        "channels": 1,
+        "audio_base64": base64.b64encode(bytes(3200)).decode("ascii"),
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post("/v1/audio/transcriptions", json=payload)
+            second = await client.post("/v1/audio/transcriptions", json=payload)
+
+    assert first.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["text"] == "The local speech recognition Worker is ready."

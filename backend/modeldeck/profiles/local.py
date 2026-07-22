@@ -97,6 +97,10 @@ def create_local_profile(
     elif template.generation_family.value == "speech-synthesis":
         settings["allowed_voices"] = ",".join(QWEN_TTS_VOICES)
         settings["allowed_languages"] = ",".join(QWEN_TTS_LANGUAGES)
+    elif template.generation_family.value == "speech-recognition":
+        spec = SPEECHSHIFT_MODEL_SPECS.get(request.model_id)
+        if spec is None or spec.source_language != "en":
+            raise ValueError("The speech-recognition model is not allowlisted")
     if template.cache_setting == "artifact_path" and artifact_path is None:
         raise ValueError("This runtime requires a discovered allowlisted artefact")
     selected_path = (

@@ -137,6 +137,7 @@ def _capability_hints(generation_family: str | None) -> list[str]:
         "speech-conversation": ["audio-input", "audio-output", "full-duplex"],
         "text-translation": ["translation"],
         "speech-synthesis": ["audio-output", "speech-synthesis"],
+        "speech-recognition": ["audio-input", "speech-recognition"],
     }.get(generation_family, [])
 
 

@@ -119,6 +119,18 @@ MOCK_WORKER_TEMPLATES = {
             },
             fixed_settings={"sample_rate_hz": 24000},
         ),
+        MockWorkerTemplate(
+            "speech-recognition-v1",
+            "modeldeck/mock-speech-recognition",
+            "Speech recognition mock",
+            {
+                "streaming": False,
+                "cancellation": True,
+                "audio_input": True,
+                "speech_recognition": True,
+            },
+            fixed_settings={"sample_rate_hz": 16000, "channels": 1},
+        ),
     )
 }
 
@@ -134,4 +146,5 @@ def legacy_mock_contract(model_id: str, family: GenerationFamily) -> str | None:
         GenerationFamily.SPEECH_CONVERSATION: "speech-conversation-v1",
         GenerationFamily.TEXT_TRANSLATION: None,
         GenerationFamily.SPEECH_SYNTHESIS: "speech-synthesis-v1",
+        GenerationFamily.SPEECH_RECOGNITION: "speech-recognition-v1",
     }.get(family)

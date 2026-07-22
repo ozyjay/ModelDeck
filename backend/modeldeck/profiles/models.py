@@ -94,4 +94,14 @@ class ModelProfile(BaseModel):
             raise ValueError(
                 "speech-synthesis profiles must advertise cancellable, non-streaming audio output"
             )
+        if self.generation_family == GenerationFamily.SPEECH_RECOGNITION and not (
+            self.capabilities.speech_recognition
+            and self.capabilities.audio_input
+            and self.capabilities.cancellation
+            and not self.capabilities.streaming
+            and not self.capabilities.audio_output
+        ):
+            raise ValueError(
+                "speech-recognition profiles must advertise cancellable, non-streaming audio input"
+            )
         return self

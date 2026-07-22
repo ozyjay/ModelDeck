@@ -36,6 +36,7 @@ class Settings:
     scenechat_timeout_seconds: float = 75.0
     translation_timeout_seconds: float = 65.0
     speech_synthesis_timeout_seconds: float = 130.0
+    speech_recognition_timeout_seconds: float = 35.0
     # Directly constructed Settings retain legacy behaviour for embedded/test apps.
     # Production Settings.from_env() enables the conservative thermal policy by default.
     thermal_throttling: ThermalPolicyConfig = field(
@@ -121,6 +122,9 @@ class Settings:
             translation_timeout_seconds=float(os.getenv("MODELDECK_TRANSLATION_TIMEOUT_SECONDS", "65")),
             speech_synthesis_timeout_seconds=float(
                 os.getenv("MODELDECK_SPEECH_SYNTHESIS_TIMEOUT_SECONDS", "130")
+            ),
+            speech_recognition_timeout_seconds=float(
+                os.getenv("MODELDECK_SPEECH_RECOGNITION_TIMEOUT_SECONDS", "35")
             ),
             thermal_throttling=thermal_throttling,
         )

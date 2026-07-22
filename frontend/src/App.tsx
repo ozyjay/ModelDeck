@@ -549,7 +549,7 @@ function workerParameterPayload(template: RuntimeTemplate, values: WorkerParamet
     dtype: values.dtype,
     lifecycle: values.lifecycle,
     ...(["autoregressive", "vision-language"].includes(template.generation_family) ? { context_length: values.contextLength } : {}),
-    ...(!["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family)
+    ...(!["speech-conversation", "text-translation", "speech-synthesis", "speech-recognition"].includes(template.generation_family)
       ? { maximum_new_tokens: values.maximumNewTokens }
       : {}),
     ...(template.generation_family === "text-diffusion" ? { maximum_denoising_steps: values.maximumDenoisingSteps } : {}),
@@ -560,7 +560,7 @@ function workerParameterPayload(template: RuntimeTemplate, values: WorkerParamet
 function parametersAreValid(template: RuntimeTemplate, values: WorkerParameterValues) {
   const validContext = !["autoregressive", "vision-language"].includes(template.generation_family)
     || (values.contextLength >= 256 && values.contextLength <= 32768);
-  const validOutput = ["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family)
+  const validOutput = ["speech-conversation", "text-translation", "speech-synthesis", "speech-recognition"].includes(template.generation_family)
     || (values.maximumNewTokens >= 1 && values.maximumNewTokens <= 512);
   const validDenoising = template.generation_family !== "text-diffusion"
     || (values.maximumDenoisingSteps >= 1 && values.maximumDenoisingSteps <= 48);
@@ -576,7 +576,7 @@ function WorkerParameterFields({ template, values, onChange }: {
 }) {
   const update = (change: Partial<WorkerParameterValues>) => onChange({ ...values, ...change });
   const hasContext = ["autoregressive", "vision-language"].includes(template.generation_family);
-  const hasOutput = !["speech-conversation", "text-translation", "speech-synthesis"].includes(template.generation_family);
+  const hasOutput = !["speech-conversation", "text-translation", "speech-synthesis", "speech-recognition"].includes(template.generation_family);
   const hasDenoising = template.generation_family === "text-diffusion";
   const hasVisualBudget = template.generation_family === "vision-language";
   return <>

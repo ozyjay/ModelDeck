@@ -150,6 +150,21 @@ def test_worker_smoke_requests_generate_for_each_supported_engine():
     )
     assert _worker_smoke_request(synthesis) == ("/native/speech-synthesis/smoke", None, None)
 
+    recognition = autoregressive.model_copy(
+        update={
+            "generation_family": "speech-recognition",
+            "runtime": "whisper-small-en-rocm",
+            "capabilities": {
+                "speech_recognition": True,
+                "audio_input": True,
+                "cancellation": True,
+                "streaming": False,
+            },
+            "settings": {"sample_rate_hz": 16_000, "channels": 1},
+        }
+    )
+    assert _worker_smoke_request(recognition) == ("/native/speech-recognition/smoke", None, None)
+
     diffusion = autoregressive.model_copy(
         update={
             "generation_family": "text-diffusion",

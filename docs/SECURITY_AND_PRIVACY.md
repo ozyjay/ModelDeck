@@ -28,7 +28,9 @@ API-key, and token-shaped fields before persisting JSON Lines files under
 capture is not implemented in this slice. SQLite holds configuration and compatibility
 evidence, not content history.
 
-SpeechShift translation text and generated waveform bytes remain request-scoped in memory.
+SpeechShift translation text, recognition audio and transcripts, and generated waveform
+bytes remain request-scoped in memory. Recognition audio reaches its isolated inference
+child only through stdin; neither audio nor transcript content is written to disk or logged.
 The workers retain only content-free timings, token or byte counts, outcomes and temperature
 metrics. Cancellation ownership is in memory, keyed by a caller-supplied request ID, and is
 released at completion. Speech synthesis fails closed when either required temperature

@@ -561,6 +561,8 @@ def create_v2_router() -> APIRouter:
             timeout = settings.diffusion_timeout_seconds
         elif route["protocol_contract"] == "speech-synthesis-v1":
             timeout = settings.speech_synthesis_timeout_seconds
+        elif route["protocol_contract"] == "speech-recognition-v1":
+            timeout = settings.speech_recognition_timeout_seconds
         elif route["protocol_contract"].startswith("translation-"):
             timeout = settings.translation_timeout_seconds
         else:
@@ -589,7 +591,7 @@ def create_v2_router() -> APIRouter:
             "evidence": next(
                 (
                     name
-                    for name in ("choices", "events", "frames", "ok", "output_text", "audio")
+                    for name in ("choices", "events", "frames", "ok", "output_text", "text", "audio")
                     if result.get(name)
                 ),
                 "response",
@@ -835,6 +837,16 @@ def _route_smoke_request(route):
             "language": "en",
             "response_format": "wav",
         }
+    if contract == "speech-recognition-v1":
+        return "/v1/audio/transcriptions", {
+            "request_id": "modeldeck-route-smoke",
+            "model": public_name,
+            "language": "en",
+            "encoding": "pcm_s16le",
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "audio_base64": "AAAAAA==",
+        }
     raise HTTPException(409, "This protocol requires an interactive smoke-test client")
 
 
@@ -888,4 +900,6 @@ def _worker_smoke_request(definition: WorkerDefinition):
         return "/native/text-translation/smoke", None, None
     if definition.generation_family == "speech-synthesis":
         return "/native/speech-synthesis/smoke", None, None
+    if definition.generation_family == "speech-recognition":
+        return "/native/speech-recognition/smoke", None, None
     raise HTTPException(409, "This Worker family does not support an automatic smoke test")

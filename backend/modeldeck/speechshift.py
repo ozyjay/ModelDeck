@@ -17,6 +17,8 @@ class SpeechShiftModelSpec:
     generation_family: str
     configuration_support: str
     required_files: frozenset[str]
+    licence: str | None = None
+    licence_review: str | None = None
     source_language: LanguageCode | None = None
     target_language: LanguageCode | None = None
 
@@ -43,6 +45,21 @@ QWEN_TTS_REQUIRED_FILES = frozenset(
         "speech_tokenizer/configuration.json",
         "speech_tokenizer/model.safetensors",
         "speech_tokenizer/preprocessor_config.json",
+        "tokenizer_config.json",
+        "vocab.json",
+    }
+)
+WHISPER_REQUIRED_FILES = frozenset(
+    {
+        "added_tokens.json",
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors",
+        "normalizer.json",
+        "preprocessor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
         "tokenizer_config.json",
         "vocab.json",
     }
@@ -82,6 +99,18 @@ SPEECHSHIFT_MODEL_SPECS = {
             configuration_support="qwen3-tts-rocm",
             required_files=QWEN_TTS_REQUIRED_FILES,
         ),
+        SpeechShiftModelSpec(
+            model_id="openai/whisper-small.en",
+            revision="e8727524f962ee844a7319d92be39ac1bd25655a",
+            architecture="WhisperForConditionalGeneration",
+            model_type="whisper",
+            generation_family="speech-recognition",
+            configuration_support="whisper-small-en-rocm",
+            required_files=WHISPER_REQUIRED_FILES,
+            licence="Apache-2.0",
+            licence_review="approved-for-governed-local-inference",
+            source_language="en",
+        ),
     )
 }
 
@@ -93,6 +122,9 @@ QWEN_LANGUAGE_NAMES: dict[LanguageCode, str] = {
     "de": "German",
 }
 QWEN_TTS_SAMPLE_RATE_HZ = 24_000
+WHISPER_SAMPLE_RATE_HZ = 16_000
+WHISPER_MAXIMUM_AUDIO_SECONDS = 8
+WHISPER_MAXIMUM_AUDIO_BYTES = WHISPER_SAMPLE_RATE_HZ * 2 * WHISPER_MAXIMUM_AUDIO_SECONDS
 
 
 def validate_speechshift_snapshot(snapshot: Path, model_id: str, revision: str) -> str | None:

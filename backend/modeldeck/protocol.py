@@ -33,6 +33,7 @@ class GenerationFamily(StrEnum):
     SPEECH_CONVERSATION = "speech-conversation"
     TEXT_TRANSLATION = "text-translation"
     SPEECH_SYNTHESIS = "speech-synthesis"
+    SPEECH_RECOGNITION = "speech-recognition"
 
 
 class LifecycleClass(StrEnum):
@@ -61,6 +62,7 @@ class CapabilitySet(BaseModel):
     full_duplex: bool = False
     translation: bool = False
     speech_synthesis: bool = False
+    speech_recognition: bool = False
 
 
 class WorkerHealth(BaseModel):

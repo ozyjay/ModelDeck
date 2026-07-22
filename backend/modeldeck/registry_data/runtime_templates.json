@@ -102,6 +102,17 @@
       "cache_setting": "cache_root",
       "lifecycle": "resident",
       "dtype": "bfloat16"
+    },
+    {
+      "id": "whisper-small-en-rocm",
+      "display_name": "Whisper small.en ROCm",
+      "runtime": "whisper-small-en-rocm",
+      "generation_family": "speech-recognition",
+      "capabilities": {"streaming": false, "cancellation": true, "audio_input": true, "speech_recognition": true},
+      "settings": {"sample_rate_hz": 16000, "channels": 1, "maximum_audio_seconds": 8, "recognition_timeout_seconds": 30, "startup_timeout_seconds": 300, "warmup_timeout_seconds": 120, "hardware_verification_required": true},
+      "cache_setting": "cache_root",
+      "lifecycle": "resident",
+      "dtype": "float16"
     }
   ]
 }

@@ -129,6 +129,10 @@ async def test_management_lists_and_creates_contract_driven_mock_workers(tmp_pat
                 "/api/workers/mocks",
                 json={"protocol_contract": "speech-synthesis-v1"},
             )
+            recognition = await client.post(
+                "/api/workers/mocks",
+                json={"protocol_contract": "speech-recognition-v1"},
+            )
             invalid_option = await client.post(
                 "/api/workers/mocks",
                 json={"protocol_contract": "openai-chat-v1", "visual_token_budget": 70},
@@ -142,7 +146,7 @@ async def test_management_lists_and_creates_contract_driven_mock_workers(tmp_pat
                 json={"protocol_contract": "openai-chat-v1", "command": "anything"},
             )
 
-    assert len(templates.json()["templates"]) == 9
+    assert len(templates.json()["templates"]) == 10
     assert delayed.status_code == 201, delayed.text
     assert delayed.json()["capabilities"]["completions"] is True
     assert delayed.json()["settings"] == {
@@ -150,6 +154,8 @@ async def test_management_lists_and_creates_contract_driven_mock_workers(tmp_pat
         "mock_scenario": "delayed",
         "mock_delay_ms": 25,
     }
+    assert recognition.status_code == 201
+    assert recognition.json()["capabilities"]["speech_recognition"] is True
     assert translation.json()["settings"]["source_language"] == "en"
     assert translation.json()["settings"]["target_language"] == "fr"
     assert synthesis.json()["settings"]["sample_rate_hz"] == 24_000

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import os
 import time
@@ -18,6 +20,7 @@ from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
+from modeldeck.speechshift import WHISPER_MAXIMUM_AUDIO_BYTES
 from modeldeck.thermal import (
     THERMAL_STATUS_FILENAME,
     THERMAL_WORKLOAD_FILENAME,
@@ -217,6 +220,21 @@ def create_gateway_app(
             timeout_seconds=configured.speech_synthesis_timeout_seconds,
         )
 
+    @app.post("/v1/audio/transcriptions")
+    async def speech_recognition(request: Request):
+        body, validation_error = await read_transcription_envelope(request)
+        if validation_error is not None:
+            return validation_error
+        assert body is not None
+        return await proxy_request(
+            request,
+            active_routes({"speech-recognition-v1"}),
+            "/v1/audio/transcriptions",
+            None,
+            timeout_seconds=configured.speech_recognition_timeout_seconds,
+            body_override=body,
+        )
+
     @app.post("/native/autoregressive/trace")
     async def trace(request: Request):
         return await proxy_request(
@@ -412,9 +430,10 @@ async def proxy_request(
     default_alias: str | None,
     *,
     timeout_seconds: float = 60.0,
+    body_override: dict[str, Any] | None = None,
 ):
     started = time.perf_counter()
-    body = await request.json()
+    body = dict(body_override) if body_override is not None else await request.json()
     alias = str(body.get("model") or default_alias or "")
     candidates = route_candidates(routes, alias)
     if not candidates:
@@ -473,7 +492,11 @@ async def proxy_request(
                     f"Request ID '{request_id}' is already active.",
                     alias,
                 )
-        body["model"] = selected.alias if path == "/v1/translations" else upstream_model(selected, alias)
+        body["model"] = (
+            selected.alias
+            if path in {"/v1/translations", "/v1/audio/transcriptions"}
+            else upstream_model(selected, alias)
+        )
         upstream = client.build_request(
             "POST",
             f"{endpoint(selected)}{path}",
@@ -533,7 +556,11 @@ async def proxy_request(
             request.app.state.thermal_job_tasks.add(task)
             task.add_done_callback(request.app.state.thermal_job_tasks.discard)
             retain_thermal_claim = True
-        if path == "/v1/translations" and response.is_success and isinstance(response_payload, dict):
+        if (
+            path in {"/v1/translations", "/v1/audio/transcriptions"}
+            and response.is_success
+            and isinstance(response_payload, dict)
+        ):
             response_payload["model"] = alias
         if path == "/native/autoregressive/trace" and response.is_success:
             metadata_error = trace_token_metadata_error(response_payload)
@@ -704,10 +731,70 @@ def gateway_operation(path: str) -> str:
         "/v1/completions": "completion",
         "/v1/translations": "translation",
         "/v1/audio/speech": "speech",
+        "/v1/audio/transcriptions": "speech",
         "/v1/refine": "refinement",
         "/v1/diffuse": "diffusion",
         "/native/autoregressive/trace": "completion",
     }.get(path, "heavy_inference")
+
+
+async def read_transcription_envelope(
+    request: Request,
+) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    maximum_characters = ((WHISPER_MAXIMUM_AUDIO_BYTES + 2) // 3) * 4
+    maximum_request_bytes = maximum_characters + 4096
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > maximum_request_bytes:
+                return None, gateway_error(
+                    413, "invalid_audio", "The transcription request exceeds the size limit.", ""
+                )
+        except ValueError:
+            return None, gateway_error(422, "invalid_audio", "Content-Length is invalid.", "")
+    encoded_body = bytearray()
+    try:
+        async for chunk in request.stream():
+            encoded_body.extend(chunk)
+            if len(encoded_body) > maximum_request_bytes:
+                return None, gateway_error(
+                    413, "invalid_audio", "The transcription request exceeds the size limit.", ""
+                )
+        body = json.loads(encoded_body)
+    except (UnicodeDecodeError, ValueError):
+        return None, gateway_error(422, "invalid_audio", "The request body must be JSON.", "")
+    finally:
+        encoded_body.clear()
+    if not isinstance(body, dict):
+        return None, gateway_error(422, "invalid_audio", "The request body must be a JSON object.", "")
+    encoded = body.get("audio_base64")
+    if not isinstance(encoded, str) or not 4 <= len(encoded) <= maximum_characters:
+        return None, gateway_error(
+            422,
+            "invalid_audio",
+            "Audio must contain at most eight seconds of PCM16.",
+            str(body.get("model") or ""),
+        )
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None, gateway_error(
+            422,
+            "invalid_audio",
+            "audio_base64 is not valid base64.",
+            str(body.get("model") or ""),
+        )
+    try:
+        if not decoded or len(decoded) % 2 or len(decoded) > WHISPER_MAXIMUM_AUDIO_BYTES:
+            return None, gateway_error(
+                422,
+                "invalid_audio",
+                "Audio must contain between one sample and eight seconds of PCM16.",
+                str(body.get("model") or ""),
+            )
+    finally:
+        decoded = b""
+    return body, None
 
 
 def _ensure_gateway_thermal_state(request: Request) -> None:

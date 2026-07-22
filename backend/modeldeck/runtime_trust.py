@@ -214,6 +214,24 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             ),
             cache_settings=frozenset({"cache_root"}),
         ),
+        TrustedRuntimeImplementation(
+            id="whisper-small-en-rocm",
+            display_name="Whisper small.en ROCm",
+            generation_family=GenerationFamily.SPEECH_RECOGNITION,
+            capabilities=frozenset({"speech_recognition", "audio_input", "cancellation"}),
+            template_settings=frozenset(
+                {
+                    "sample_rate_hz",
+                    "channels",
+                    "maximum_audio_seconds",
+                    "recognition_timeout_seconds",
+                    "startup_timeout_seconds",
+                    "warmup_timeout_seconds",
+                    "hardware_verification_required",
+                }
+            ),
+            cache_settings=frozenset({"cache_root"}),
+        ),
     )
 }
 

@@ -8,6 +8,7 @@ from modeldeck.registry import (
     runtime_template_registrations,
     runtime_templates,
 )
+from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
 
 
 def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
@@ -24,6 +25,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "moshiko-speech",
         "opus-translation-cpu",
         "qwen3-tts-rocm",
+        "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
     assert registrations["autoregressive-transformers"].source == "packaged"
@@ -114,6 +116,7 @@ def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verificatio
 def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:
     translation = runtime_templates()["opus-translation-cpu"]
     synthesis = runtime_templates()["qwen3-tts-rocm"]
+    recognition = runtime_templates()["whisper-small-en-rocm"]
 
     assert translation.runtime == "marian-transformers-cpu"
     assert translation.generation_family.value == "text-translation"
@@ -126,6 +129,18 @@ def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:
     assert synthesis.capabilities.cancellation is True
     assert synthesis.settings["sample_rate_hz"] == 24_000
     assert synthesis.settings["hardware_verification_required"] is True
+    assert recognition.runtime == "whisper-small-en-rocm"
+    assert recognition.generation_family.value == "speech-recognition"
+    assert recognition.capabilities.speech_recognition is True
+    assert recognition.capabilities.audio_input is True
+    assert recognition.settings["sample_rate_hz"] == 16_000
+    assert recognition.settings["channels"] == 1
+    assert recognition.settings["maximum_audio_seconds"] == 8
+    assert recognition.settings["hardware_verification_required"] is True
+    whisper = SPEECHSHIFT_MODEL_SPECS["openai/whisper-small.en"]
+    assert whisper.revision == "e8727524f962ee844a7319d92be39ac1bd25655a"
+    assert whisper.licence == "Apache-2.0"
+    assert whisper.licence_review == "approved-for-governed-local-inference"
 
 
 def test_unknown_runtime_template_cannot_create_a_profile(tmp_path) -> None:

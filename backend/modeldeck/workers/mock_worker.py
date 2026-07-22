@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 import io
 import json
 import math
@@ -62,6 +64,16 @@ class SpeechSynthesisRequest(BaseModel):
     voice: str
     language: str
     response_format: str = "wav"
+
+
+class TranscriptionRequest(BaseModel):
+    request_id: str
+    model: str
+    language: str = "en"
+    encoding: str = "pcm_s16le"
+    sample_rate_hz: int = 16000
+    channels: int = 1
+    audio_base64: str = Field(min_length=4, max_length=341336)
 
 
 def capabilities(family: GenerationFamily, contract_id: str | None = None) -> CapabilitySet:
@@ -349,6 +361,39 @@ def create_app(
             },
         )
 
+    @app.post("/v1/audio/transcriptions")
+    async def speech_recognition(body: TranscriptionRequest):
+        _require_family(family, GenerationFamily.SPEECH_RECOGNITION)
+        _require_contract(contract_id, {"speech-recognition-v1"})
+        if (
+            body.language != "en"
+            or body.encoding != "pcm_s16le"
+            or body.sample_rate_hz != 16000
+            or body.channels != 1
+        ):
+            raise HTTPException(422, "Only mono English PCM16 at 16 kHz is supported")
+        try:
+            pcm = base64.b64decode(body.audio_base64, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(422, "Invalid PCM16 audio") from error
+        if not pcm or len(pcm) % 2 or len(pcm) > 256000:
+            raise HTTPException(422, "PCM16 audio exceeds the eight-second bound")
+        duration = len(pcm) / 32000
+        pcm = b""
+        return {
+            "id": body.request_id,
+            "object": "audio.transcription",
+            "model": body.model,
+            "language": "en",
+            "text": "The local speech recognition Worker is ready.",
+            "metrics": {
+                "audio_seconds": round(duration, 6),
+                "inference_seconds": 0.001,
+                "total_worker_seconds": 0.002,
+            },
+            "mock": True,
+        }
+
     @app.post("/native/text-translation/smoke")
     async def translation_smoke():
         _require_family(family, GenerationFamily.TEXT_TRANSLATION)
@@ -365,6 +410,11 @@ def create_app(
             "audio_bytes": len(_deterministic_wav()),
             "mock": True,
         }
+
+    @app.post("/native/speech-recognition/smoke")
+    async def recognition_smoke():
+        _require_family(family, GenerationFamily.SPEECH_RECOGNITION)
+        return {"ok": True, "output_kind": "transcript", "language": "en", "mock": True}
 
     @app.websocket("/v1/speech/conversations")
     async def speech_conversation(client: WebSocket):
@@ -436,8 +486,10 @@ def _is_mock_request_path(path: str) -> bool:
         "/smoke",
         "/v1/translations",
         "/v1/audio/speech",
+        "/v1/audio/transcriptions",
         "/native/text-translation/smoke",
         "/native/speech-synthesis/smoke",
+        "/native/speech-recognition/smoke",
     } or path.startswith("/v1/jobs/")
 
 

@@ -655,6 +655,36 @@ def _qwen_tts_launch(profile: ModelProfile, environment: dict[str, str], common:
     )
 
 
+def _speech_recognition_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    python = Path(os.environ.get("MODELDECK_WHISPER_PYTHON", ".venv-whisper-rocm72/bin/python")).expanduser()
+    if not python.is_file():
+        raise ValueError(
+            "Whisper ROCm runtime is missing; run pwsh -NoProfile -File scripts/setup_whisper_rocm72.ps1"
+        )
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Whisper Worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    environment.pop("HSA_OVERRIDE_GFX_VERSION", None)
+    return WorkerLaunch(
+        command=[
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.speech_recognition_worker",
+            *common,
+            "--alias",
+            profile.alias,
+            "--cache-root",
+            str(cache_root),
+            "--recognition-timeout-seconds",
+            str(profile.settings.get("recognition_timeout_seconds", 30)),
+        ],
+        environment=environment,
+    )
+
+
 def _text_diffusion_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -717,6 +747,7 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "moshiko-rocm": _moshiko_launch,
     "marian-transformers-cpu": _translation_launch,
     "qwen3-tts-rocm": _qwen_tts_launch,
+    "whisper-small-en-rocm": _speech_recognition_launch,
 }
 
 

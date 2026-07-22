@@ -60,7 +60,7 @@ class ThermalGuard:
         if snapshot.gpu_edge_celsius > GPU_START_LIMIT_C or snapshot.cpu_package_celsius > CPU_START_LIMIT_C:
             raise ThermalGuardError(
                 "thermal_cooldown_required",
-                "The system must cool before local speech synthesis can begin.",
+                "The system must cool before local inference can begin.",
                 snapshot,
             )
         return snapshot
