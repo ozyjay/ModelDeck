@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HELPERS = PROJECT_ROOT / "scripts" / "environment_helpers.psm1"
 MODELDECK_HELPERS = PROJECT_ROOT / "scripts" / "modeldeck_helpers.psm1"
 RUN_SCRIPT = PROJECT_ROOT / "scripts" / "run.ps1"
+STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 
@@ -101,6 +102,17 @@ def test_run_script_loads_dotenv_before_open_day_overrides() -> None:
 
     assert "environment_helpers.psm1" in script
     assert script.index("Import-ModelDeckEnvironment") < script.index("if ($OpenDay)")
+
+
+def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
+    script = STOP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[1/4] Requesting graceful Worker shutdown" in script
+    assert "[2/4] Stopping ModelDeck services" in script
+    assert "[3/4] Checking for stale ModelDeck Workers" in script
+    assert "[4/4] ModelDeck stopped:" in script
+    assert "not running (no PID file)" in script
+    assert "did not stop gracefully; forcing process" in script
 
 
 def test_checked_in_env_example_uses_only_supported_names() -> None:

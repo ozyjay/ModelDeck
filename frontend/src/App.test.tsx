@@ -618,6 +618,70 @@ describe("ModelDeck v2 operator console", () => {
     expect(within(route).getByRole("option", { name: /DiffusionGemma Q4.*incompatible/ })).toBeDisabled();
   });
 
+  it("selects the compatible Worker when a new Route has only one compatible choice", async () => {
+    const diffusionWorker: Worker = {
+      ...worker,
+      id: "7a19b667-8efc-4440-a60f-b3b17b6ece55",
+      name: "DiffusionGemma Q4",
+      model_id: "google/diffusiongemma-26B-A4B-it",
+      generation_family: "text-diffusion",
+      runtime: "text-diffusion-gptq-rocm",
+      capabilities: { iterative_refinement: true, intermediate_frames: true },
+      port: 8632,
+    };
+    const emptyEvent = {
+      ...eventRecord,
+      definition: { ...eventRecord.definition, demos: [], routes: [] },
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [diffusionWorker, worker];
+    payloads["/api/events"] = { events: [emptyEvent] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add Route" }));
+
+    const route = await screen.findByRole("article", { name: "Route New Route" });
+    const compatibleOption = within(route).getByRole("option", {
+      name: /Qwen token trace · Qwen\/Qwen2.5-0.5B-Instruct/,
+    }) as HTMLOptionElement;
+    expect(compatibleOption.selected).toBe(true);
+  });
+
+  it("selects the sole compatible Worker when the Route contract changes", async () => {
+    const speechWorker: Worker = {
+      ...worker,
+      id: "ed520b3f-31e5-4994-af35-756375476df8",
+      name: "Qwen3 TTS 12Hz 0.6B CustomVoice",
+      model_id: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+      generation_family: "speech-synthesis",
+      runtime: "qwen3-tts-rocm",
+      capabilities: { speech_synthesis: true, audio_output: true, cancellation: true },
+      port: 8634,
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, speechWorker];
+    payloads["/api/protocol-contracts"] = {
+      contracts: [
+        { id: "native-ar-trace-v1", display_name: "Native autoregressive trace", generation_family: "autoregressive", required_capabilities: ["top_k_trace"], surfaces: ["POST /native/autoregressive/trace"] },
+        { id: "speech-synthesis-v1", display_name: "Speech synthesis", generation_family: "speech-synthesis", required_capabilities: ["speech_synthesis", "audio_output", "cancellation"], surfaces: ["POST /v1/audio/speech"] },
+      ],
+    };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const route = await screen.findByRole("article", { name: "Route Token trace" });
+    fireEvent.change(within(route).getByLabelText("Protocol contract"), {
+      target: { value: "speech-synthesis-v1" },
+    });
+
+    const speechOption = within(route).getByRole("option", {
+      name: /Qwen3 TTS 12Hz 0.6B CustomVoice/,
+    }) as HTMLOptionElement;
+    expect(speechOption.selected).toBe(true);
+  });
+
   it("identifies duplicate API Model IDs before autosave", async () => {
     const qwenRoute = {
       ...eventRecord.definition.routes[0],
