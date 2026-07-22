@@ -181,6 +181,11 @@ def _temperatures() -> list[dict[str, Any]]:
     return readings
 
 
+def read_temperature_telemetry() -> list[dict[str, Any]]:
+    """Return the existing normalised Fedora sensor telemetry for policy consumers."""
+    return _temperatures()
+
+
 def _fans() -> list[dict[str, Any]]:
     readings = []
     try:

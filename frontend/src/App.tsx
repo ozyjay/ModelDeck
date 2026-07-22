@@ -5,7 +5,8 @@ import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./a
 import type {
   CompatibilityTest, EventDefinition, EventRecord, EventRevision, EventValidation,
   GatewayStatus, HardwareProbe, LiveState, ManagementHealth, ModelEntry,
-  MockScenario, MockWorkerTemplate, ProtocolContract, RuntimeTemplate, Telemetry, Worker, WorkerLog,
+  MockScenario, MockWorkerTemplate, ProtocolContract, RuntimeTemplate, Telemetry, ThermalStatus,
+  Worker, WorkerLog,
 } from "./types";
 
 type View = "live" | "events" | "workers" | "models" | "advanced";
@@ -116,6 +117,7 @@ export default function App() {
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
   const [hardware, setHardware] = useState<HardwareProbe | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [thermal, setThermal] = useState<ThermalStatus | null>(null);
   const [live, setLive] = useState<LiveState>({ active_event: null, routes: [] });
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
@@ -147,12 +149,13 @@ export default function App() {
   }), [collapsePreferences]);
 
   const refresh = useCallback(async () => {
-    const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextLive, nextWorkers,
+    const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextThermal, nextLive, nextWorkers,
       nextEvents, catalogue, contractResponse, mockTemplateResponse, templateResponse, tests] = await Promise.all([
       getJson<ManagementHealth>("/api/health"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<HardwareProbe>("/api/hardware"),
       getJson<Telemetry>("/api/telemetry"),
+      getJson<ThermalStatus>("/api/thermal"),
       getJson<LiveState>("/api/live"),
       getJson<Worker[]>("/api/workers"),
       getJson<{ events: EventRecord[] }>("/api/events"),
@@ -163,7 +166,7 @@ export default function App() {
       getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
     ]);
     setHealth(nextHealth); setGateway(nextGateway); setHardware(nextHardware);
-    setTelemetry(nextTelemetry); setLive(nextLive); setWorkers(nextWorkers);
+    setTelemetry(nextTelemetry); setThermal(nextThermal); setLive(nextLive); setWorkers(nextWorkers);
     setEvents(nextEvents.events); setModels(catalogue.models);
     setContracts(contractResponse.contracts); setMockTemplates(mockTemplateResponse.templates); setTemplates(templateResponse.templates);
     setCompatibility(tests.tests);
@@ -187,6 +190,7 @@ export default function App() {
         getJson<Worker[]>("/api/workers").then(setWorkers),
         getJson<LiveState>("/api/live").then(setLive),
         getJson<GatewayStatus>("/api/gateway/status").then(setGateway),
+        getJson<ThermalStatus>("/api/thermal").then(setThermal),
       ]).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
@@ -228,16 +232,17 @@ export default function App() {
           <div className="topbar-status">
             <button className="secondary collapse-all-button" onClick={() => collapseControls.setAllCollapsed(!collapsePreferences.allCollapsed)}>{collapsePreferences.allCollapsed ? "Expand all" : "Collapse all"}</button>
             {health && <div className={`mode-badge ${health.open_day ? "locked" : "unlocked"}`} aria-label="Configuration status"><StatusDot state={health.open_day ? "warn" : "good"} /><span>{health.open_day ? "Open Day · configuration locked" : "Configuration unlocked"}</span></div>}
+            {thermal && <div className={`mode-badge ${thermal.state === "normal" ? "unlocked" : "locked"}`} aria-label="Thermal status"><StatusDot state={thermal.state === "normal" ? "good" : thermal.state === "warm" || thermal.state === "hot" ? "warn" : "bad"} /><span>Thermal: {humanise(thermal.state)}{thermal.temperature_c == null ? "" : ` · ${thermal.temperature_c.toFixed(1)}°C`}</span></div>}
             <div className={`gateway-badge ${gateway?.available ? "ready" : "unavailable"}`}><StatusDot state={gateway?.available ? "good" : "bad"} /><span>{gateway?.available ? "Gateway available" : "Gateway unavailable"}</span></div>
           </div>
         </header>
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
-        {!health || !hardware || !telemetry || !gateway ? <Unavailable retry={refresh} />
+        {!health || !hardware || !telemetry || !thermal || !gateway ? <Unavailable retry={refresh} />
           : view === "live" ? <LiveView live={live} workers={workers} models={models} operate={operate} pending={pending} />
           : view === "events" ? <EventsView events={events} workers={workers} contracts={contracts} mockTemplates={mockTemplates} openDay={health.open_day} refresh={refresh} />
           : view === "workers" ? <WorkersView workers={workers} templates={templates} mockTemplates={mockTemplates} pending={pending} operate={operate} refresh={refresh} openDay={health.open_day} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.open_day} />
-          : <AdvancedView hardware={hardware} telemetry={telemetry} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
+          : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
     </div>
     </CollapseContext.Provider>
@@ -802,8 +807,9 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   </div>;
 }
 
-function AdvancedView({ hardware, telemetry, contracts, templates, compatibility, workers }: { hardware: HardwareProbe; telemetry: Telemetry; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[] }) {
+function AdvancedView({ hardware, telemetry, thermal, contracts, templates, compatibility, workers }: { hardware: HardwareProbe; telemetry: Telemetry; thermal: ThermalStatus; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[] }) {
   return <div className="view-stack"><section className="panel"><PanelHeading title="Detected hardware" detail="Reported, never assumed" /><DefinitionList rows={[["Configured target", `${hardware.configured.gpu} (${hardware.configured.gpu_architecture})`], ["Detected Fedora", hardware.detected.fedora_release ?? "Not detected"], ["Kernel", hardware.detected.kernel], ["ROCm packages", hardware.detected.rocm_packages.join(", ") || "Not detected"], ["Available memory", formatBytes(telemetry.memory.available_bytes)]]} /></section>
+    <section className="panel"><PanelHeading title="Thermal workload policy" detail={thermal.enabled ? "ModelDeck self-throttling active" : "Disabled by configuration"} /><DefinitionList rows={[["ModelDeck thermal state", humanise(thermal.state)], ["APU temperature", thermal.temperature_c == null ? "Unavailable" : `${thermal.temperature_c.toFixed(1)}°C`], ["Control sensor", thermal.sensor_id ?? "Awaiting selection"], ["Heavy concurrency", `${thermal.active_heavy_concurrency ?? "Unknown"} active · limit ${thermal.heavy_concurrency_limit}`], ["Background benchmarks", thermal.background_paused ? "Paused" : "Permitted"], ["Model loading", thermal.model_loading_allowed ? "Permitted" : "Blocked"], ["Scene refresh interval", `${thermal.scenechat_degradation.minimum_frame_interval_seconds} seconds`], ["Reason", humanise(thermal.reason_code)], ["Host power policy", thermal.host_power_policy.service_active === true ? "Active · external read-only" : "Unavailable or inactive · external read-only"], ["TuneD profile", thermal.host_power_policy.tuned_profile ?? "Unavailable"]]} /></section>
     <div className="two-column"><section className="panel"><PanelHeading title="Trusted protocol contracts" detail={`${contracts.length} code-owned`} /><ul className="status-list">{contracts.map((contract) => <li key={contract.id}><StatusDot state="good" /><span><strong>{contract.display_name}</strong><small>{contract.id} · {contract.surfaces.join(", ")}</small></span></li>)}</ul></section><section className="panel"><PanelHeading title="Trusted runtimes" detail={`${templates.length} installed`} /><ul className="status-list">{templates.map((template) => <li key={template.id}><StatusDot state="good" /><span><strong>{template.display_name}</strong><small>{template.id} · {template.package_version}</small></span></li>)}</ul></section></div>
     <section className="panel"><PanelHeading title="Compatibility evidence" detail={`${compatibility.length} records`} /><div className="evidence-list">{compatibility.length ? compatibility.map((test) => <details className="evidence-row" key={test.id}><summary><span><StateBadge state={test.result} /><strong>{String(test.evidence.model_id ?? "Unknown Model")}</strong><small>{new Date(test.tested_at).toLocaleString()}</small></span><code>{test.fingerprint.slice(0, 12)}</code></summary><DefinitionList rows={Object.entries(test.evidence).slice(0, 16).map(([key, value]) => [humanise(key), String(value ?? "—")])} /></details>) : <p className="muted">Smoke-test a Worker to record evidence.</p>}</div></section>
     <LogsPanel workers={workers} />

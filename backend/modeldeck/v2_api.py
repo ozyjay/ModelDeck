@@ -18,6 +18,7 @@ from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES, MockWorkerTemplate
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
+from modeldeck.thermal import ThermalAdmissionError
 
 
 class WorkerCreateRequest(BaseModel):
@@ -651,6 +652,8 @@ def _add_lifecycle_route(router: APIRouter, operation: str) -> None:
             return await method(worker_id)
         except KeyError as error:
             raise HTTPException(404, str(error)) from error
+        except ThermalAdmissionError as error:
+            raise HTTPException(429, error.decision.as_dict()) from error
         except RuntimeError as error:
             raise HTTPException(409, str(error)) from error
 

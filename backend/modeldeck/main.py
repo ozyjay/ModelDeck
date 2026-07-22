@@ -20,6 +20,7 @@ from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
+from modeldeck.thermal import ThermalPolicyManager
 from modeldeck.v2_api import create_v2_router
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
@@ -59,11 +60,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             WorkerDefinition.model_validate(record["definition"]) for record in store.list_workers()
         )
     }
+    thermal_manager = ThermalPolicyManager(
+        configured.thermal_throttling,
+        data_dir=configured.data_dir,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
-        await app.state.supervisor.stop_all()
+        await app.state.thermal_manager.start()
+        try:
+            yield
+        finally:
+            await app.state.supervisor.stop_all()
+            await app.state.thermal_manager.stop()
 
     app = FastAPI(
         title="ModelDeck management API",
@@ -72,12 +81,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
+    app.state.thermal_manager = thermal_manager
     app.state.compatibility_store = store
     app.state.worker_definitions = definitions
     app.state.supervisor = WorkerSupervisor(
         [definition.to_profile() for definition in definitions.values()],
         log_dir=configured.log_dir,
+        thermal_manager=thermal_manager,
     )
+    thermal_manager.critical_handler = app.state.supervisor.critical_stop_all
     app.state.runtime_registrations = runtime_template_registrations(configured.data_dir)
 
     assets = FRONTEND_ROOT / "assets"
@@ -136,6 +148,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "active_model_processes",
             )
         }
+
+    @app.get("/api/thermal")
+    async def thermal_status(request: Request):
+        return request.app.state.thermal_manager.status()
 
     @app.get("/api/catalogue")
     async def catalogue(request: Request):

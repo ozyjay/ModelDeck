@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,13 +13,22 @@ from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
+    claim_thermal_capacity,
     invalid_trace_metadata,
     proxy_binary_request,
     proxy_request,
+    release_thermal_capacity,
     route_candidates,
     trace_token_metadata_error,
     upstream_headers,
     upstream_model,
+)
+from modeldeck.thermal import (
+    THERMAL_STATUS_FILENAME,
+    ThermalPolicyConfig,
+    WorkloadClass,
+    WorkloadRequest,
+    write_thermal_status,
 )
 from starlette.requests import Request
 
@@ -166,6 +176,38 @@ def gateway_request(payload: dict) -> Request:
         )
     )
     return Request({"type": "http", "method": "POST", "headers": [], "app": app}, receive)
+
+
+@pytest.mark.asyncio
+async def test_gateway_queues_shared_heavy_capacity_with_a_bounded_retry(tmp_path) -> None:
+    thermal = ThermalPolicyConfig(
+        recovery_step_seconds=0.01,
+        minimum_state_dwell_seconds=0,
+        host_policy_status_enabled=False,
+    )
+    app = create_gateway_app({}, Settings(data_dir=tmp_path, thermal_throttling=thermal))
+    write_thermal_status(
+        tmp_path / THERMAL_STATUS_FILENAME,
+        {
+            "state": "normal",
+            "published_monotonic": time.monotonic(),
+            "telemetry_age_seconds": 0,
+            "heavy_concurrency_limit": 1,
+        },
+    )
+    request = Request({"type": "http", "method": "POST", "headers": [], "app": app})
+    workload = WorkloadRequest("first", WorkloadClass.INTERACTIVE)
+
+    _, first_claimed = await claim_thermal_capacity(request, workload)
+    queued, second_claimed = await claim_thermal_capacity(
+        request, WorkloadRequest("second", WorkloadClass.INTERACTIVE)
+    )
+    await release_thermal_capacity(request)
+
+    assert first_claimed is True
+    assert second_claimed is False
+    assert queued.reason_code == "thermal_queue_timeout"
+    assert app.state.thermal_queued_requests == 1
 
 
 class FakeGatewayClient:

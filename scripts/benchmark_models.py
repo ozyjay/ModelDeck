@@ -277,6 +277,7 @@ class BenchmarkRunner:
 
     def run_autoregressive(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
+            "automatic": True,
             "model": profile["gateway_model"],
             "prompt": "Summarise the role of local inference in one concise paragraph.",
             "seed": 7,
@@ -308,6 +309,7 @@ class BenchmarkRunner:
 
     def run_llama_vulkan(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
+            "automatic": True,
             "model": profile["gateway_model"],
             "messages": [
                 {
@@ -344,6 +346,7 @@ class BenchmarkRunner:
 
     def run_diffusion(self, profile: dict[str, Any]) -> dict[str, Any]:
         payload = {
+            "automatic": True,
             "model": profile["gateway_model"],
             "prompt": "Explain why reproducible local benchmarks are useful in concise prose.",
             "max_length": self.preset.diffusion_tokens,
@@ -384,6 +387,7 @@ class BenchmarkRunner:
         prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
         prompt += "\n\nSelected curated question:\nDescribe the scene."
         payload = {
+            "automatic": True,
             "model": profile["gateway_model"],
             "messages": [
                 {

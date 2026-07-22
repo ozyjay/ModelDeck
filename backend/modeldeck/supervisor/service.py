@@ -17,6 +17,13 @@ import httpx
 
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import WorkerEvent, WorkerState
+from modeldeck.thermal import (
+    AdmissionAction,
+    ThermalAdmissionError,
+    ThermalPolicyManager,
+    WorkloadClass,
+    WorkloadRequest,
+)
 
 
 @dataclass
@@ -58,6 +65,7 @@ class WorkerSupervisor:
         startup_timeout: float = 10.0,
         stop_timeout: float = 4.0,
         log_dir: Path | None = None,
+        thermal_manager: ThermalPolicyManager | None = None,
     ) -> None:
         self.workers = {profile.id: ManagedWorker(profile=profile) for profile in profiles}
         self.startup_timeout = startup_timeout
@@ -70,6 +78,7 @@ class WorkerSupervisor:
             lambda: deque(maxlen=self._MAX_LOG_RECORDS)
         )
         self.log_dir = log_dir
+        self.thermal_manager = thermal_manager
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             self._load_persisted_logs()
@@ -113,6 +122,21 @@ class WorkerSupervisor:
         async with self._load_lock, self._worker_locks[worker_id]:
             if worker.process and worker.process.returncode is None:
                 return worker.snapshot()
+            if self.thermal_manager is not None:
+                status = self.thermal_manager.status()
+                decision = self.thermal_manager.admission.evaluate(
+                    WorkloadRequest(
+                        worker_id,
+                        WorkloadClass.MODEL_LOAD,
+                        backend=worker.profile.preferred_runtime,
+                    ),
+                    self.thermal_manager.machine.state,
+                    temperature_c=status["temperature_c"],
+                    telemetry_age_seconds=status["telemetry_age_seconds"],
+                    active_heavy_workloads=self.thermal_manager.active_heavy_workloads(),
+                )
+                if decision.action not in {AdmissionAction.ALLOW, AdmissionAction.ALLOW_DEGRADED}:
+                    raise ThermalAdmissionError(decision)
             if worker.profile.lifecycle.value == "exclusive":
                 for other_id, other in self.workers.items():
                     if (
@@ -204,6 +228,17 @@ class WorkerSupervisor:
     async def stop_all(self) -> None:
         for worker_id in self.workers:
             await self.stop(worker_id)
+
+    async def critical_stop_all(self) -> None:
+        """Invoke immediate process isolation for the host-level critical policy."""
+        for worker in self.workers.values():
+            if worker.process is None or worker.process.returncode is not None:
+                continue
+            await self._transition(worker, WorkerState.STOPPING, "Critical thermal safety stop")
+            await self._terminate(worker)
+            worker.process = None
+            worker.started_at = None
+            await self._transition(worker, WorkerState.STOPPED, "Worker isolated at critical temperature")
 
     async def next_event(self) -> WorkerEvent:
         return await self._events.get()

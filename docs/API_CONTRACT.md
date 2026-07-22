@@ -6,7 +6,7 @@ All services bind to `127.0.0.1` by default.
 
 ### Discovery and trust
 
-- `GET /api/health`, `/api/hardware`, `/api/telemetry`, `/api/gateway/status`
+- `GET /api/health`, `/api/hardware`, `/api/telemetry`, `/api/thermal`, `/api/gateway/status`
 - `GET /api/catalogue` and `POST /api/catalogue/policy`
 - `GET /api/runtime-templates` and `/api/protocol-contracts`
 - `GET /api/compatibility`
@@ -71,7 +71,7 @@ Model identifiers.
 
 ## Gateway (`:8600`)
 
-- `GET /v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/routes`
+- `GET /v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/routes`, `/v1/thermal`, `/v1/metrics`
 - `POST /v1/chat/completions`, `/v1/completions`
 - `POST /native/autoregressive/trace`
 - `POST /v1/refine`, `/v1/diffuse`
@@ -91,3 +91,10 @@ process. It forwards streams and cancellation and retains local diffusion-job af
 When no matching Worker is ready, the response is HTTP 503 with code
 `local_route_unavailable`, the requested Route and `cloud_fallback_attempted: false`.
 Worker UUIDs and the removed provider-selection model are not part of public responses.
+
+The management service owns thermal state and publishes a bounded runtime snapshot for
+the gateway. Thermal admission failures use stable codes, include the current state and
+temperature when available, and return `Retry-After` for retryable work. Successful
+degraded requests include `x-modeldeck-thermal-state`, `x-modeldeck-thermal-reason`, and,
+where applicable, `x-modeldeck-minimum-frame-interval-seconds`. Host TuneD and service
+details in thermal status are external, read-only diagnostics.

@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,6 +18,19 @@ from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
+from modeldeck.thermal import (
+    THERMAL_STATUS_FILENAME,
+    THERMAL_WORKLOAD_FILENAME,
+    AdmissionAction,
+    AdmissionDecision,
+    ThermalAdmissionController,
+    ThermalPolicyConfig,
+    ThermalState,
+    WorkloadRequest,
+    classify_workload,
+    read_thermal_status,
+    write_thermal_workload_activity,
+)
 
 
 def create_gateway_app(
@@ -28,6 +42,18 @@ def create_gateway_app(
     app.state.last_request_diagnostics = None
     app.state.active_request_workers = {}
     app.state.active_request_lock = asyncio.Lock()
+    app.state.thermal_active_heavy = 0
+    app.state.thermal_capacity_lock = asyncio.Lock()
+    app.state.thermal_capacity_condition = asyncio.Condition(app.state.thermal_capacity_lock)
+    app.state.thermal_admission = ThermalAdmissionController(configured.thermal_throttling)
+    app.state.thermal_status_path = configured.data_dir / THERMAL_STATUS_FILENAME
+    app.state.thermal_workload_path = configured.data_dir / THERMAL_WORKLOAD_FILENAME
+    app.state.thermal_throttled_requests = 0
+    app.state.thermal_queued_requests = 0
+    app.state.thermal_queue_delay_seconds = 0.0
+    app.state.thermal_job_claims = set()
+    app.state.thermal_job_tasks = set()
+    write_thermal_workload_activity(app.state.thermal_workload_path, 0)
     base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
@@ -125,7 +151,23 @@ def create_gateway_app(
 
     @app.get("/v1/metrics")
     async def metrics(request: Request):
-        return {"last_request": request.app.state.last_request_diagnostics}
+        return {
+            "last_request": request.app.state.last_request_diagnostics,
+            "thermal": {
+                "active_heavy_concurrency": request.app.state.thermal_active_heavy,
+                "throttled_request_count": request.app.state.thermal_throttled_requests,
+                "queued_for_thermal_count": request.app.state.thermal_queued_requests,
+                "average_thermal_queue_delay_seconds": (
+                    request.app.state.thermal_queue_delay_seconds / request.app.state.thermal_queued_requests
+                    if request.app.state.thermal_queued_requests
+                    else 0.0
+                ),
+            },
+        }
+
+    @app.get("/v1/thermal")
+    async def thermal_status(request: Request):
+        return gateway_thermal_status(request)
 
     @app.get("/v1/routes")
     async def route_list():
@@ -205,11 +247,14 @@ def create_gateway_app(
         return response
 
     @app.get("/v1/jobs/{job_id}")
-    async def diffusion_job(job_id: str):
+    async def diffusion_job(job_id: str, request: Request):
         worker = await resolve_job_worker(job_id, job_routes, active_routes())
         if worker is None:
             raise HTTPException(404, "Unknown diffusion job")
-        return await proxy_job_request(worker, f"/v1/jobs/{job_id}")
+        response = await proxy_job_request(worker, f"/v1/jobs/{job_id}")
+        if job_response_is_terminal(response):
+            await release_thermal_job_capacity(request, job_id)
+        return response
 
     @app.get("/v1/jobs/{job_id}/events")
     async def diffusion_job_events(job_id: str):
@@ -219,11 +264,14 @@ def create_gateway_app(
         return await proxy_job_events(worker, f"/v1/jobs/{job_id}/events")
 
     @app.post("/v1/jobs/{job_id}/cancel")
-    async def cancel_diffusion_job(job_id: str):
+    async def cancel_diffusion_job(job_id: str, request: Request):
         worker = await resolve_job_worker(job_id, job_routes, active_routes())
         if worker is None:
             raise HTTPException(404, "Unknown diffusion job")
-        return await proxy_job_request(worker, f"/v1/jobs/{job_id}/cancel", method="POST")
+        response = await proxy_job_request(worker, f"/v1/jobs/{job_id}/cancel", method="POST")
+        if response.status_code < 300:
+            await release_thermal_job_capacity(request, job_id)
+        return response
 
     @app.post("/v1/requests/{request_id}/cancel")
     async def cancel(request_id: str, request: Request):
@@ -267,10 +315,32 @@ def create_gateway_app(
     @app.websocket("/v1/speech/conversations")
     async def speech_conversation(client_socket: WebSocket):
         await client_socket.accept()
+        thermal_claimed = False
         try:
             first = await asyncio.wait_for(client_socket.receive_text(), timeout=5)
             start = json_loads(first.encode())
             alias = str(start.get("model") or "")
+            thermal_decision, thermal_claimed = await claim_thermal_capacity(
+                client_socket,
+                WorkloadRequest(
+                    workload_id=str(start.get("request_id") or f"speech-{id(client_socket)}"),
+                    workload_class=classify_workload("speech", automatic=bool(start.get("automatic"))),
+                    automatic=bool(start.get("automatic")),
+                    model=alias,
+                ),
+            )
+            if not thermal_claimed:
+                await client_socket.send_json(
+                    {
+                        "type": "error",
+                        "code": thermal_decision.reason_code,
+                        "message": thermal_decision.reason,
+                        "thermal": thermal_decision.as_dict(),
+                    }
+                )
+                await client_socket.close(code=1013)
+                return
+            start.pop("automatic", None)
             candidates = route_candidates(active_routes({"speech-conversation-v1"}), alias)
             if not candidates:
                 await client_socket.send_json({"type": "error", "code": "local_route_unavailable"})
@@ -328,6 +398,9 @@ def create_gateway_app(
         except (ValueError, TimeoutError, WebSocketDisconnect):
             if client_socket.client_state.name != "DISCONNECTED":
                 await client_socket.close(code=1008)
+        finally:
+            if thermal_claimed:
+                await release_thermal_capacity(client_socket)
 
     return app
 
@@ -347,10 +420,24 @@ async def proxy_request(
     if not candidates:
         _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
         return unavailable(alias, "unknown")
+    thermal_decision, thermal_claimed = await claim_thermal_capacity(
+        request,
+        WorkloadRequest(
+            workload_id=str(body.get("request_id") or f"gateway-{id(request)}"),
+            workload_class=classify_workload(gateway_operation(path), automatic=bool(body.get("automatic"))),
+            automatic=bool(body.get("automatic")),
+            model=alias,
+        ),
+    )
+    if not thermal_claimed:
+        _record_gateway_diagnostic(request, alias, started, "thermal_throttled", thermal_decision.reason_code)
+        return thermal_error_response(alias, thermal_decision)
+    body.pop("automatic", None)
     client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
     selected = None
     request_id = str(body.get("request_id") or "")
     request_claimed = False
+    retain_thermal_claim = False
     health_results: list[dict[str, Any] | None] = []
     try:
         for profile in candidates:
@@ -361,6 +448,7 @@ async def proxy_request(
                 break
         if selected is None:
             await client.aclose()
+            await release_thermal_capacity(request)
             if health_results and all(
                 health is not None and health.get("busy") is True for health in health_results
             ):
@@ -378,6 +466,7 @@ async def proxy_request(
             request_claimed = await claim_active_request(request, request_id, selected)
             if not request_claimed:
                 await client.aclose()
+                await release_thermal_capacity(request)
                 return gateway_error(
                     409,
                     "duplicate_request_id",
@@ -394,6 +483,7 @@ async def proxy_request(
         response = await client.send(upstream, stream=bool(body.get("stream")))
     except httpx.TimeoutException:
         await client.aclose()
+        await release_thermal_capacity(request)
         if request_claimed:
             await release_active_request(request, request_id, selected)
         _record_gateway_diagnostic(request, alias, started, "error", "gateway_timeout")
@@ -405,6 +495,7 @@ async def proxy_request(
         )
     except (httpx.HTTPError, ValueError):
         await client.aclose()
+        await release_thermal_capacity(request)
         if request_claimed:
             await release_active_request(request, request_id, selected)
         _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
@@ -414,15 +505,34 @@ async def proxy_request(
             forward_stream(
                 response,
                 client,
-                (lambda: release_active_request(request, request_id, selected) if request_claimed else None),
+                lambda: release_gateway_claims(
+                    request,
+                    request_id if request_claimed else "",
+                    selected,
+                ),
             ),
             status_code=response.status_code,
             media_type=response.headers.get("content-type", "text/event-stream"),
-            headers=worker_response_headers(selected),
+            headers={**worker_response_headers(selected), **thermal_response_headers(thermal_decision)},
         )
     try:
         payload = await response.aread()
         response_payload = json_loads(payload)
+        if (
+            path == "/v1/diffuse"
+            and response.is_success
+            and isinstance(response_payload, dict)
+            and response_payload.get("job_id")
+        ):
+            job_id = str(response_payload["job_id"])
+            await retain_thermal_job_capacity(request, job_id)
+            task = asyncio.create_task(
+                monitor_thermal_job(request, selected, job_id, timeout_seconds),
+                name=f"modeldeck-thermal-job-{job_id}",
+            )
+            request.app.state.thermal_job_tasks.add(task)
+            task.add_done_callback(request.app.state.thermal_job_tasks.discard)
+            retain_thermal_claim = True
         if path == "/v1/translations" and response.is_success and isinstance(response_payload, dict):
             response_payload["model"] = alias
         if path == "/native/autoregressive/trace" and response.is_success:
@@ -444,13 +554,15 @@ async def proxy_request(
         return JSONResponse(
             response_payload,
             status_code=response.status_code,
-            headers=worker_response_headers(selected),
+            headers={**worker_response_headers(selected), **thermal_response_headers(thermal_decision)},
         )
     finally:
         await response.aclose()
         await client.aclose()
         if request_claimed:
             await release_active_request(request, request_id, selected)
+        if not retain_thermal_claim:
+            await release_thermal_capacity(request)
 
 
 async def proxy_binary_request(
@@ -472,6 +584,18 @@ async def proxy_binary_request(
     candidates = route_candidates(routes, alias)
     if not candidates:
         return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
+    thermal_decision, thermal_claimed = await claim_thermal_capacity(
+        request,
+        WorkloadRequest(
+            workload_id=request_id,
+            workload_class=classify_workload(gateway_operation(path), automatic=bool(body.get("automatic"))),
+            automatic=bool(body.get("automatic")),
+            model=alias,
+        ),
+    )
+    if not thermal_claimed:
+        return thermal_error_response(alias, thermal_decision)
+    body.pop("automatic", None)
     selected: ModelProfile | None = None
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5)) as client:
         for profile in candidates:
@@ -481,8 +605,10 @@ async def proxy_binary_request(
                 break
         if selected is None:
             _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
+            await release_thermal_capacity(request)
             return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
         if not await claim_active_request(request, request_id, selected):
+            await release_thermal_capacity(request)
             return gateway_error(
                 409,
                 "duplicate_request_id",
@@ -509,6 +635,7 @@ async def proxy_binary_request(
             return unavailable(alias, GenerationFamily.SPEECH_SYNTHESIS.value)
         finally:
             await release_active_request(request, request_id, selected)
+            await release_thermal_capacity(request)
     response_headers = {
         key: upstream.headers[key]
         for key in (
@@ -519,6 +646,7 @@ async def proxy_binary_request(
         if key in upstream.headers
     }
     response_headers.update(worker_response_headers(selected))
+    response_headers.update(thermal_response_headers(thermal_decision))
     if not upstream.is_success:
         try:
             payload = upstream.json()
@@ -559,6 +687,258 @@ async def claim_active_request(request: Request, request_id: str, profile: Model
             return False
         request.app.state.active_request_workers[request_id] = profile
         return True
+
+
+def gateway_thermal_status(request: Request) -> dict[str, Any]:
+    _ensure_gateway_thermal_state(request)
+    settings = request.app.state.settings if hasattr(request.app.state, "settings") else None
+    config = (
+        settings.thermal_throttling if settings is not None else request.app.state.thermal_admission.config
+    )
+    return read_thermal_status(request.app.state.thermal_status_path, config)
+
+
+def gateway_operation(path: str) -> str:
+    return {
+        "/v1/chat/completions": "chat",
+        "/v1/completions": "completion",
+        "/v1/translations": "translation",
+        "/v1/audio/speech": "speech",
+        "/v1/refine": "refinement",
+        "/v1/diffuse": "diffusion",
+        "/native/autoregressive/trace": "completion",
+    }.get(path, "heavy_inference")
+
+
+def _ensure_gateway_thermal_state(request: Request) -> None:
+    """Keep direct proxy adapters compatible while production uses configured state."""
+    if not hasattr(request.app.state, "thermal_admission"):
+        request.app.state.thermal_admission = ThermalAdmissionController(ThermalPolicyConfig(enabled=False))
+    if not hasattr(request.app.state, "thermal_status_path"):
+        request.app.state.thermal_status_path = Path(".modeldeck") / THERMAL_STATUS_FILENAME
+    if not hasattr(request.app.state, "thermal_workload_path"):
+        request.app.state.thermal_workload_path = None
+    if not hasattr(request.app.state, "thermal_capacity_lock"):
+        request.app.state.thermal_capacity_lock = asyncio.Lock()
+    if not hasattr(request.app.state, "thermal_capacity_condition"):
+        request.app.state.thermal_capacity_condition = asyncio.Condition(
+            request.app.state.thermal_capacity_lock
+        )
+    if not hasattr(request.app.state, "thermal_active_heavy"):
+        request.app.state.thermal_active_heavy = 0
+    if not hasattr(request.app.state, "thermal_throttled_requests"):
+        request.app.state.thermal_throttled_requests = 0
+    if not hasattr(request.app.state, "thermal_queued_requests"):
+        request.app.state.thermal_queued_requests = 0
+    if not hasattr(request.app.state, "thermal_queue_delay_seconds"):
+        request.app.state.thermal_queue_delay_seconds = 0.0
+    if not hasattr(request.app.state, "thermal_job_claims"):
+        request.app.state.thermal_job_claims = set()
+    if not hasattr(request.app.state, "thermal_job_tasks"):
+        request.app.state.thermal_job_tasks = set()
+
+
+async def claim_thermal_capacity(
+    request: Request, workload: WorkloadRequest
+) -> tuple[AdmissionDecision, bool]:
+    status = gateway_thermal_status(request)
+    state = ThermalState(status["state"])
+    controller: ThermalAdmissionController = request.app.state.thermal_admission
+    decision = controller.evaluate(
+        workload,
+        state,
+        temperature_c=status.get("temperature_c"),
+        telemetry_age_seconds=status.get("telemetry_age_seconds"),
+    )
+    if decision.action not in {AdmissionAction.ALLOW, AdmissionAction.ALLOW_DEGRADED}:
+        request.app.state.thermal_throttled_requests += 1
+        if decision.action is AdmissionAction.QUEUE:
+            request.app.state.thermal_queued_requests += 1
+        return decision, False
+    condition: asyncio.Condition = request.app.state.thermal_capacity_condition
+    queued_at: float | None = None
+    deadline = asyncio.get_running_loop().time() + controller.config.recovery_step_seconds
+    async with condition:
+        while True:
+            status = gateway_thermal_status(request)
+            state = ThermalState(status["state"])
+            decision = controller.evaluate(
+                workload,
+                state,
+                temperature_c=status.get("temperature_c"),
+                telemetry_age_seconds=status.get("telemetry_age_seconds"),
+            )
+            if decision.action not in {AdmissionAction.ALLOW, AdmissionAction.ALLOW_DEGRADED}:
+                request.app.state.thermal_throttled_requests += 1
+                return decision, False
+            limit = int(status.get("heavy_concurrency_limit", 0))
+            if request.app.state.thermal_active_heavy < limit:
+                request.app.state.thermal_active_heavy += 1
+                publish_gateway_workload_activity(request)
+                if queued_at is not None:
+                    request.app.state.thermal_queue_delay_seconds += (
+                        asyncio.get_running_loop().time() - queued_at
+                    )
+                return decision, True
+            if queued_at is None:
+                queued_at = asyncio.get_running_loop().time()
+                request.app.state.thermal_queued_requests += 1
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                request.app.state.thermal_throttled_requests += 1
+                return thermal_queue_timeout(controller, state, status, decision), False
+            try:
+                await asyncio.wait_for(
+                    condition.wait(), timeout=min(remaining, controller.config.poll_interval_seconds)
+                )
+            except TimeoutError:
+                if asyncio.get_running_loop().time() < deadline:
+                    continue
+                request.app.state.thermal_throttled_requests += 1
+                return thermal_queue_timeout(controller, state, status, decision), False
+
+
+async def release_thermal_capacity(request: Request) -> None:
+    condition: asyncio.Condition = request.app.state.thermal_capacity_condition
+    async with condition:
+        request.app.state.thermal_active_heavy = max(0, request.app.state.thermal_active_heavy - 1)
+        publish_gateway_workload_activity(request)
+        condition.notify(1)
+
+
+async def retain_thermal_job_capacity(request: Request, job_id: str) -> None:
+    condition: asyncio.Condition = request.app.state.thermal_capacity_condition
+    async with condition:
+        request.app.state.thermal_job_claims.add(job_id)
+
+
+async def release_thermal_job_capacity(request: Request, job_id: str) -> None:
+    condition: asyncio.Condition = request.app.state.thermal_capacity_condition
+    async with condition:
+        if job_id not in request.app.state.thermal_job_claims:
+            return
+        request.app.state.thermal_job_claims.remove(job_id)
+        request.app.state.thermal_active_heavy = max(0, request.app.state.thermal_active_heavy - 1)
+        publish_gateway_workload_activity(request)
+        condition.notify(1)
+
+
+def publish_gateway_workload_activity(request: Request) -> None:
+    path = request.app.state.thermal_workload_path
+    if isinstance(path, Path):
+        write_thermal_workload_activity(path, request.app.state.thermal_active_heavy)
+
+
+async def monitor_thermal_job(
+    request: Request,
+    worker: ModelProfile,
+    job_id: str,
+    timeout_seconds: float,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    unavailable_count = 0
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as client:
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    response = await client.get(f"{endpoint(worker)}/v1/jobs/{job_id}")
+                    payload = response.json()
+                    unavailable_count = 0
+                    if response.status_code == 404 or (
+                        isinstance(payload, dict)
+                        and payload.get("state")
+                        in {
+                            "complete",
+                            "cancelled",
+                            "failed",
+                        }
+                    ):
+                        return
+                except (httpx.HTTPError, ValueError):
+                    unavailable_count += 1
+                    if unavailable_count >= 3:
+                        return
+                await asyncio.sleep(1)
+    finally:
+        await release_thermal_job_capacity(request, job_id)
+
+
+def job_response_is_terminal(response: JSONResponse) -> bool:
+    try:
+        payload = json_loads(response.body)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("state") in {
+        "complete",
+        "cancelled",
+        "failed",
+    }
+
+
+async def release_gateway_claims(
+    request: Request,
+    request_id: str,
+    profile: ModelProfile | None,
+) -> None:
+    if request_id:
+        await release_active_request(request, request_id, profile)
+    await release_thermal_capacity(request)
+
+
+def thermal_queue_timeout(
+    controller: ThermalAdmissionController,
+    state: ThermalState,
+    status: dict[str, Any],
+    decision: AdmissionDecision,
+) -> AdmissionDecision:
+    return AdmissionDecision(
+        action=AdmissionAction.REJECT_RETRYABLE,
+        reason_code="thermal_queue_timeout",
+        reason="ModelDeck is cooling down; shared heavy-work capacity did not become available in time.",
+        thermal_state=state,
+        temperature_c=status.get("temperature_c"),
+        suggested_retry_seconds=controller.config.recovery_step_seconds,
+        degradation=decision.degradation,
+        timestamp=datetime_now(),
+        telemetry_age_seconds=status.get("telemetry_age_seconds"),
+    )
+
+
+def thermal_error_response(alias: str, decision: AdmissionDecision) -> JSONResponse:
+    status_code = 503 if decision.action is AdmissionAction.CANCEL else 429
+    headers = {}
+    if decision.suggested_retry_seconds is not None:
+        headers["Retry-After"] = str(max(1, int(decision.suggested_retry_seconds)))
+    return JSONResponse(
+        {
+            "error": {
+                "code": decision.reason_code,
+                "message": decision.reason,
+                "route": alias or None,
+                "thermal": decision.as_dict(),
+                "cloud_fallback_attempted": False,
+            }
+        },
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def thermal_response_headers(decision: AdmissionDecision) -> dict[str, str]:
+    headers = {
+        "x-modeldeck-thermal-state": decision.thermal_state.value,
+        "x-modeldeck-thermal-reason": decision.reason_code,
+    }
+    interval = decision.degradation.get("minimum_frame_interval_seconds")
+    if interval is not None:
+        headers["x-modeldeck-minimum-frame-interval-seconds"] = str(interval)
+    return headers
+
+
+def datetime_now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 async def release_active_request(request: Request, request_id: str, profile: ModelProfile | None) -> None:

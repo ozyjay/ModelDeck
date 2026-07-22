@@ -61,11 +61,13 @@ async def test_management_starts_empty_without_packaged_workers_or_routes(tmp_pa
             workers = await client.get("/api/workers")
             events = await client.get("/api/events")
             live = await client.get("/api/live")
+            thermal = await client.get("/api/thermal")
 
     assert health.json()["schema_version"] == 2
     assert workers.json() == []
     assert events.json() == {"events": []}
     assert live.json() == {"active_event": None, "routes": []}
+    assert thermal.json()["reason_code"] == "thermal_throttling_disabled"
 
 
 @pytest.mark.asyncio

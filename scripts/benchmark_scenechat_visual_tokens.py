@@ -292,6 +292,7 @@ def _image_payload() -> tuple[str, dict[str, int]]:
 
 def _payload(data_url: str) -> dict[str, Any]:
     return {
+        "automatic": True,
         "model": ROUTE_NAME,
         "messages": [
             {

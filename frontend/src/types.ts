@@ -183,6 +183,27 @@ export interface Telemetry {
   memory: MemoryReading; swap: SwapReading; filesystems: FilesystemReading[];
   temperatures: TemperatureReading[]; fans: FanReading[]; active_model_processes: ProcessReading[];
 }
+export interface ThermalStatus {
+  enabled: boolean;
+  state: "normal" | "warm" | "hot" | "very_hot" | "critical" | "telemetry_degraded";
+  temperature_c: number | null;
+  sensor_id: string | null;
+  telemetry_age_seconds: number | null;
+  heavy_concurrency_limit: number;
+  active_heavy_concurrency: number | null;
+  model_load_concurrency_limit: number;
+  background_concurrency_limit: number;
+  background_paused: boolean;
+  model_loading_allowed: boolean;
+  scenechat_degradation: {
+    active: boolean; minimum_frame_interval_seconds: number; automatic_capture_allowed?: boolean;
+  };
+  reason_code: string;
+  host_power_policy: {
+    available: boolean; service_active?: boolean | null; tuned_profile?: string | null;
+    control: "external_read_only";
+  };
+}
 export interface HardwareProbe {
   configured: { profile_id: string; os: string; gpu: string; gpu_architecture: string; rocm_family: string; work_mount: string };
   detected: {
