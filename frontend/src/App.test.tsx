@@ -596,7 +596,7 @@ describe("ModelDeck v2 operator console", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[draftWriteIndex][1]?.body)).routes[0].display_name).toBe("Updated token trace");
   });
 
-  it("marks and disables incompatible Workers for a Route contract", async () => {
+  it("hides incompatible Workers from a Route's Worker selectors", async () => {
     const diffusionWorker: Worker = {
       ...worker,
       id: "7a19b667-8efc-4440-a60f-b3b17b6ece55",
@@ -615,7 +615,38 @@ describe("ModelDeck v2 operator console", () => {
 
     const route = await screen.findByRole("article", { name: "Route Token trace" });
     expect(within(route).getByText(/Native autoregressive trace requires an autoregressive Worker with top k trace/)).toBeInTheDocument();
-    expect(within(route).getByRole("option", { name: /DiffusionGemma Q4.*incompatible/ })).toBeDisabled();
+    expect(within(route).queryByRole("option", { name: /DiffusionGemma Q4/ })).not.toBeInTheDocument();
+  });
+
+  it("prompts for a compatible replacement without exposing an existing incompatible Worker", async () => {
+    const diffusionWorker: Worker = {
+      ...worker,
+      id: "7a19b667-8efc-4440-a60f-b3b17b6ece55",
+      name: "DiffusionGemma Q4",
+      model_id: "google/diffusiongemma-26B-A4B-it",
+      generation_family: "text-diffusion",
+      runtime: "text-diffusion-gptq-rocm",
+      capabilities: { iterative_refinement: true, intermediate_frames: true },
+      port: 8632,
+    };
+    const incompatibleEvent = {
+      ...eventRecord,
+      definition: {
+        ...eventRecord.definition,
+        routes: [{ ...eventRecord.definition.routes[0], worker_ids: [diffusionWorker.id] }],
+      },
+    };
+    const payloads = responses(true);
+    payloads["/api/workers"] = [worker, diffusionWorker];
+    payloads["/api/events"] = { events: [incompatibleEvent] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Events" }));
+
+    const route = await screen.findByRole("article", { name: "Route Token trace" });
+    expect(within(route).queryByRole("option", { name: /DiffusionGemma Q4/ })).not.toBeInTheDocument();
+    expect(within(route).getByRole("option", { name: "Choose a compatible Worker" })).toBeDisabled();
+    expect(within(route).getByRole("option", { name: /Qwen token trace/ })).toBeInTheDocument();
   });
 
   it("selects the compatible Worker when a new Route has only one compatible choice", async () => {
