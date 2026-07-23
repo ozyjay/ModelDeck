@@ -197,7 +197,13 @@ Aggregate evidence is retained in
 review samples are under
 `var/verification/qwen3-tts-four-voice-samples-20260723`.
 
-Automated qualification is complete. Manual pronunciation and intelligibility review of
-the six fixed samples remains required before the candidate can replace the published
-Worker. Until that review is approved, the Event draft and published revision continue
-to reference the original two-voice Worker.
+Manual pronunciation and intelligibility review of all six fixed Vivian and Serena
+samples was approved on 23 July 2026. The candidate passed its final fixed smoke test and
+was published as the sole `speechshift-voice` Worker in Open2026 revision 34. A Vivian
+English request through gateway port 8600 returned a valid mono 24 kHz WAV in 29.416
+seconds, and a live Sohee request remained rejected with `unsupported_voice`.
+
+The replacement Worker remains ready on port 8670 with the immutable voice metadata
+`ryan,aiden,vivian,serena`, 256 codec tokens and a 75-second deadline. The original
+two-voice Worker was stopped and archived after reference inspection confirmed that it
+appeared only in Event history; its cached Hugging Face model was retained.
