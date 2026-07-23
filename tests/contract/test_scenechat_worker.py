@@ -387,7 +387,20 @@ async def test_only_exact_curated_prompt_is_accepted_and_hidden_prompt_is_not_us
     assert SYSTEM_PROMPT not in messages[1]["content"][1]["text"]
     assert "at most 8 objects" in SYSTEM_PROMPT
     assert "Finish the complete valid JSON object" in SYSTEM_PROMPT
-    assert "before adding\ndetail" in SYSTEM_PROMPT
+    assert "before adding detail" in SYSTEM_PROMPT
+
+
+def test_closest_objects_question_has_bounded_internal_wording() -> None:
+    question = "Which objects are closest to the camera?"
+
+    messages = system_messages(question)
+
+    assert external_prompt(question).endswith(question)
+    assert messages[1]["content"][1]["text"] == (
+        "Which visible objects appear nearest to the camera? Return the complete required "
+        "JSON object once, prefer no more than three closest objects, and omit farther objects. "
+        "Keep relationships and uncertainties as JSON arrays, even when each has one item."
+    )
 
 
 @pytest.mark.asyncio

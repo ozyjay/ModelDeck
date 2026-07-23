@@ -38,6 +38,19 @@ QWEN35_MINIMUM_PIXELS = 65_536
 QWEN35_DEFAULT_MAXIMUM_NEW_TOKENS = 1024
 
 
+def _is_complete_json_output(value: str) -> bool:
+    candidate = value.strip()
+    fenced = candidate.startswith("```json")
+    if fenced:
+        candidate = candidate[7:].lstrip()
+    try:
+        _, end = json.JSONDecoder().raw_decode(candidate)
+    except json.JSONDecodeError:
+        return False
+    remainder = candidate[end:].strip()
+    return remainder == "```" if fenced else not remainder
+
+
 class TransformersQwen35Engine(TransformersSceneChatEngine):
     def load(self) -> None:
         import torch
@@ -149,6 +162,16 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
                 return cancellation.is_set()
 
+        class CompleteJsonCriteria(StoppingCriteria):
+            def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+                generated = input_ids[0, prompt_tokens:]
+                candidate = self_processor.decode(
+                    generated,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+                return _is_complete_json_output(candidate)
+
         rendered = self.processor.apply_chat_template(
             system_messages(question),
             tokenize=False,
@@ -167,6 +190,7 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                 f"Processed input plus requested output exceeds {self.config.context_length} tokens"
             )
         inputs = inputs.to(self.device, dtype=self.dtype)
+        self_processor = self.processor
         self.torch.cuda.reset_peak_memory_stats(0)
         try:
             inference_started = time.perf_counter()
@@ -176,7 +200,7 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                     max_new_tokens=min(max_tokens, self.config.maximum_new_tokens),
                     do_sample=False,
                     use_cache=True,
-                    stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
+                    stopping_criteria=StoppingCriteriaList([CancellationCriteria(), CompleteJsonCriteria()]),
                 )
             inference_seconds = time.perf_counter() - inference_started
             generated = output[0, prompt_tokens:]

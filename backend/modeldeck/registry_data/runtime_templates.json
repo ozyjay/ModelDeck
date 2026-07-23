@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.2.0",
+    "version": "0.2.2",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },

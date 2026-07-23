@@ -100,9 +100,11 @@ The dedicated Qwen3.5 adapter accepts only the official `Qwen/Qwen3.5-0.8B`,
 `Qwen3_5ForConditionalGeneration`, uses local files without remote code, and bounds image
 pixels to the configured visual-token budget. Catalogue recognition is not physical ROCm
 compatibility evidence; readiness still requires a successful load and warm-up on the
-detected stack. Packaged runtime profile 0.2.0 defaults Qwen3.5 to 140 visual tokens and
-a 1,024-token hard completion ceiling. The larger ceiling is truncation headroom; the
-canonical output contract is designed to keep normal responses near 180–260 tokens.
+detected stack. Packaged runtime profile 0.2.2 defaults Qwen3.5 to 140 visual tokens and
+a 1,024-token hard completion ceiling. It uses deterministic greedy decoding, bounded
+internal wording for the closest-object question, and stops after the first complete JSON
+object. The larger ceiling is truncation headroom; the canonical output contract is
+designed to keep normal responses near 180–260 tokens.
 
 The Repartee speech protocol and its fixed PCM framing are documented in
 `docs/REPARTEE_RUNTIMES.md`. Autoregressive GPT-OSS requests continue to use the existing
@@ -117,7 +119,7 @@ allowlisted Gemma 4 unified snapshot. Each profile uses its pinned processor, ch
 and image processing; neither the gateway nor SceneChat loads a tokenizer or processor.
 Generation uses deterministic greedy decoding so the strict JSON contract does
 not depend on a stochastic sampling path. Gemma 4 retains its 512-token default, while the
-Qwen3.5 0.2.0 profile uses a 1,024-token ceiling; both retain the 60-second deadline.
+Qwen3.5 0.2.2 profile uses a 1,024-token ceiling; both retain the 60-second deadline.
 Disconnect polling is bounded to avoid starving the generation thread.
 Readiness remains false until local processor/model loading and a one-token synthetic-image
 warm-up have succeeded.

@@ -6,6 +6,8 @@ import threading
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 
 def load_benchmark_module():
     path = Path(__file__).resolve().parents[2] / "scripts" / "benchmark_scenechat_visual_tokens.py"
@@ -18,6 +20,22 @@ def load_benchmark_module():
 
 
 benchmark = load_benchmark_module()
+
+
+class InputStream:
+    def __init__(self, interactive: bool) -> None:
+        self.interactive = interactive
+
+    def isatty(self) -> bool:
+        return self.interactive
+
+
+def test_human_review_requires_an_interactive_terminal() -> None:
+    benchmark._validate_human_review_mode(False, InputStream(False))
+    benchmark._validate_human_review_mode(True, InputStream(True))
+
+    with pytest.raises(ValueError, match="interactive terminal"):
+        benchmark._validate_human_review_mode(True, InputStream(False))
 
 
 class SafeThermalGuard:

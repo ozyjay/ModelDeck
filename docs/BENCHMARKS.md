@@ -60,12 +60,14 @@ pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
 
 Supply any one or more of `Worker70`, `Worker140` and `Worker280`. A single Worker runs
 one focused arm; multiple Workers must use the same pinned model and revision.
+`-HumanReview` requires an interactive terminal and is rejected before worker startup
+otherwise. Omit it for unattended measurement and complete manual review separately.
 
 Each arm records per-question and aggregate end-to-end latency, prompt and completion
 tokens, tokens per second, actual visual tokens, preprocessing, inference, validation and
 gateway overhead, finish reasons and safe failure categories. Question IDs—not prompt
 text—identify the seven fixed questions in the report. Token-limit accounting uses each
-immutable Worker's configured ceiling, including the Qwen3.5 0.2.0 profile's 1,024-token
+immutable Worker's configured ceiling, including the Qwen3.5 0.2.2 profile's 1,024-token
 limit.
 
 After isolated acceptance, exercise the intended resident Open Day load and two-hour

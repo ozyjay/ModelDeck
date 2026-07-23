@@ -534,6 +534,11 @@ def _review(samples: list[dict[str, Any]], budget: int) -> dict[str, int] | None
     return {"reviewed": len(reviewed), "accepted": accepted}
 
 
+def _validate_human_review_mode(enabled: bool, input_stream: Any) -> None:
+    if enabled and not input_stream.isatty():
+        raise ValueError("--human-review requires an interactive terminal")
+
+
 def _worker_configuration(worker: dict[str, Any]) -> dict[str, Any]:
     settings = worker["settings"]
     return {
@@ -785,6 +790,10 @@ def main() -> None:
         parser.error("cooldown temperature must be below maximum temperature")
     if not 1 <= arguments.requests_per_thermal_batch <= 10:
         parser.error("--requests-per-thermal-batch must be between 1 and 10")
+    try:
+        _validate_human_review_mode(arguments.human_review, sys.stdin)
+    except ValueError as error:
+        parser.error(str(error))
 
     worker_arguments = [arguments.worker_70, arguments.worker_140, arguments.worker_280]
     worker_ids = [worker_id for worker_id in worker_arguments if worker_id]

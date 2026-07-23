@@ -11,6 +11,7 @@ from modeldeck.workers.qwen35_worker import (
     EngineConfig,
     TransformersQwen35Engine,
     _configure_qwen35_image_processor,
+    _is_complete_json_output,
     _qwen35_visual_token_count,
 )
 from PIL import Image
@@ -20,6 +21,23 @@ class FakeImageProcessor:
     patch_size = 16
     merge_size = 2
     size = {"shortest_edge": 65_536, "longest_edge": 16_777_216}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('{"summary":"complete"}', True),
+        ('```json\n{"summary":"complete"}\n```', True),
+        ('```json\n{"summary":"complete"}', False),
+        ('{"summary":"incomplete"', False),
+        ('{"summary":"complete"} trailing', False),
+    ],
+)
+def test_complete_json_output_requires_the_whole_raw_or_fenced_value(
+    value: str,
+    expected: bool,
+) -> None:
+    assert _is_complete_json_output(value) is expected
 
 
 @pytest.mark.parametrize("budget,maximum_pixels", [(140, 143_360), (280, 286_720)])
@@ -93,6 +111,10 @@ def test_qwen35_generation_retains_deterministic_cached_profile(monkeypatch) -> 
         def __getitem__(self, _key):
             return Generated()
 
+    class InputIds:
+        def __getitem__(self, _key):
+            return Generated()
+
     calls = {}
 
     class Processor:
@@ -120,6 +142,10 @@ def test_qwen35_generation_retains_deterministic_cached_profile(monkeypatch) -> 
     class Model:
         def generate(self, **kwargs):
             calls["generation"] = kwargs
+            calls["complete_json_stops"] = kwargs["stopping_criteria"][1](
+                InputIds(),
+                scores=None,
+            )
             return Output()
 
     engine = TransformersQwen35Engine(
@@ -153,6 +179,8 @@ def test_qwen35_generation_retains_deterministic_cached_profile(monkeypatch) -> 
     assert calls["generation"]["max_new_tokens"] == 1024
     assert calls["generation"]["do_sample"] is False
     assert calls["generation"]["use_cache"] is True
+    assert len(calls["generation"]["stopping_criteria"]) == 2
+    assert calls["complete_json_stops"] is True
     assert result.prompt_tokens == 400
     assert result.completion_tokens == 220
     assert result.visual_tokens == 140

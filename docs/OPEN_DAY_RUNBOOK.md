@@ -52,9 +52,11 @@ mode. Never change precision, attention implementation, model, or provider autom
 
 ### SceneChat Qwen3.5 latency candidate
 
-The Qwen3.5 0.2.0 candidate retains BF16, deterministic generation, disabled thinking,
-KV caching, SDPA and the 60-second deadline. Its immutable defaults are 140 visual tokens
-and a 1,024-token hard completion ceiling. Do not publish it based on a smoke test alone.
+The Qwen3.5 0.2.2 candidate retains BF16, deterministic greedy generation, disabled
+thinking, KV caching, SDPA and the 60-second deadline. It uses bounded internal wording for
+the closest-object question and stops after the first complete JSON object. Its immutable
+defaults are 140 visual tokens and a 1,024-token hard completion ceiling. Do not publish it
+based on a smoke test alone.
 Run both the isolated seven-question benchmark and the combined-load two-hour command in
 `docs/BENCHMARKS.md`, review one fixed output per curated question, and retain the exact
 Worker and runtime-template versions.

@@ -32,7 +32,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
-    assert registrations["scenechat-qwen35"].package.version == "0.2.0"
+    assert registrations["scenechat-qwen35"].package.version == "0.2.2"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 

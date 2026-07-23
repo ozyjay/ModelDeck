@@ -7,9 +7,10 @@ The candidate uses:
 - model `Qwen/Qwen3.5-0.8B`;
 - revision `2fc06364715b967f1860aea9cf38778875588b17`;
 - runtime `qwen35-vision-language-transformers-rocm`;
-- packaged runtime-template version 0.2.0;
+- packaged runtime-template version 0.2.2;
 - BF16 and PyTorch SDPA;
 - `enable_thinking=False`, `do_sample=False` and `use_cache=True`;
+- a complete-JSON stopping criterion;
 - 140 visual tokens;
 - a 1,024-token hard completion ceiling;
 - a 60-second generation deadline;
@@ -58,8 +59,41 @@ generated descriptions, credentials or visitor data.
 
 ## Current status
 
-Implementation and automated contract coverage are complete. The isolated physical run on
-23 July 2026 used immutable Worker `c6fadc21-2adf-465f-b3a6-d69c33102f76` and is recorded in
+The 0.2.2 replacement retains the proven global prompt and greedy decoding, adds bounded
+internal wording only for the closest-object question, and stops after a complete JSON
+object. It retains the public curated questions, strict schema validation, BF16/SDPA
+execution, 140-visual-token budget and 1,024-token hard ceiling.
+
+An immutable 0.2.1 Worker (`3f84d269-1a71-4d1a-a298-8f5670631977`) was physically started
+on 24 July 2026. Its benchmark stopped before measured requests because its two warm-ups
+failed with `unsupported_fence` and `schema_violation`; the retained report is
+`var/benchmarks/scenechat_visual_tokens_20260723T140824Z.json`. Synthetic-only diagnostics
+identified early stopping before a closing JSON fence and destabilisation from broader
+prompt and decoding changes. Those changes are not present in 0.2.2.
+
+The completed isolated 0.2.2 run used immutable Worker
+`3ad2f88d-8936-4ffc-ac63-6b5e6543d4ed` and is recorded in
+`var/benchmarks/scenechat_visual_tokens_20260723T145634Z.json`. It fixed the functional
+failure but did not pass promotion:
+
+- all 70 measured responses were schema-valid with zero failures and normal `stop`
+  finishes;
+- all ten `question-04` responses completed at 304 tokens instead of reaching the
+  1,024-token ceiling;
+- aggregate latency was 8.76 seconds p50 and 10.07 seconds p95, still missing the
+  8-second median target while meeting the 12-second p95 target;
+- per-question completion p95 was 300–358 tokens, above the preferred 260-token target;
+- the maximum observed temperature was 77.625°C and GPU edge maximum was 56°C, with no
+  thermal abort; pacing used a 75°C cooldown threshold and retained the 80°C abort;
+- manual output review was not completed. An earlier fully measured invocation attempted
+  `-HumanReview` without an interactive terminal and could not retain its report; the
+  benchmark now rejects that mode before worker startup.
+
+The 0.2.2 Worker is retained but stopped. The combined two-hour run, drills, manual review,
+Event rebinding and publication remain blocked by the isolated median-latency gate.
+
+The isolated physical run on 23 July 2026 used 0.2.0 immutable Worker
+`c6fadc21-2adf-465f-b3a6-d69c33102f76` and is recorded in
 `var/benchmarks/scenechat_visual_tokens_20260723T111303Z.json`.
 
 The candidate passed its physical BF16/SDPA smoke test and exercised all seven questions
@@ -81,3 +115,6 @@ The combined two-hour run and manual output review were not started because the 
 zero-failure gate failed. The candidate is retained but stopped for comparison evidence. It
 was not rebound or published: Open2026 revision 34 still routes SceneChat through Worker
 `b4d8adcc-106d-4780-8874-387e5b7ab935` with its existing mock fallback.
+
+Do not rebind or publish 0.2.2. Any further decoding, prompt, model or runtime change
+requires a new immutable Worker and a fresh isolated qualification.
