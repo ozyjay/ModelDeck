@@ -49,9 +49,10 @@ Translation Routes are direction-specific: `translation-en-fr-v1` and
 `request_id`, and must match the Route direction. Each Worker executes one request at a
 time and rejects excess work rather than queueing visitor text.
 
-Speech synthesis uses `speech-synthesis-v1` and `POST /v1/audio/speech`. It accepts only the
-built-in voices `ryan` and `aiden`, languages `en`, `fr` and `de`, and WAV output. Successful
-responses are mono 24 kHz PCM WAV. Arbitrary voice cloning, style instructions, paths,
+Speech synthesis uses `speech-synthesis-v1` and `POST /v1/audio/speech`. Its code-owned
+allowlist contains exactly the built-in voices `ryan`, `aiden`, `vivian` and `serena`,
+with languages `en`, `fr` and `de` and WAV output. Successful responses are mono 24 kHz
+PCM WAV. Arbitrary speakers, voice cloning, reference audio, style instructions, paths,
 fixtures, headers and runtime arguments are not accepted.
 
 Both families support `POST /v1/requests/{request_id}/cancel` through the stable gateway.
@@ -138,5 +139,65 @@ The privacy-safe aggregate report is generated with:
 pwsh -NoProfile -File scripts/qualify_qwen3_tts.ps1
 ```
 
-Generated waveform and transcription content remain in memory only, are cleared after
-measurement and are not included in the report, Worker logs or metrics.
+The qualifier defaults to three repetitions for Vivian and Serena in each supported
+language. It records per-voice/per-language aggregate timing, duration, real-time factor,
+amplitude, clipping, multilingual Whisper word-error rate, device-memory and temperature
+measurements. Repeated waveforms and transcription content remain in memory only and are
+cleared after measurement. One fixed synthetic WAV per voice/language is retained under
+`var/verification` for explicit pronunciation and intelligibility review. Input text,
+transcripts and audio content are not included in reports, Worker logs or metrics.
+
+### Four-voice candidate qualification
+
+The immutable candidate Worker `8ed7591e-6e43-46c3-a72e-b10dd9edc5da` was created on
+23 July 2026 with the exact stored voice metadata
+`ryan,aiden,vivian,serena`. It retains the pinned model revision, BF16, PyTorch SDPA,
+sampled talker and subtalker generation, the 256 codec-token limit and the 75-second
+deadline. Its live capability response advertises exactly the same four voices.
+
+Three fixed synthetic samples completed successfully for every Vivian and Serena
+language pair. All 18 successful outputs validated as mono 24 kHz PCM16 WAV and none
+contained a clipped sample. The aggregate medians were:
+
+| Voice | Language | Request | Audio | RTF | Whisper WER |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Vivian | English | 20.106 s | 5.52 s | 3.642 | 0.000 |
+| Vivian | French | 55.241 s | 6.08 s | 9.086 | 0.417 |
+| Vivian | German | 9.857 s | 5.84 s | 1.621 | 0.250 |
+| Serena | English | 50.036 s | 5.52 s | 9.177 | 0.100 |
+| Serena | French | 48.105 s | 5.36 s | 9.164 | 0.417 |
+| Serena | German | 9.953 s | 6.16 s | 1.616 | 0.250 |
+
+Sampling produced material latency variation: successful requests ranged from 8.789 to
+64.603 seconds, still below the Worker deadline. Peak absolute normalised amplitude was
+0.957 for Vivian and 0.582 for Serena; median RMS amplitude ranged from 0.080 to 0.092
+for Vivian and 0.034 to 0.051 for Serena. The highest global device-memory observation
+was 3,303.020 MB. Maximum observed temperatures were 65.0 °C GPU edge and 81.5 °C CPU
+package.
+
+The uninterrupted batch completed all Vivian and Serena English samples before the
+thermal admission guard rejected the remaining six requests with
+`thermal_cooldown_required`. No rejected request began inference. After recovery, Serena
+French and German completed 3/3 with 15-second governed cooling intervals and no
+additional admission retry. Ryan and Aiden each passed a fixed English regression smoke,
+including WAV, clipping and multilingual Whisper checks.
+
+Vivian cancellation was acknowledged in 3.772 ms. Qwen did not cooperate within the
+five-second grace, so ModelDeck returned `cancellation_unresponsive` after 5.291 seconds.
+A valid bounded Serena deadline probe returned the same structured fail-closed error
+after 80.058 seconds, leaving 9.942 seconds before SpeechShift's 90-second timeout.
+Stopping after each destructive probe recovered global device memory to 0.059 MB, and
+the candidate then restarted cleanly with its four-voice capability response intact.
+Qualification log inspection found no fixed input-text or WAV-content marker.
+
+Aggregate evidence is retained in
+`var/verification/qwen3-tts-four-voices-thermal-partial-20260723.json`,
+`var/verification/qwen3-tts-serena-fr-de-20260723.json` and
+`var/verification/qwen3-tts-ryan-aiden-regression-20260723.json`. The six fixed synthetic
+review samples are under
+`var/verification/qwen3-tts-four-voice-samples-20260723`.
+
+Automated qualification is complete. Manual pronunciation and intelligibility review of
+the six fixed samples remains required before the candidate can replace the published
+Worker. Until that review is approved, the Event draft and published revision continue
+to reference the original two-voice Worker.

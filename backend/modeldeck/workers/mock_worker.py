@@ -20,11 +20,12 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.contracts.scenechat import SceneAnalysis, SceneObject
 from modeldeck.mock_templates import MOCK_SCENARIOS, MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
+from modeldeck.speechshift import QWEN_TTS_LANGUAGES, QWEN_TTS_VOICES
 
 
 class CompletionRequest(BaseModel):
@@ -58,6 +59,8 @@ class TranslationRequest(BaseModel):
 
 
 class SpeechSynthesisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     request_id: str
     model: str
     input: str = Field(min_length=1, max_length=2000)
@@ -161,13 +164,17 @@ def create_app(
 
     @app.get("/capabilities")
     async def get_capabilities() -> dict[str, Any]:
-        return {
+        response = {
             "protocol_version": "1",
             "generation_family": family,
             "mock_contract_id": contract_id,
             "mock_scenario": scenario,
             **capabilities(family, contract_id).model_dump(),
         }
+        if contract_id == "speech-synthesis-v1":
+            response["voices"] = list(QWEN_TTS_VOICES)
+            response["languages"] = list(QWEN_TTS_LANGUAGES)
+        return response
 
     @app.get("/metrics")
     async def metrics() -> dict[str, Any]:
@@ -346,7 +353,7 @@ def create_app(
     async def speech_synthesis(body: SpeechSynthesisRequest):
         _require_family(family, GenerationFamily.SPEECH_SYNTHESIS)
         _require_contract(contract_id, {"speech-synthesis-v1"})
-        if body.voice not in {"ryan", "aiden"} or body.language not in {"en", "fr", "de"}:
+        if body.voice not in QWEN_TTS_VOICES or body.language not in QWEN_TTS_LANGUAGES:
             raise HTTPException(422, "The requested voice or language is not allowlisted")
         if body.response_format != "wav":
             raise HTTPException(422, "Speech synthesis response_format must be wav")

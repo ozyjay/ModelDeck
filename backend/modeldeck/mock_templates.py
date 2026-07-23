@@ -5,6 +5,7 @@ from typing import Any
 
 from modeldeck.protocol import GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS, ProtocolContract
+from modeldeck.speechshift import QWEN_TTS_LANGUAGES, QWEN_TTS_VOICES
 
 MOCK_SCENARIOS = ("success", "delayed", "request-error")
 
@@ -117,7 +118,11 @@ MOCK_WORKER_TEMPLATES = {
                 "audio_output": True,
                 "speech_synthesis": True,
             },
-            fixed_settings={"sample_rate_hz": 24000},
+            fixed_settings={
+                "sample_rate_hz": 24000,
+                "allowed_voices": ",".join(QWEN_TTS_VOICES),
+                "allowed_languages": ",".join(QWEN_TTS_LANGUAGES),
+            },
         ),
         MockWorkerTemplate(
             "speech-recognition-v1",

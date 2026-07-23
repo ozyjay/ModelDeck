@@ -28,6 +28,7 @@ from modeldeck.speechshift import (
     QWEN_TTS_LANGUAGES,
     QWEN_TTS_MAXIMUM_CODEC_TOKENS,
     QWEN_TTS_SAMPLE_RATE_HZ,
+    QWEN_TTS_SPEAKER_NAMES,
     QWEN_TTS_VOICES,
     SPEECHSHIFT_MODEL_SPECS,
     validate_speechshift_snapshot,
@@ -150,7 +151,7 @@ class QwenTTSEngine:
             waveforms, sample_rate = self.model.generate_custom_voice(
                 text=text,
                 language=QWEN_LANGUAGE_NAMES[language],
-                speaker=voice.title(),
+                speaker=QWEN_TTS_SPEAKER_NAMES[voice],
                 instruct=None,
                 max_new_tokens=self.config.maximum_codec_tokens,
                 do_sample=True,

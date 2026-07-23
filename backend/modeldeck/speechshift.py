@@ -114,7 +114,13 @@ SPEECHSHIFT_MODEL_SPECS = {
     )
 }
 
-QWEN_TTS_VOICES = ("ryan", "aiden")
+QWEN_TTS_SPEAKER_NAMES = {
+    "ryan": "Ryan",
+    "aiden": "Aiden",
+    "vivian": "Vivian",
+    "serena": "Serena",
+}
+QWEN_TTS_VOICES = tuple(QWEN_TTS_SPEAKER_NAMES)
 QWEN_TTS_LANGUAGES: tuple[LanguageCode, ...] = ("en", "fr", "de")
 QWEN_LANGUAGE_NAMES: dict[LanguageCode, str] = {
     "en": "English",

@@ -10,6 +10,7 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.main import create_app
+from modeldeck.speechshift import QWEN_TTS_LANGUAGES, QWEN_TTS_VOICES
 
 
 def worker_definition(*, name: str = "Qwen trace") -> WorkerDefinition:
@@ -159,6 +160,8 @@ async def test_management_lists_and_creates_contract_driven_mock_workers(tmp_pat
     assert translation.json()["settings"]["source_language"] == "en"
     assert translation.json()["settings"]["target_language"] == "fr"
     assert synthesis.json()["settings"]["sample_rate_hz"] == 24_000
+    assert synthesis.json()["settings"]["allowed_voices"] == ",".join(QWEN_TTS_VOICES)
+    assert synthesis.json()["settings"]["allowed_languages"] == ",".join(QWEN_TTS_LANGUAGES)
     assert invalid_option.status_code == 422
     assert missing_delay.status_code == 422
     assert arbitrary_setting.status_code == 422

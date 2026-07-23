@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from modeldeck.protocol import WorkerState
-from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
+from modeldeck.speechshift import QWEN_TTS_VOICES, SPEECHSHIFT_MODEL_SPECS
 from modeldeck.thermal import TemperatureSnapshot, ThermalGuard, ThermalGuardError
 from modeldeck.workers.speech_recognition_worker import (
     RecognitionConfig,
@@ -287,27 +287,36 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
     )
     mark_ready(app, tts=True)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/v1/audio/speech",
-            json={
-                "request_id": "speech-1",
-                "model": "speechshift-voice",
-                "input": "The service is ready.",
-                "voice": "ryan",
-                "language": "en",
-                "response_format": "wav",
-            },
-        )
-        invalid_voice = await client.post(
-            "/v1/audio/speech",
-            json={
-                "request_id": "speech-2",
-                "model": "speechshift-voice",
-                "input": "No arbitrary voices.",
-                "voice": "custom",
-                "language": "en",
-            },
-        )
+        capabilities = await client.get("/capabilities")
+        responses = []
+        for voice in QWEN_TTS_VOICES:
+            responses.append(
+                await client.post(
+                    "/v1/audio/speech",
+                    json={
+                        "request_id": f"speech-{voice}",
+                        "model": "speechshift-voice",
+                        "input": "The service is ready.",
+                        "voice": voice,
+                        "language": "en",
+                        "response_format": "wav",
+                    },
+                )
+            )
+        invalid_voices = []
+        for voice in ("ono_anna", "Ono_Anna", "sohee", "custom"):
+            invalid_voices.append(
+                await client.post(
+                    "/v1/audio/speech",
+                    json={
+                        "request_id": f"invalid-{voice}",
+                        "model": "speechshift-voice",
+                        "input": "No arbitrary voices.",
+                        "voice": voice,
+                        "language": "en",
+                    },
+                )
+            )
         settings_override = await client.post(
             "/v1/audio/speech",
             json={
@@ -323,24 +332,42 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
                 "temperature": 0.1,
                 "instruct": "Whisper.",
                 "speaker": "arbitrary",
+                "reference_audio": "AAAA",
+                "audio_prompt": "AAAA",
+                "speaker_wav": "/tmp/reference.wav",
+                "clone_voice": True,
             },
         )
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "audio/wav"
-    with wave.open(io.BytesIO(response.content), "rb") as wav:
-        assert wav.getframerate() == 24_000
-        assert wav.getnchannels() == 1
-    assert engine.calls == [("The service is ready.", "ryan", "en")]
-    assert invalid_voice.status_code == 422
-    assert invalid_voice.json()["error"]["code"] == "unsupported_voice"
+    assert capabilities.json()["voices"] == ["ryan", "aiden", "vivian", "serena"]
+    for response in responses:
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
+        with wave.open(io.BytesIO(response.content), "rb") as wav:
+            assert wav.getframerate() == 24_000
+            assert wav.getnchannels() == 1
+    assert engine.calls == [("The service is ready.", voice, "en") for voice in QWEN_TTS_VOICES]
+    for invalid_voice in invalid_voices:
+        assert invalid_voice.status_code == 422
+        assert invalid_voice.json()["error"]["code"] == "unsupported_voice"
     assert settings_override.status_code == 422
     assert settings_override.json()["error"]["code"] == "invalid_request"
 
 
+@pytest.mark.parametrize(
+    ("voice", "speaker"),
+    [
+        ("ryan", "Ryan"),
+        ("aiden", "Aiden"),
+        ("vivian", "Vivian"),
+        ("serena", "Serena"),
+    ],
+)
 def test_qwen_tts_uses_the_evaluated_code_owned_generation_settings(
     tmp_path: Path,
     monkeypatch,
+    voice: str,
+    speaker: str,
 ) -> None:
     calls: list[dict[str, object]] = []
 
@@ -397,7 +424,7 @@ def test_qwen_tts_uses_the_evaluated_code_owned_generation_settings(
     )
     cancellation = threading.Event()
 
-    result = engine.synthesise("The service is ready.", "ryan", "en", cancellation)
+    result = engine.synthesise("The service is ready.", voice, "en", cancellation)
 
     assert result.duration_seconds == 0.01
     assert len(calls) == 1
@@ -406,7 +433,7 @@ def test_qwen_tts_uses_the_evaluated_code_owned_generation_settings(
     assert call["do_sample"] is True
     assert call["subtalker_dosample"] is True
     assert call["instruct"] is None
-    assert call["speaker"] == "Ryan"
+    assert call["speaker"] == speaker
     stopping_criteria = call["stopping_criteria"]
     assert len(stopping_criteria) == 1
     cancellation.set()

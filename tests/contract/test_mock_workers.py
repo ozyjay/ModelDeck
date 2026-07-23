@@ -9,6 +9,7 @@ from modeldeck.contracts.scenechat import SceneAnalysis
 from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
+from modeldeck.speechshift import QWEN_TTS_VOICES
 from modeldeck.workers.mock_worker import create_app
 
 
@@ -293,33 +294,56 @@ async def test_speech_synthesis_mock_returns_deterministic_24khz_wav() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            first = await client.post(
+            capabilities = await client.get("/capabilities")
+            responses = []
+            for voice in QWEN_TTS_VOICES:
+                responses.append(
+                    await client.post(
+                        "/v1/audio/speech",
+                        json={
+                            "request_id": f"speech-{voice}",
+                            "model": "visitor-voice",
+                            "input": "Ready.",
+                            "voice": voice,
+                            "language": "en",
+                            "response_format": "wav",
+                        },
+                    )
+                )
+            unsupported = await client.post(
                 "/v1/audio/speech",
                 json={
-                    "request_id": "speech-1",
+                    "request_id": "speech-unsupported",
                     "model": "visitor-voice",
                     "input": "Ready.",
-                    "voice": "ryan",
+                    "voice": "sohee",
                     "language": "en",
-                    "response_format": "wav",
                 },
             )
-            second = await client.post(
+            cloning_override = await client.post(
                 "/v1/audio/speech",
                 json={
-                    "request_id": "speech-2",
+                    "request_id": "speech-cloning",
                     "model": "visitor-voice",
-                    "input": "A different request.",
-                    "voice": "aiden",
-                    "language": "de",
-                    "response_format": "wav",
+                    "input": "Ready.",
+                    "voice": "vivian",
+                    "language": "en",
+                    "reference_audio": "AAAA",
+                    "speaker_wav": "/tmp/reference.wav",
+                    "instruct": "Change the style.",
+                    "temperature": 0.1,
                 },
             )
 
-    assert first.status_code == 200
-    assert first.headers["content-type"] == "audio/wav"
-    assert first.headers["x-modeldeck-sample-rate-hz"] == "24000"
-    assert first.content == second.content
+    assert capabilities.json()["voices"] == ["ryan", "aiden", "vivian", "serena"]
+    assert capabilities.json()["languages"] == ["en", "fr", "de"]
+    assert {response.content for response in responses} == {responses[0].content}
+    for response in responses:
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
+        assert response.headers["x-modeldeck-sample-rate-hz"] == "24000"
+    assert unsupported.status_code == 422
+    assert cloning_override.status_code == 422
 
 
 @pytest.mark.asyncio

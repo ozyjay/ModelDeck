@@ -10,6 +10,7 @@ from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
     QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+    QWEN_TTS_VOICES,
     SPEECHSHIFT_MODEL_SPECS,
 )
 from modeldeck.supervisor.service import (
@@ -245,6 +246,7 @@ def test_qwen_tts_launch_is_isolated_offline_and_has_no_arch_override(monkeypatc
         port=8631,
         configuration_support="qwen3-tts-rocm",
     )
+    assert profile.settings["allowed_voices"] == ",".join(QWEN_TTS_VOICES)
     runtime_python = tmp_path / "tts/bin/python"
     runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(sys.executable)
