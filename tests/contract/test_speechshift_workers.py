@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 import sys
 import threading
 import time
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -30,6 +32,7 @@ from modeldeck.workers.translation_worker import (
     create_app as create_translation_app,
 )
 from modeldeck.workers.tts_worker import (
+    QwenTTSEngine,
     SpeechResult,
     TTSConfig,
 )
@@ -84,6 +87,52 @@ class FakeTTSEngine:
 
     def close(self) -> None:
         pass
+
+
+class ControllableTTSEngine(FakeTTSEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocked = True
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self.cancelled = threading.Event()
+
+    def synthesise(
+        self,
+        text: str,
+        voice: str,
+        language: str,
+        cancellation: threading.Event,
+    ) -> SpeechResult:
+        self.calls.append((text, voice, language))
+        self.started.set()
+        if not self.blocked:
+            return super().synthesise(text, voice, language, cancellation)
+        deadline = time.monotonic() + 1
+        while not cancellation.is_set() and time.monotonic() < deadline:
+            time.sleep(0.001)
+        if cancellation.is_set():
+            self.cancelled.set()
+        self.finished.set()
+        return SpeechResult(b"", 0, 0.01, cancelled=cancellation.is_set())
+
+
+class UnresponsiveTTSEngine(FakeTTSEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def synthesise(
+        self,
+        text: str,
+        voice: str,
+        language: str,
+        cancellation: threading.Event,
+    ) -> SpeechResult:
+        self.started.set()
+        self.release.wait(timeout=1)
+        return SpeechResult(b"", 0, 0.01, cancelled=cancellation.is_set())
 
 
 class FakeRecognitionRunner:
@@ -158,6 +207,21 @@ def mark_ready(app, *, tts: bool = False) -> None:
         app.state.thermal_rejections = 0
         app.state.thermal_cancellations = 0
         app.state.last_temperatures = None
+
+
+async def wait_for_thread_event(event: threading.Event, timeout_seconds: float = 1) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while not event.is_set() and time.monotonic() < deadline:  # noqa: ASYNC110
+        await asyncio.sleep(0.001)
+    return event.is_set()
+
+
+async def await_test_cancelled_result(_request, task) -> SpeechResult:
+    deadline = time.monotonic() + 1
+    while not task.done() and time.monotonic() < deadline:  # noqa: ASYNC110
+        await asyncio.sleep(0.001)
+    assert task.done()
+    return task.result()
 
 
 @pytest.mark.asyncio
@@ -244,6 +308,23 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
                 "language": "en",
             },
         )
+        settings_override = await client.post(
+            "/v1/audio/speech",
+            json={
+                "request_id": "speech-3",
+                "model": "speechshift-voice",
+                "input": "No request-owned generation settings.",
+                "voice": "ryan",
+                "language": "en",
+                "do_sample": False,
+                "subtalker_dosample": False,
+                "max_new_tokens": 1,
+                "seed": 42,
+                "temperature": 0.1,
+                "instruct": "Whisper.",
+                "speaker": "arbitrary",
+            },
+        )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
@@ -253,6 +334,303 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
     assert engine.calls == [("The service is ready.", "ryan", "en")]
     assert invalid_voice.status_code == 422
     assert invalid_voice.json()["error"]["code"] == "unsupported_voice"
+    assert settings_override.status_code == 422
+    assert settings_override.json()["error"]["code"] == "invalid_request"
+
+
+def test_qwen_tts_uses_the_evaluated_code_owned_generation_settings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeStoppingCriteria:
+        pass
+
+    class FakeStoppingCriteriaList(list):
+        pass
+
+    class FakeArray(list):
+        def reshape(self, _shape):
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            StoppingCriteria=FakeStoppingCriteria,
+            StoppingCriteriaList=FakeStoppingCriteriaList,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "numpy",
+        SimpleNamespace(float32="float32", asarray=lambda values, dtype: FakeArray(values)),
+    )
+    monkeypatch.setattr("modeldeck.workers.tts_worker._encode_wav", lambda _samples: b"wav")
+
+    class CapturingModel:
+        def generate_custom_voice(self, **kwargs):
+            calls.append(kwargs)
+            return [[0.0] * 240], 24_000
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def empty_cache() -> None:
+            pass
+
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    engine = QwenTTSEngine(
+        TTSConfig(
+            model_id=spec.model_id,
+            revision=spec.revision,
+            alias="speechshift-voice",
+            cache_root=tmp_path,
+            maximum_codec_tokens=137,
+        ),
+        torch=SimpleNamespace(cuda=FakeCuda()),
+        model=CapturingModel(),
+    )
+    cancellation = threading.Event()
+
+    result = engine.synthesise("The service is ready.", "ryan", "en", cancellation)
+
+    assert result.duration_seconds == 0.01
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["max_new_tokens"] == 137
+    assert call["do_sample"] is True
+    assert call["subtalker_dosample"] is True
+    assert call["instruct"] is None
+    assert call["speaker"] == "Ryan"
+    stopping_criteria = call["stopping_criteria"]
+    assert len(stopping_criteria) == 1
+    cancellation.set()
+    assert stopping_criteria[0](None, None) is True
+
+
+@pytest.mark.asyncio
+async def test_tts_cancellation_releases_the_worker_for_another_request(tmp_path: Path) -> None:
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    engine = ControllableTTSEngine()
+    app = create_tts_app(
+        worker_id="tts",
+        config=TTSConfig(spec.model_id, spec.revision, "speechshift-voice", tmp_path),
+        engine=engine,
+        thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
+    )
+    mark_ready(app, tts=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        active = asyncio.create_task(
+            client.post(
+                "/v1/audio/speech",
+                json={
+                    "request_id": "cancel-me",
+                    "model": "speechshift-voice",
+                    "input": "Cancel this request.",
+                    "voice": "ryan",
+                    "language": "en",
+                },
+            )
+        )
+        assert await wait_for_thread_event(engine.started)
+        started = time.perf_counter()
+        cancellation = await client.post("/cancel", json={"request_id": "cancel-me"})
+        cancellation_seconds = time.perf_counter() - started
+        cancelled = await active
+        engine.blocked = False
+        restarted = await client.post(
+            "/v1/audio/speech",
+            json={
+                "request_id": "restart",
+                "model": "speechshift-voice",
+                "input": "The service restarted.",
+                "voice": "ryan",
+                "language": "en",
+            },
+        )
+
+    assert cancellation.status_code == 200
+    assert cancellation.json()["state"] == "cancelling"
+    assert cancellation_seconds < 0.25
+    assert cancelled.status_code == 409
+    assert cancelled.json()["error"]["code"] == "request_cancelled"
+    assert restarted.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_tts_cancellation_fails_an_unresponsive_worker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("modeldeck.workers.tts_worker.CANCELLATION_GRACE_SECONDS", 0.02)
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    engine = UnresponsiveTTSEngine()
+    app = create_tts_app(
+        worker_id="tts",
+        config=TTSConfig(spec.model_id, spec.revision, "speechshift-voice", tmp_path),
+        engine=engine,
+        thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
+    )
+    mark_ready(app, tts=True)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            active = asyncio.create_task(
+                client.post(
+                    "/v1/audio/speech",
+                    json={
+                        "request_id": "unresponsive",
+                        "model": "speechshift-voice",
+                        "input": "Cancel this request.",
+                        "voice": "ryan",
+                        "language": "en",
+                    },
+                )
+            )
+            assert await wait_for_thread_event(engine.started)
+            cancellation = await client.post("/cancel", json={"request_id": "unresponsive"})
+            response = await active
+    finally:
+        engine.release.set()
+
+    assert cancellation.status_code == 200
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "cancellation_unresponsive"
+    assert app.state.worker_state == WorkerState.FAILED
+    assert app.state.ready is False
+
+
+@pytest.mark.asyncio
+async def test_tts_thermal_monitoring_cancels_active_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "modeldeck.workers.tts_worker._await_cancelled_task",
+        await_test_cancelled_result,
+    )
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    readings = iter([TemperatureSnapshot(45, 55), TemperatureSnapshot(80, 60)])
+    engine = ControllableTTSEngine()
+    app = create_tts_app(
+        worker_id="tts",
+        config=TTSConfig(spec.model_id, spec.revision, "speechshift-voice", tmp_path),
+        engine=engine,
+        thermal_guard=ThermalGuard(lambda: next(readings)),
+    )
+    mark_ready(app, tts=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        active = asyncio.create_task(
+            client.post(
+                "/v1/audio/speech",
+                json={
+                    "request_id": "too-hot",
+                    "model": "speechshift-voice",
+                    "input": "Stop when the thermal limit is reached.",
+                    "voice": "ryan",
+                    "language": "en",
+                },
+            )
+        )
+        assert await wait_for_thread_event(engine.started)
+        response = await active
+        metrics = await client.get("/metrics")
+
+    assert await wait_for_thread_event(engine.cancelled)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "thermal_limit_reached"
+    assert metrics.json()["thermal_cancellations"] == 1
+    assert metrics.json()["last_temperatures"]["gpu_edge_celsius"] == 80
+
+
+@pytest.mark.asyncio
+async def test_tts_timeout_returns_a_structured_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "modeldeck.workers.tts_worker._await_cancelled_task",
+        await_test_cancelled_result,
+    )
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    engine = ControllableTTSEngine()
+    app = create_tts_app(
+        worker_id="tts",
+        config=TTSConfig(
+            spec.model_id,
+            spec.revision,
+            "speechshift-voice",
+            tmp_path,
+            generation_timeout_seconds=0.03,
+        ),
+        engine=engine,
+        thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
+    )
+    mark_ready(app, tts=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        active = asyncio.create_task(
+            client.post(
+                "/v1/audio/speech",
+                json={
+                    "request_id": "time-out",
+                    "model": "speechshift-voice",
+                    "input": "This generation will time out.",
+                    "voice": "ryan",
+                    "language": "en",
+                },
+            )
+        )
+        assert await wait_for_thread_event(engine.started)
+        response = await active
+
+    assert await wait_for_thread_event(engine.cancelled)
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "generation_timeout"
+
+
+@pytest.mark.asyncio
+async def test_tts_logs_and_metrics_exclude_speech_content(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    caplog.set_level(logging.INFO, logger="modeldeck.tts")
+    spec = SPEECHSHIFT_MODEL_SPECS["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    engine = FakeTTSEngine()
+    app = create_tts_app(
+        worker_id="tts",
+        config=TTSConfig(spec.model_id, spec.revision, "speechshift-voice", tmp_path),
+        engine=engine,
+        thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
+    )
+    mark_ready(app, tts=True)
+    speech_text = "Private visitor phrase 7f14b0."
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/audio/speech",
+            json={
+                "request_id": "private-speech",
+                "model": "speechshift-voice",
+                "input": speech_text,
+                "voice": "ryan",
+                "language": "en",
+            },
+        )
+        metrics = await client.get("/metrics")
+
+    assert response.status_code == 200
+    serialised_metrics = str(metrics.json())
+    encoded_audio = base64.b64encode(response.content).decode("ascii")
+    assert speech_text not in caplog.text
+    assert speech_text not in serialised_metrics
+    assert encoded_audio not in caplog.text
+    assert encoded_audio not in serialised_metrics
 
 
 def test_tts_fails_closed_when_start_temperature_is_unsafe() -> None:
@@ -297,7 +675,7 @@ async def test_recognition_contract_is_bounded_and_content_free_in_metrics(tmp_p
     serialised_metrics = str(metrics.json())
     assert "The service is ready." not in serialised_metrics
     assert str(payload["audio_base64"]) not in serialised_metrics
-    assert await asyncio.to_thread(lambda: list(tmp_path.iterdir())) == []
+    assert list(tmp_path.iterdir()) == []  # noqa: ASYNC240
 
 
 @pytest.mark.asyncio

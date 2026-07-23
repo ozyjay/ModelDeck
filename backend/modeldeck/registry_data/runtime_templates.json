@@ -98,7 +98,7 @@
       "runtime": "qwen3-tts-rocm",
       "generation_family": "speech-synthesis",
       "capabilities": {"streaming": false, "cancellation": true, "audio_output": true, "speech_synthesis": true},
-      "settings": {"sample_rate_hz": 24000, "channels": 1, "maximum_input_characters": 2000, "maximum_codec_tokens": 1200, "maximum_audio_seconds": 90, "generation_timeout_seconds": 120, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 240, "hardware_verification_required": true},
+      "settings": {"sample_rate_hz": 24000, "channels": 1, "maximum_input_characters": 2000, "maximum_codec_tokens": 256, "maximum_audio_seconds": 90, "generation_timeout_seconds": 75, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 240, "hardware_verification_required": true},
       "cache_setting": "cache_root",
       "lifecycle": "resident",
       "dtype": "bfloat16"

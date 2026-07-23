@@ -17,6 +17,10 @@ import httpx
 
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import WorkerEvent, WorkerState
+from modeldeck.speechshift import (
+    QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
+    QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+)
 from modeldeck.thermal import (
     AdmissionAction,
     ThermalAdmissionError,
@@ -645,11 +649,21 @@ def _qwen_tts_launch(profile: ModelProfile, environment: dict[str, str], common:
             "--maximum-input-characters",
             str(profile.settings.get("maximum_input_characters", 2000)),
             "--maximum-codec-tokens",
-            str(profile.settings.get("maximum_codec_tokens", 1200)),
+            str(
+                profile.settings.get(
+                    "maximum_codec_tokens",
+                    QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+                )
+            ),
             "--maximum-audio-seconds",
             str(profile.settings.get("maximum_audio_seconds", 90)),
             "--generation-timeout-seconds",
-            str(profile.settings.get("generation_timeout_seconds", 120)),
+            str(
+                profile.settings.get(
+                    "generation_timeout_seconds",
+                    QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
+                )
+            ),
         ],
         environment=environment,
     )

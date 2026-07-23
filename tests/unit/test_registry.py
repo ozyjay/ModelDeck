@@ -8,7 +8,11 @@ from modeldeck.registry import (
     runtime_template_registrations,
     runtime_templates,
 )
-from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
+from modeldeck.speechshift import (
+    QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
+    QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+    SPEECHSHIFT_MODEL_SPECS,
+)
 
 
 def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
@@ -128,6 +132,8 @@ def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:
     assert synthesis.capabilities.speech_synthesis is True
     assert synthesis.capabilities.cancellation is True
     assert synthesis.settings["sample_rate_hz"] == 24_000
+    assert synthesis.settings["maximum_codec_tokens"] == QWEN_TTS_MAXIMUM_CODEC_TOKENS
+    assert synthesis.settings["generation_timeout_seconds"] == QWEN_TTS_GENERATION_TIMEOUT_SECONDS
     assert synthesis.settings["hardware_verification_required"] is True
     assert recognition.runtime == "whisper-small-en-rocm"
     assert recognition.generation_family.value == "speech-recognition"

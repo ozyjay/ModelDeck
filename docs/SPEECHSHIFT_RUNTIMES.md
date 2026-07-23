@@ -100,3 +100,43 @@ $Env:MODELDECK_RUN_WHISPER_HARDWARE_TESTS = '1'
 $Env:MODELDECK_WHISPER_PYTHON = '.venv-whisper-rocm72/bin/python'
 .venv/bin/python -m pytest tests/hardware/test_speech_recognition_rocm.py -v
 ```
+
+## Qwen3-TTS deployed qualification
+
+The sampled 256-token configuration was physically qualified on 23 July 2026 against the
+Radeon 8060S before publishing Open2026 Event revision 32. The deployed Worker
+`7f93fdbf-6a01-4320-94da-ca9440b51283` uses the pinned Qwen snapshot above, BF16, standard
+PyTorch SDPA, `do_sample=True`, `subtalker_dosample=True`, a resident warmed model, a
+256 codec-token limit and a 75-second generation deadline. Sampling, seed, temperature,
+style instructions and arbitrary speakers remain absent from the request contract.
+
+Fixed synthetic English, French and German requests completed in 45.643, 53.835 and
+50.630 seconds respectively. They produced 5.04, 5.92 and 5.52 seconds of audio, for
+real-time factors of 9.056, 9.094 and 9.172. Because the Worker returns a complete WAV,
+first-audio latency equalled request time. No output contained clipped PCM16 samples.
+Multilingual Whisper transcription produced word-error rates of 0.20, 0.333 and 0.333;
+only aggregate scores were retained.
+
+The comparison observed a 2,634.984 MB global device-memory baseline with the resident
+Worker and a 3,021.004 MB peak during requests. Peak temperatures were 63.0 °C GPU edge
+and 71.125 °C CPU package. A cancellation request was acknowledged in 7.010 ms. Qwen did
+not reach its stopping criterion within the five-second grace period, so ModelDeck failed
+the Worker closed and returned the structured `cancellation_unresponsive` error in
+5.218 seconds. Stopping the process recovered global device memory to 0.059 MB, and a
+clean restart and smoke request passed.
+
+A deliberately long request exercised the immutable deadline. ModelDeck returned the
+structured fail-closed response after 80.081 seconds, including the five-second
+cancellation grace, leaving 9.919 seconds before SpeechShift's 90-second HTTP timeout.
+The process again recovered to 0.059 MB and restarted cleanly. The published
+`speechshift-voice` Route was then confirmed ready through gateway port 8600 and returned
+a 24 kHz mono WAV in a gateway smoke request.
+
+The privacy-safe aggregate report is generated with:
+
+```powershell
+pwsh -NoProfile -File scripts/qualify_qwen3_tts.ps1
+```
+
+Generated waveform and transcription content remain in memory only, are cleared after
+measurement and are not included in the report, Worker logs or metrics.

@@ -24,7 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 from modeldeck.speechshift import (
     QWEN_LANGUAGE_NAMES,
+    QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
     QWEN_TTS_LANGUAGES,
+    QWEN_TTS_MAXIMUM_CODEC_TOKENS,
     QWEN_TTS_SAMPLE_RATE_HZ,
     QWEN_TTS_VOICES,
     SPEECHSHIFT_MODEL_SPECS,
@@ -43,9 +45,9 @@ class TTSConfig:
     alias: str
     cache_root: Path
     maximum_input_characters: int = 2000
-    maximum_codec_tokens: int = 1200
+    maximum_codec_tokens: int = QWEN_TTS_MAXIMUM_CODEC_TOKENS
     maximum_audio_seconds: int = 90
-    generation_timeout_seconds: float = 120.0
+    generation_timeout_seconds: float = QWEN_TTS_GENERATION_TIMEOUT_SECONDS
 
     @property
     def snapshot_path(self) -> Path:
@@ -151,7 +153,8 @@ class QwenTTSEngine:
                 speaker=voice.title(),
                 instruct=None,
                 max_new_tokens=self.config.maximum_codec_tokens,
-                do_sample=False,
+                do_sample=True,
+                subtalker_dosample=True,
                 stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
             )
             inference_seconds = time.perf_counter() - started
@@ -504,6 +507,8 @@ async def _run_synthesis(
     peak = initial_temperature
     thermal_reason: str | None = None
     while not task.done():
+        if cancellation.is_set():
+            break
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             cancellation.set()
@@ -569,7 +574,9 @@ async def _release_slot(request: Request, request_id: str) -> None:
         if request.app.state.active_request_id == request_id:
             request.app.state.active_request_id = None
             request.app.state.active_cancellation = None
-            request.app.state.worker_state = WorkerState.READY
+            request.app.state.worker_state = (
+                WorkerState.READY if request.app.state.ready else WorkerState.FAILED
+            )
 
 
 def _temperature_dict(snapshot: TemperatureSnapshot) -> dict[str, float]:
@@ -600,9 +607,17 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--cache-root", type=Path, required=True)
     parser.add_argument("--maximum-input-characters", type=int, default=2000)
-    parser.add_argument("--maximum-codec-tokens", type=int, default=1200)
+    parser.add_argument(
+        "--maximum-codec-tokens",
+        type=int,
+        default=QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+    )
     parser.add_argument("--maximum-audio-seconds", type=int, default=90)
-    parser.add_argument("--generation-timeout-seconds", type=float, default=120)
+    parser.add_argument(
+        "--generation-timeout-seconds",
+        type=float,
+        default=QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
+    )
     arguments = parser.parse_args()
     spec = SPEECHSHIFT_MODEL_SPECS.get(arguments.model_id)
     if spec is None or arguments.revision != spec.revision or spec.generation_family != "speech-synthesis":

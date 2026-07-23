@@ -7,7 +7,11 @@ import pytest
 from modeldeck.profiles import LocalProfileRequest, create_local_profile
 from modeldeck.protocol import LifecycleClass
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
-from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
+from modeldeck.speechshift import (
+    QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
+    QWEN_TTS_MAXIMUM_CODEC_TOKENS,
+    SPEECHSHIFT_MODEL_SPECS,
+)
 from modeldeck.supervisor.service import (
     TRUSTED_LAUNCH_BUILDERS,
     WorkerSupervisor,
@@ -254,7 +258,13 @@ def test_qwen_tts_launch_is_isolated_offline_and_has_no_arch_override(monkeypatc
         "-m",
         "modeldeck.workers.tts_worker",
     ]
+    assert launch.command[launch.command.index("--maximum-codec-tokens") + 1] == str(
+        QWEN_TTS_MAXIMUM_CODEC_TOKENS
+    )
     assert launch.command[launch.command.index("--maximum-audio-seconds") + 1] == "90"
+    assert launch.command[launch.command.index("--generation-timeout-seconds") + 1] == str(
+        QWEN_TTS_GENERATION_TIMEOUT_SECONDS
+    )
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert "HSA_OVERRIDE_GFX_VERSION" not in launch.environment
