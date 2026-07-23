@@ -74,7 +74,7 @@ prompt and decoding changes. Those changes are not present in 0.2.2.
 The completed isolated 0.2.2 run used immutable Worker
 `3ad2f88d-8936-4ffc-ac63-6b5e6543d4ed` and is recorded in
 `var/benchmarks/scenechat_visual_tokens_20260723T145634Z.json`. It fixed the functional
-failure but did not pass promotion:
+failure and supplied the evidence used for the operator's promotion decision:
 
 - all 70 measured responses were schema-valid with zero failures and normal `stop`
   finishes;
@@ -89,8 +89,17 @@ failure but did not pass promotion:
   `-HumanReview` without an interactive terminal and could not retain its report; the
   benchmark now rejects that mode before worker startup.
 
-The 0.2.2 Worker is retained but stopped. The combined two-hour run, drills, manual review,
-Event rebinding and publication remain blocked by the isolated median-latency gate.
+On 24 July 2026, the operator explicitly accepted this result and directed promotion,
+overriding the 8-second median target, preferred 260-token target, combined two-hour run,
+drills and separate manual-review gates for this immutable Worker. This exception does not
+change the default qualification requirements for future candidates.
+
+Open2026 revision 35 is published and active. Its `scenechat-vision` Route uses
+`3ad2f88d-8936-4ffc-ac63-6b5e6543d4ed` as primary and retains mock Worker
+`d2352c8b-834d-4199-97b6-ce779ab8c8ad` as backup. The prior 280-visual-token Worker remains
+unarchived for rollback. Native smoke, gateway advertisement, selected/effective-provider
+checks and an approved synthetic replay PNG completion through port 8600 passed; the
+completion stopped normally at 322 tokens.
 
 The isolated physical run on 23 July 2026 used 0.2.0 immutable Worker
 `c6fadc21-2adf-465f-b3a6-d69c33102f76` and is recorded in
@@ -111,10 +120,9 @@ with two warm-ups and ten measured requests per question. It did not pass promot
 - after shutdown, the Worker process was absent and ROCm reported 354,406,400 bytes of
   dedicated VRAM in use.
 
-The combined two-hour run and manual output review were not started because the isolated
-zero-failure gate failed. The candidate is retained but stopped for comparison evidence. It
-was not rebound or published: Open2026 revision 34 still routes SceneChat through Worker
-`b4d8adcc-106d-4780-8874-387e5b7ab935` with its existing mock fallback.
+The combined two-hour run and manual output review were not started for 0.2.0 because its
+isolated zero-failure gate failed. That candidate remains stopped as comparison evidence;
+revision 34 is retained as immutable rollback history.
 
-Do not rebind or publish 0.2.2. Any further decoding, prompt, model or runtime change
-requires a new immutable Worker and a fresh isolated qualification.
+Any further decoding, prompt, model or runtime change requires a new immutable Worker and
+a fresh isolated qualification.

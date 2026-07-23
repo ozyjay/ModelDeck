@@ -67,6 +67,12 @@ replacement passes every gate. If the candidate fails, stop it, restore the Even
 start the prior Worker and smoke the route through gateway port 8600. Never rewrite an
 existing published revision or silently select the mock Worker.
 
+Operator exception recorded 24 July 2026: immutable 0.2.2 Worker
+`3ad2f88d-8936-4ffc-ac63-6b5e6543d4ed` was explicitly accepted despite its 8.76-second
+median and 300–358-token per-question p95. Open2026 revision 35 promotes it as primary,
+retains the existing mock backup and preserves revision 34 plus the prior Worker for
+rollback. Native and port-8600 synthetic PNG smoke tests passed after publication.
+
 ## Switching and recovery
 
 - Stop a worker from the dashboard before starting a conflicting exclusive model.
