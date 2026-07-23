@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -33,7 +33,7 @@
       "runtime": "qwen35-vision-language-transformers-rocm",
       "generation_family": "vision-language",
       "capabilities": {"chat": "compatibility-only", "streaming": false, "cancellation": true, "image_input": true, "structured_output": true},
-      "settings": {"context_length": 8192, "maximum_new_tokens": 512, "visual_token_budget": 280, "generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180, "hardware_verification_required": true},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 1024, "visual_token_budget": 140, "generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180, "hardware_verification_required": true},
       "cache_setting": "cache_root",
       "dtype": "bfloat16"
     },

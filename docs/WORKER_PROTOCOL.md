@@ -100,7 +100,9 @@ The dedicated Qwen3.5 adapter accepts only the official `Qwen/Qwen3.5-0.8B`,
 `Qwen3_5ForConditionalGeneration`, uses local files without remote code, and bounds image
 pixels to the configured visual-token budget. Catalogue recognition is not physical ROCm
 compatibility evidence; readiness still requires a successful load and warm-up on the
-detected stack.
+detected stack. Packaged runtime profile 0.2.0 defaults Qwen3.5 to 140 visual tokens and
+a 1,024-token hard completion ceiling. The larger ceiling is truncation headroom; the
+canonical output contract is designed to keep normal responses near 180–260 tokens.
 
 The Repartee speech protocol and its fixed PCM framing are documented in
 `docs/REPARTEE_RUNTIMES.md`. Autoregressive GPT-OSS requests continue to use the existing
@@ -114,8 +116,9 @@ The built-in profile accepts `google/gemma-4-E2B-it` revision
 allowlisted Gemma 4 unified snapshot. Each profile uses its pinned processor, chat template,
 and image processing; neither the gateway nor SceneChat loads a tokenizer or processor.
 Generation uses deterministic greedy decoding so the strict JSON contract does
-not depend on a stochastic sampling path, and the profile caps output at 512 tokens with a
-60-second deadline. Disconnect polling is bounded to avoid starving the generation thread.
+not depend on a stochastic sampling path. Gemma 4 retains its 512-token default, while the
+Qwen3.5 0.2.0 profile uses a 1,024-token ceiling; both retain the 60-second deadline.
+Disconnect polling is bounded to avoid starving the generation thread.
 Readiness remains false until local processor/model loading and a one-token synthetic-image
 warm-up have succeeded.
 
@@ -131,6 +134,12 @@ contract prompts. The worker extracts only the curated question, places the cano
 safety rules and visible-text invariant in the system role, and supplies an in-memory RGB
 image directly to the processor. External URLs, SVG, additional images, arbitrary prompts,
 streaming, and over-limit input are rejected.
+
+The canonical response is limited to fewer than 45 summary words, at most eight objects,
+three relationships, three uncertainties and one safety note. Object descriptions contain
+at most 15 words. Relationship, uncertainty and safety entries are limited to one short
+sentence. These limits are enforced by both the packaged JSON schema and the Pydantic
+validator; prompt wording alone is never treated as sufficient enforcement.
 
 Example successful response:
 
@@ -158,8 +167,10 @@ JSON. Invalid output returns `502 invalid_model_output`; it is never repaired, r
 fabricated, or replaced. One request may run at a time and a second is rejected immediately
 with 429. The worker is implemented, but is not Open Day ready until the physical gates pass.
 
-Validation failures record only the request ID, a safe failure category, completion-token
-count, effective token limit, whether that limit was reached, and elapsed time. Safety
-failures distinguish `prohibited_identity` from `prohibited_sensitive_attribute` without
-recording the matched text. Images, prompts, raw model output, visitor-facing text,
-credentials, and headers are never logged.
+Validation failures record only the request ID, a safe failure category, token counts,
+effective token limit, whether that limit was reached, finish reason and elapsed time.
+Metrics additionally expose preprocessing, inference, validation and total worker time,
+visual-token count and token throughput. Safety failures distinguish
+`prohibited_identity` from `prohibited_sensitive_attribute` without recording the matched
+text. Images, prompts, raw model output, visitor-facing text, credentials, and headers are
+never logged.

@@ -181,6 +181,8 @@ def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp
             model_id="Qwen/Qwen3.5-4B",
             revision="a" * 40,
             alias="qwen35-4b",
+            maximum_new_tokens=1024,
+            visual_token_budget=140,
         ),
         cache_root=tmp_path,
         port=8630,
@@ -199,6 +201,8 @@ def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp
         "modeldeck.workers.qwen35_worker",
     ]
     assert launch.command[launch.command.index("--model-id") + 1] == "Qwen/Qwen3.5-4B"
+    assert launch.command[launch.command.index("--maximum-new-tokens") + 1] == "1024"
+    assert launch.command[launch.command.index("--visual-token-budget") + 1] == "140"
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)

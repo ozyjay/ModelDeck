@@ -49,6 +49,7 @@ MAX_IMAGE_DIMENSION = 4096
 MAX_IMAGE_PIXELS = 16_000_000
 SUPPORTED_MIME_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG"}
 DEFAULT_MAXIMUM_NEW_TOKENS = 512
+SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT = 1024
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 APPROVED_FP32_BUFFER_SUFFIXES = (
     "input_min",
@@ -78,6 +79,8 @@ class EngineConfig:
     visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
 
     def __post_init__(self) -> None:
+        if not 1 <= self.maximum_new_tokens <= SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT:
+            raise ValueError(f"maximum_new_tokens must be between 1 and {SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT}")
         if self.visual_token_budget not in ALLOWED_VISUAL_TOKEN_BUDGETS:
             raise ValueError(
                 "visual_token_budget must be one of "
@@ -105,7 +108,11 @@ def _log_output_validation_failure(
     elapsed_seconds: float,
 ) -> None:
     token_limit_reached = completion_tokens >= effective_token_limit
-    failure_category = "token_limit_reached" if token_limit_reached else error.category
+    failure_category = _output_failure_category(
+        error,
+        completion_tokens=completion_tokens,
+        effective_token_limit=effective_token_limit,
+    )
     LOGGER.warning(
         "SceneChat output validation failed request_id=%s failure_category=%s "
         "completion_tokens=%d effective_token_limit=%d token_limit_reached=%s elapsed_seconds=%.4f",
@@ -116,6 +123,17 @@ def _log_output_validation_failure(
         token_limit_reached,
         elapsed_seconds,
     )
+
+
+def _output_failure_category(
+    error: ModelOutputValidationError,
+    *,
+    completion_tokens: int,
+    effective_token_limit: int,
+) -> str:
+    if completion_tokens >= effective_token_limit:
+        return "token_limit_reached"
+    return error.category
 
 
 class ResponseFormat(BaseModel):
@@ -137,7 +155,7 @@ class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage] = Field(min_length=1, max_length=1)
     temperature: Literal[0.1]
-    max_tokens: int = Field(ge=1, le=700)
+    max_tokens: int = Field(ge=1, le=SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT)
     response_format: ResponseFormat
     stream: Literal[False] = False
 
@@ -482,6 +500,11 @@ def create_app(
         "visual_token_budget": config.visual_token_budget,
         "image_patch_size": GEMMA4_PATCH_SIZE,
         "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
+        "maximum_new_tokens": config.maximum_new_tokens,
+        "generation_timeout_seconds": config.generation_timeout_seconds,
+        "enable_thinking": False,
+        "do_sample": False,
+        "use_cache": True,
         **(vision_settings or {}),
     }
 
@@ -701,11 +724,16 @@ def create_app(
         diagnostic: dict[str, Any] = {
             **reported_vision_settings,
             "queue_seconds": round(queue_seconds, 6),
+            "prompt_tokens": None,
             "preprocessing_seconds": None,
             "inference_seconds": None,
             "validation_seconds": None,
             "total_worker_seconds": None,
             "completion_tokens": None,
+            "tokens_per_second": None,
+            "finish_reason": None,
+            "token_limit_reached": False,
+            "output_failure_category": None,
             "outcome": "internal_error",
             "error_code": "internal_error",
         }
@@ -736,10 +764,20 @@ def create_app(
                 raise SceneChatRequestError(504, "request_cancelled", "The local generation was cancelled.")
             diagnostic.update(
                 {
+                    "prompt_tokens": result.prompt_tokens,
                     "preprocessing_seconds": round(result.preprocessing_seconds, 6),
                     "inference_seconds": round(result.inference_seconds, 6),
                     "visual_tokens": result.visual_tokens,
                     "completion_tokens": result.completion_tokens,
+                    "tokens_per_second": (
+                        round(result.completion_tokens / result.inference_seconds, 6)
+                        if result.inference_seconds > 0
+                        else None
+                    ),
+                    "finish_reason": (
+                        "length" if result.completion_tokens >= effective_token_limit else "stop"
+                    ),
+                    "token_limit_reached": result.completion_tokens >= effective_token_limit,
                 }
             )
             validation_started = time.perf_counter()
@@ -747,6 +785,11 @@ def create_app(
                 content, _analysis = canonicalise_model_output(result.text)
             except ModelOutputValidationError as error:
                 diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
+                diagnostic["output_failure_category"] = _output_failure_category(
+                    error,
+                    completion_tokens=result.completion_tokens,
+                    effective_token_limit=effective_token_limit,
+                )
                 _log_output_validation_failure(
                     request_id=request_id,
                     error=error,
@@ -784,7 +827,7 @@ def create_app(
                     {
                         "index": 0,
                         "message": {"role": "assistant", "content": content},
-                        "finish_reason": "stop",
+                        "finish_reason": diagnostic["finish_reason"],
                     }
                 ],
             }
@@ -863,6 +906,12 @@ def create_app(
                 "metrics": {
                     "prompt_tokens": result.prompt_tokens,
                     "completion_tokens": result.completion_tokens,
+                    "preprocessing_seconds": round(result.preprocessing_seconds, 6),
+                    "inference_seconds": round(result.inference_seconds, 6),
+                    "visual_tokens": result.visual_tokens,
+                    "finish_reason": (
+                        "length" if result.completion_tokens >= config.maximum_new_tokens else "stop"
+                    ),
                 },
             }
         finally:
@@ -1032,7 +1081,8 @@ def _record_request_diagnostics(request: Request, diagnostic: dict[str, Any]) ->
         "image_pooling_kernel_size=%s input_width=%s input_height=%s "
         "input_bytes=%s visual_tokens=%s queue_seconds=%s preprocessing_seconds=%s "
         "inference_seconds=%s validation_seconds=%s total_worker_seconds=%s "
-        "completion_tokens=%s outcome=%s error_code=%s",
+        "prompt_tokens=%s completion_tokens=%s tokens_per_second=%s finish_reason=%s "
+        "token_limit_reached=%s output_failure_category=%s outcome=%s error_code=%s",
         diagnostic.get("visual_token_budget"),
         diagnostic.get("image_patch_size"),
         diagnostic.get("image_pooling_kernel_size"),
@@ -1045,7 +1095,12 @@ def _record_request_diagnostics(request: Request, diagnostic: dict[str, Any]) ->
         diagnostic.get("inference_seconds"),
         diagnostic.get("validation_seconds"),
         diagnostic.get("total_worker_seconds"),
+        diagnostic.get("prompt_tokens"),
         diagnostic.get("completion_tokens"),
+        diagnostic.get("tokens_per_second"),
+        diagnostic.get("finish_reason"),
+        diagnostic.get("token_limit_reached"),
+        diagnostic.get("output_failure_category"),
         diagnostic.get("outcome"),
         diagnostic.get("error_code"),
     )

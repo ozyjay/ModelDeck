@@ -335,6 +335,26 @@ async def test_scenechat_worker_uses_trusted_runtime_creation_defaults(tmp_path,
                     "visual_token_budget": 140,
                 },
             )
+            created_1024 = await client.post(
+                "/api/workers",
+                json={
+                    "name": "SceneChat Gemma 4 E2B 1024",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "scenechat-gemma4",
+                    "maximum_new_tokens": 1024,
+                },
+            )
+            rejected_tokens = await client.post(
+                "/api/workers",
+                json={
+                    "name": "SceneChat invalid output limit",
+                    "model_id": cached["model_id"],
+                    "revision": cached["revision"],
+                    "runtime_template_id": "scenechat-gemma4",
+                    "maximum_new_tokens": 1025,
+                },
+            )
             rejected_budget = await client.post(
                 "/api/workers",
                 json={
@@ -359,6 +379,9 @@ async def test_scenechat_worker_uses_trusted_runtime_creation_defaults(tmp_path,
     assert payload["settings"]["visual_token_budget"] == 280
     assert created_140.status_code == 201, created_140.text
     assert created_140.json()["settings"]["visual_token_budget"] == 140
+    assert created_1024.status_code == 201, created_1024.text
+    assert created_1024.json()["settings"]["maximum_new_tokens"] == 1024
+    assert rejected_tokens.status_code == 422
     assert rejected_budget.status_code == 422
 
 

@@ -13,10 +13,11 @@ from modeldeck.runtime_trust import TRUSTED_RUNTIME_IMPLEMENTATIONS
 
 TRUST_DIRECTORY_NAME = "trusted-runtime-manifests"
 TRUST_REGISTRY_NAME = "trust.json"
+MAXIMUM_NEW_TOKENS_LIMIT = 1024
 BOUNDED_INTEGER_SETTINGS = {
     "top_k": (1, 100),
     "context_length": (256, 32768),
-    "maximum_new_tokens": (1, 512),
+    "maximum_new_tokens": (1, MAXIMUM_NEW_TOKENS_LIMIT),
     "maximum_denoising_steps": (1, 48),
     "startup_timeout_seconds": (1, 1800),
     "warmup_timeout_seconds": (1, 900),

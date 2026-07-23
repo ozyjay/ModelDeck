@@ -35,7 +35,7 @@ class CompletionRequest(BaseModel):
     messages: list[dict[str, Any]] | None = None
     stream: bool = False
     seed: int = 7
-    max_tokens: int = Field(default=32, ge=1, le=512)
+    max_tokens: int = Field(default=32, ge=1, le=1024)
     top_k: int = Field(default=5, ge=1, le=20)
 
 

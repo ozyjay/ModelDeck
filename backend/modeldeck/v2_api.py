@@ -18,6 +18,7 @@ from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES, MockWorkerTemplate
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
+from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
 from modeldeck.thermal import ThermalAdmissionError
 
 
@@ -30,7 +31,11 @@ class WorkerCreateRequest(BaseModel):
     dtype: Literal["float16", "bfloat16", "float32"] | None = None
     lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
     context_length: int | None = Field(default=None, ge=256, le=32768)
-    maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
+    maximum_new_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAXIMUM_NEW_TOKENS_LIMIT,
+    )
     maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
     visual_token_budget: VisualTokenBudget | None = None
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
@@ -80,7 +85,11 @@ class WorkerReplacementRequest(BaseModel):
     dtype: Literal["float16", "bfloat16", "float32"] | None = None
     lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
     context_length: int | None = Field(default=None, ge=256, le=32768)
-    maximum_new_tokens: int | None = Field(default=None, ge=1, le=512)
+    maximum_new_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAXIMUM_NEW_TOKENS_LIMIT,
+    )
     maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
     visual_token_budget: VisualTokenBudget | None = None
     rebind_drafts: bool = True

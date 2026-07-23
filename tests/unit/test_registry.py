@@ -32,6 +32,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
+    assert registrations["scenechat-qwen35"].package.version == "0.2.0"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 
@@ -113,7 +114,8 @@ def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verificatio
     assert template.runtime == "qwen35-vision-language-transformers-rocm"
     assert template.dtype == "bfloat16"
     assert template.settings["context_length"] == 8192
-    assert template.settings["visual_token_budget"] == 280
+    assert template.settings["maximum_new_tokens"] == 1024
+    assert template.settings["visual_token_budget"] == 140
     assert template.settings["hardware_verification_required"] is True
 
 

@@ -50,6 +50,21 @@ and operator handover pass against one complete fingerprint. If a physical gate 
 leave the worker stopped or incompatible and use SceneChat mock, replay, or live-camera-only
 mode. Never change precision, attention implementation, model, or provider automatically.
 
+### SceneChat Qwen3.5 latency candidate
+
+The Qwen3.5 0.2.0 candidate retains BF16, deterministic generation, disabled thinking,
+KV caching, SDPA and the 60-second deadline. Its immutable defaults are 140 visual tokens
+and a 1,024-token hard completion ceiling. Do not publish it based on a smoke test alone.
+Run both the isolated seven-question benchmark and the combined-load two-hour command in
+`docs/BENCHMARKS.md`, review one fixed output per curated question, and retain the exact
+Worker and runtime-template versions.
+
+For rollback, keep the published 280-visual-token Worker stopped but unarchived until the
+replacement passes every gate. If the candidate fails, stop it, restore the Event draft's
+`scenechat-vision` worker list to the prior Worker, publish a new immutable Event revision,
+start the prior Worker and smoke the route through gateway port 8600. Never rewrite an
+existing published revision or silently select the mock Worker.
+
 ## Switching and recovery
 
 - Stop a worker from the dashboard before starting a conflicting exclusive model.

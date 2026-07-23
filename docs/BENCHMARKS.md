@@ -44,20 +44,46 @@ It never changes Event routing or Worker configuration.
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
 
-For a focused 140-versus-280 visual-token comparison, run the prepared 1280-by-720
-synthetic SceneChat image through each pinned Worker 50 times:
+For a focused SceneChat comparison, run the committed 1280-by-720, 59,214-byte synthetic
+booth image through every curated question. The benchmark performs two warm-ups and ten
+measured requests per question by default:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
     -Worker70 '<70-worker-id>' `
     -Worker140 '<140-worker-id>' `
     -Worker280 '<280-worker-id>' `
-    -Runs 50 `
+    -RunsPerQuestion 10 `
+    -LoadMode isolated `
     -HumanReview
 ```
 
 Supply any one or more of `Worker70`, `Worker140` and `Worker280`. A single Worker runs
 one focused arm; multiple Workers must use the same pinned model and revision.
+
+Each arm records per-question and aggregate end-to-end latency, prompt and completion
+tokens, tokens per second, actual visual tokens, preprocessing, inference, validation and
+gateway overhead, finish reasons and safe failure categories. Question IDs—not prompt
+text—identify the seven fixed questions in the report. Token-limit accounting uses each
+immutable Worker's configured ceiling, including the Qwen3.5 0.2.0 profile's 1,024-token
+limit.
+
+After isolated acceptance, exercise the intended resident Open Day load and two-hour
+minimum duration:
+
+```powershell
+pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+    -Worker140 '<candidate-worker-id>' `
+    -RunsPerQuestion 10 `
+    -LoadMode combined `
+    -MinimumDurationSeconds 7200 `
+    -HumanReview
+```
+
+`isolated` stops other ready managed Workers for the arm and restores them after a
+non-thermal completion. `combined` leaves unrelated ready Workers resident and stops only
+other comparison arms. A thermal abort deliberately leaves previously ready Workers
+stopped for operator inspection.
 
 The focused benchmark waits until the hottest reported sensor is at or below 65°C before
 each arm, then samples live Fedora hwmon telemetry every 0.5 seconds. By default it pauses

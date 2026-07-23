@@ -566,7 +566,7 @@ function parametersAreValid(template: RuntimeTemplate, values: WorkerParameterVa
   const validContext = !["autoregressive", "vision-language"].includes(template.generation_family)
     || (values.contextLength >= 256 && values.contextLength <= 32768);
   const validOutput = ["speech-conversation", "text-translation", "speech-synthesis", "speech-recognition"].includes(template.generation_family)
-    || (values.maximumNewTokens >= 1 && values.maximumNewTokens <= 512);
+    || (values.maximumNewTokens >= 1 && values.maximumNewTokens <= 1024);
   const validDenoising = template.generation_family !== "text-diffusion"
     || (values.maximumDenoisingSteps >= 1 && values.maximumDenoisingSteps <= 48);
   const validVisualBudget = template.generation_family !== "vision-language"
@@ -597,7 +597,7 @@ function WorkerParameterFields({ template, values, onChange }: {
         </select>
       </label>
       {hasContext && <label>Context length<small>256–32,768 tokens</small><input aria-label="Context length" type="number" min={256} max={32768} value={values.contextLength} onChange={(event) => update({ contextLength: event.target.valueAsNumber })} /></label>}
-      {hasOutput && <label>Maximum output<small>1–512 tokens</small><input aria-label="Maximum output" type="number" min={1} max={512} value={values.maximumNewTokens} onChange={(event) => update({ maximumNewTokens: event.target.valueAsNumber })} /></label>}
+      {hasOutput && <label>Maximum output<small>1–1,024 tokens</small><input aria-label="Maximum output" type="number" min={1} max={1024} value={values.maximumNewTokens} onChange={(event) => update({ maximumNewTokens: event.target.valueAsNumber })} /></label>}
       {hasDenoising && <label>Maximum denoising steps<small>1–48 refinement steps</small><input aria-label="Maximum denoising steps" type="number" min={1} max={48} value={values.maximumDenoisingSteps} onChange={(event) => update({ maximumDenoisingSteps: event.target.valueAsNumber })} /></label>}
       {hasVisualBudget && <label>Visual token budget<small>Trusted Gemma 4 image detail limit</small><select aria-label="Visual token budget" value={values.visualTokenBudget} onChange={(event) => update({ visualTokenBudget: Number(event.target.value) })}>{[70, 140, 280, 560, 1120].map((budget) => <option key={budget} value={budget}>{budget} tokens</option>)}</select></label>}
     </div>

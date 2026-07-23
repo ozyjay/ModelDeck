@@ -15,7 +15,6 @@ from PIL import Image
 from modeldeck.contracts.scenechat import system_messages
 from modeldeck.gemma4_settings import ALLOWED_VISUAL_TOKEN_BUDGETS, DEFAULT_VISUAL_TOKEN_BUDGET
 from modeldeck.workers.scenechat_worker import (
-    DEFAULT_MAXIMUM_NEW_TOKENS,
     EngineConfig,
     GenerationResult,
     TransformersSceneChatEngine,
@@ -36,6 +35,7 @@ QWEN35_PROCESSOR_CLASS = "Qwen3VLProcessor"
 QWEN35_PATCH_SIZE = 16
 QWEN35_SPATIAL_MERGE_SIZE = 2
 QWEN35_MINIMUM_PIXELS = 65_536
+QWEN35_DEFAULT_MAXIMUM_NEW_TOKENS = 1024
 
 
 class TransformersQwen35Engine(TransformersSceneChatEngine):
@@ -238,7 +238,11 @@ def main() -> None:
     parser.add_argument("--cache-root", required=True, type=Path)
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--context-length", type=int, default=8192)
-    parser.add_argument("--maximum-new-tokens", type=int, default=DEFAULT_MAXIMUM_NEW_TOKENS)
+    parser.add_argument(
+        "--maximum-new-tokens",
+        type=int,
+        default=QWEN35_DEFAULT_MAXIMUM_NEW_TOKENS,
+    )
     parser.add_argument("--generation-timeout-seconds", type=float, default=60.0)
     parser.add_argument(
         "--visual-token-budget",

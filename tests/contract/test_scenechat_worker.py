@@ -166,6 +166,7 @@ def request_payload(
     data_url: str | None = None,
     question: str = "Describe the scene.",
     prompt: str | None = None,
+    max_tokens: int = 700,
 ) -> dict[str, Any]:
     return {
         "model": "google/gemma-4-E2B-it",
@@ -179,7 +180,7 @@ def request_payload(
             }
         ],
         "temperature": 0.1,
-        "max_tokens": 700,
+        "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
         "stream": False,
     }
@@ -239,11 +240,19 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
         "visual_token_budget": 280,
         "image_patch_size": 16,
         "image_pooling_kernel_size": 3,
+        "maximum_new_tokens": 512,
+        "generation_timeout_seconds": 60.0,
+        "enable_thinking": False,
+        "do_sample": False,
+        "use_cache": True,
     }
     diagnostic = metrics.json()["last_request"]
     assert diagnostic["input_width"] == 32
     assert diagnostic["input_height"] == 24
     assert diagnostic["completion_tokens"] == 42
+    assert diagnostic["prompt_tokens"] == 321
+    assert diagnostic["finish_reason"] == "stop"
+    assert diagnostic["token_limit_reached"] is False
     assert diagnostic["outcome"] == "success"
     assert "choices" not in diagnostic
     assert "messages" not in diagnostic
@@ -376,6 +385,49 @@ async def test_only_exact_curated_prompt_is_accepted_and_hidden_prompt_is_not_us
     assert messages[1]["content"][0] == {"type": "image"}
     assert messages[1]["content"][1]["text"] == "Describe the scene."
     assert SYSTEM_PROMPT not in messages[1]["content"][1]["text"]
+    assert "at most 8 objects" in SYSTEM_PROMPT
+    assert "Finish the complete valid JSON object" in SYSTEM_PROMPT
+    assert "before adding\ndetail" in SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_scenechat_worker_accepts_the_code_owned_1024_token_ceiling() -> None:
+    engine = FakeVisionEngine()
+    app = create_app(
+        worker_id="scenechat-test",
+        config=EngineConfig(
+            model_id="Qwen/Qwen3.5-0.8B",
+            revision="pinned",
+            maximum_new_tokens=1024,
+            visual_token_budget=140,
+        ),
+        engine=engine,
+        vision_settings={
+            "image_patch_size": 16,
+            "image_pooling_kernel_size": 2,
+        },
+    )
+
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json={
+                    **request_payload(max_tokens=1024),
+                    "model": "Qwen/Qwen3.5-0.8B",
+                },
+            )
+            metrics = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert engine.calls[0]["max_tokens"] == 1024
+    assert metrics.json()["effective_settings"]["maximum_new_tokens"] == 1024
+    assert metrics.json()["effective_settings"]["visual_token_budget"] == 140
 
 
 @pytest.mark.asyncio
@@ -478,6 +530,7 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
                 headers={"Authorization": "Bearer local", "X-Request-ID": "webcam-truncated-1"},
                 json=request_payload(data_url=data_url, prompt=prompt),
             )
+            metrics = await client.get("/metrics")
 
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "invalid_model_output"
@@ -492,6 +545,8 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
     assert prompt not in caplog.text
     assert data_url not in caplog.text
     assert "Bearer local" not in caplog.text
+    assert metrics.json()["last_request"]["output_failure_category"] == "token_limit_reached"
+    assert metrics.json()["last_request"]["finish_reason"] == "length"
 
 
 @pytest.mark.asyncio
@@ -620,19 +675,25 @@ async def test_person_sensitive_attributes_and_identity_claims_remain_prohibited
 @pytest.mark.parametrize(
     "changed",
     [
-        {**VALID_ANALYSIS, "summary": "x" * 801},
-        {**VALID_ANALYSIS, "objects": VALID_ANALYSIS["objects"] * 31},
-        {**VALID_ANALYSIS, "relationships": ["x"] * 21},
+        {**VALID_ANALYSIS, "summary": "word " * 45},
+        {**VALID_ANALYSIS, "objects": VALID_ANALYSIS["objects"] * 9},
+        {**VALID_ANALYSIS, "relationships": ["Visible relationship."] * 4},
+        {**VALID_ANALYSIS, "uncertainties": ["Uncertain detail."] * 4},
+        {**VALID_ANALYSIS, "safety_notes": ["First note.", "Second note."]},
         {
             **VALID_ANALYSIS,
             "objects": [
                 {
-                    "label": "x" * 81,
-                    "description": "visible",
+                    "label": "object",
+                    "description": (
+                        "one two three four five six seven eight nine ten eleven twelve "
+                        "thirteen fourteen fifteen sixteen"
+                    ),
                     "approximate_location": "centre",
                 }
             ],
         },
+        {**VALID_ANALYSIS, "relationships": ["One sentence. A second sentence."]},
     ],
 )
 async def test_every_scenechat_collection_and_field_limit_is_strict(changed: dict[str, Any]) -> None:

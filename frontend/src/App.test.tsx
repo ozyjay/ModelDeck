@@ -837,20 +837,20 @@ describe("ModelDeck v2 operator console", () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/events")).toHaveLength(1);
   });
 
-  it("uses trusted SceneChat runtime defaults when creating a Worker", async () => {
+  it("uses trusted Qwen3.5 SceneChat runtime defaults when creating a Worker", async () => {
     const payloads = responses();
     payloads["/api/catalogue"] = { models: [{
-      ...catalogueModel("google/gemma-4-E2B-it", ["image-input", "structured-output"]),
+      ...catalogueModel("Qwen/Qwen3.5-0.8B", ["image-input", "structured-output"]),
       generation_family_hint: "vision-language",
-      configuration_support: "scenechat-gemma4",
+      configuration_support: "scenechat-qwen35",
     }], downloads_started: false };
     payloads["/api/runtime-templates"] = { templates: [{
-      id: "scenechat-gemma4", display_name: "SceneChat Gemma 4 ROCm",
-      implementation: "vision-language-transformers-rocm", generation_family: "vision-language",
+      id: "scenechat-qwen35", display_name: "SceneChat Qwen3.5 ROCm",
+      implementation: "qwen35-vision-language-transformers-rocm", generation_family: "vision-language",
       cache_setting: "cache_root", uses_base_model_identity: false,
       lifecycle: "on-demand", dtype: "bfloat16",
-      settings: { context_length: 8192, maximum_new_tokens: 512, visual_token_budget: 280 },
-      package_id: "modeldeck-core", package_version: "1", package_display_name: "Core",
+      settings: { context_length: 8192, maximum_new_tokens: 1024, visual_token_budget: 140 },
+      package_id: "modeldeck-core", package_version: "0.2.0", package_display_name: "Core",
       publisher: "ModelDeck", source: "packaged", digest: "digest",
     }] };
     payloads["/api/workers"] = (_input: RequestInfo | URL, init?: RequestInit) =>
@@ -864,11 +864,9 @@ describe("ModelDeck v2 operator console", () => {
     expect(screen.getByRole("combobox", { name: "Lifecycle" })).toHaveValue("on-demand");
     expect(screen.getByRole("combobox", { name: "Lifecycle" })).toBeDisabled();
     expect(screen.getByRole("spinbutton", { name: "Context length" })).toHaveValue(8192);
-    expect(screen.getByRole("spinbutton", { name: "Maximum output" })).toHaveValue(512);
-    expect(screen.getByRole("combobox", { name: "Visual token budget" })).toHaveValue("280");
+    expect(screen.getByRole("spinbutton", { name: "Maximum output" })).toHaveValue(1024);
+    expect(screen.getByRole("combobox", { name: "Visual token budget" })).toHaveValue("140");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Context length" }), { target: { value: "4096" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Maximum output" }), { target: { value: "256" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Visual token budget" }), { target: { value: "140" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Worker" }));
 
     await waitFor(() => {
@@ -878,12 +876,12 @@ describe("ModelDeck v2 operator console", () => {
       expect(call).toBeDefined();
       const body = JSON.parse(String(call?.[1]?.body));
       expect(body).toMatchObject({
-        model_id: "google/gemma-4-E2B-it",
-        runtime_template_id: "scenechat-gemma4",
+        model_id: "Qwen/Qwen3.5-0.8B",
+        runtime_template_id: "scenechat-qwen35",
         dtype: "bfloat16",
         lifecycle: "on-demand",
         context_length: 4096,
-        maximum_new_tokens: 256,
+        maximum_new_tokens: 1024,
         visual_token_budget: 140,
       });
     });

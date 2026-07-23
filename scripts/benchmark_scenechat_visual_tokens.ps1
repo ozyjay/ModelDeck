@@ -3,8 +3,10 @@ param(
     [string]$Worker70,
     [string]$Worker140,
     [string]$Worker280,
-    [ValidateRange(3, 5)][int]$Warmups = 4,
-    [ValidateRange(50, 1000)][int]$Runs = 50,
+    [ValidateRange(2, 5)][int]$Warmups = 2,
+    [Alias('Runs')][ValidateRange(10, 1000)][int]$RunsPerQuestion = 10,
+    [ValidateSet('isolated', 'combined')][string]$LoadMode = 'isolated',
+    [ValidateRange(0, 86400)][int]$MinimumDurationSeconds = 0,
     [switch]$HumanReview,
     [ValidateRange(65, 90)][double]$MaximumTemperatureCelsius = 80,
     [ValidateRange(45, 75)][double]$CooldownTemperatureCelsius = 65,
@@ -16,6 +18,9 @@ Set-Location (Join-Path $PSScriptRoot '..')
 if (-not (Test-Path '.venv/bin/python')) { throw 'Run scripts/setup.ps1 first.' }
 if ($CooldownTemperatureCelsius -ge $MaximumTemperatureCelsius) {
     throw 'CooldownTemperatureCelsius must be below MaximumTemperatureCelsius.'
+}
+if ($MinimumDurationSeconds -gt 0 -and $LoadMode -ne 'combined') {
+    throw 'MinimumDurationSeconds requires LoadMode combined.'
 }
 
 $Workers = @(
@@ -31,7 +36,9 @@ $Arguments = @(
     'scripts/benchmark_scenechat_visual_tokens.py',
     $Workers,
     '--warmups', $Warmups,
-    '--runs', $Runs,
+    '--runs-per-question', $RunsPerQuestion,
+    '--load-mode', $LoadMode,
+    '--minimum-duration-seconds', $MinimumDurationSeconds,
     '--maximum-temperature-celsius', $MaximumTemperatureCelsius,
     '--cooldown-temperature-celsius', $CooldownTemperatureCelsius,
     '--requests-per-thermal-batch', $RequestsPerThermalBatch

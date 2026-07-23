@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.registry import (
+    MAXIMUM_NEW_TOKENS_LIMIT,
     RuntimeTemplateRegistration,
     runtime_template_registrations,
 )
@@ -27,7 +28,7 @@ class LocalProfileRequest(BaseModel):
     dtype: Literal["float16", "bfloat16", "float32"] = "float16"
     lifecycle: Literal["resident", "on-demand", "exclusive"] = "on-demand"
     context_length: int = Field(default=2048, ge=256, le=32768)
-    maximum_new_tokens: int = Field(default=128, ge=1, le=512)
+    maximum_new_tokens: int = Field(default=128, ge=1, le=MAXIMUM_NEW_TOKENS_LIMIT)
     maximum_denoising_steps: int = Field(default=24, ge=1, le=48)
     visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
