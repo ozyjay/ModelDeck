@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,7 +15,10 @@ import pytest
 from modeldeck.contracts.scenechat import (
     CURATED_QUESTIONS,
     IMAGE_CONTENT_INVARIANT,
+    INTERNAL_RESPONSE_CONSTRAINT,
     SYSTEM_PROMPT,
+    ModelOutputValidationError,
+    canonicalise_model_output,
     external_prompt,
     system_messages,
 )
@@ -25,7 +29,9 @@ from modeldeck.workers.scenechat_worker import (
     TransformersSceneChatEngine,
     _configure_image_processor,
     _decode_image,
+    _error_response,
     _run_generation,
+    _structured_output_failure,
     create_app,
 )
 from PIL import Image
@@ -43,6 +49,7 @@ VALID_ANALYSIS = {
     "uncertainties": ["The display content is unclear."],
     "safety_notes": [],
 }
+SCENECHAT_CONTRACT_FIXTURES = Path(__file__).parents[2] / "fixtures" / "contracts" / "scenechat-v1.json"
 
 
 class FakeVisionEngine:
@@ -222,6 +229,7 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
     body = response.json()
     assert body["id"] == "scenechat-request-7"
     assert body["object"] == "chat.completion"
+    assert body["scenechat_contract"] == "1"
     assert body["choices"][0]["message"]["role"] == "assistant"
     assert json.loads(body["choices"][0]["message"]["content"]) == VALID_ANALYSIS
     assert body["choices"][0]["finish_reason"] == "stop"
@@ -253,6 +261,10 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
     assert diagnostic["prompt_tokens"] == 321
     assert diagnostic["finish_reason"] == "stop"
     assert diagnostic["token_limit_reached"] is False
+    assert diagnostic["contract_version"] == "1"
+    assert diagnostic["retry_count"] == 0
+    assert diagnostic["structured_failure_reason"] is None
+    assert diagnostic["retryable"] is False
     assert diagnostic["outcome"] == "success"
     assert "choices" not in diagnostic
     assert "messages" not in diagnostic
@@ -383,23 +395,31 @@ async def test_only_exact_curated_prompt_is_accepted_and_hidden_prompt_is_not_us
     assert messages[0]["role"] == "system"
     assert IMAGE_CONTENT_INVARIANT in messages[0]["content"]
     assert messages[1]["content"][0] == {"type": "image"}
-    assert messages[1]["content"][1]["text"] == "Describe the scene."
+    internal_text = messages[1]["content"][1]["text"]
+    assert internal_text == f"Describe the scene.\n\n{INTERNAL_RESPONSE_CONSTRAINT}"
     assert SYSTEM_PROMPT not in messages[1]["content"][1]["text"]
     assert "at most 8 objects" in SYSTEM_PROMPT
     assert "Finish the complete valid JSON object" in SYSTEM_PROMPT
-    assert "before adding detail" in SYSTEM_PROMPT
+    assert "before adding detail" in " ".join(SYSTEM_PROMPT.split())
 
 
-def test_closest_objects_question_has_bounded_internal_wording() -> None:
-    question = "Which objects are closest to the camera?"
-
+@pytest.mark.parametrize("question", CURATED_QUESTIONS)
+def test_every_curated_question_has_the_common_concise_internal_instruction(question: str) -> None:
     messages = system_messages(question)
+    internal_text = messages[1]["content"][1]["text"]
 
     assert external_prompt(question).endswith(question)
-    assert messages[1]["content"][1]["text"] == (
-        "Which visible objects appear nearest to the camera? Return the complete required "
-        "JSON object once, prefer no more than three closest objects, and omit farther objects. "
-        "Keep relationships and uncertainties as JSON arrays, even when each has one item."
+    assert internal_text.endswith(INTERNAL_RESPONSE_CONSTRAINT)
+    assert "Return one complete JSON object only." in internal_text
+    assert "no more than 3 objects, 1 relationship, and 1 uncertainty" in internal_text
+
+
+def test_closest_objects_question_keeps_its_bounded_internal_wording() -> None:
+    internal_text = system_messages("Which objects are closest to the camera?")[1]["content"][1]["text"]
+
+    assert internal_text.startswith(
+        "Which visible objects appear nearest to the camera? Prefer the closest objects and omit "
+        "farther objects."
     )
 
 
@@ -515,7 +535,15 @@ async def test_invalid_or_unsafe_model_output_is_never_repaired(output: str) -> 
             )
 
     assert response.status_code == 502
-    assert response.json()["error"]["code"] == "invalid_model_output"
+    error = response.json()["error"]
+    assert error["code"] == "invalid_model_output"
+    assert error["reason"] in {
+        "invalid_json",
+        "schema_validation_failed",
+        "safety_validation_failed",
+    }
+    assert error["retryable"] is False
+    assert error["contract_version"] == "1"
     assert output not in response.text
 
 
@@ -546,7 +574,11 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
             metrics = await client.get("/metrics")
 
     assert response.status_code == 502
-    assert response.json()["error"]["code"] == "invalid_model_output"
+    error = response.json()["error"]
+    assert error["code"] == "invalid_model_output"
+    assert error["reason"] == "token_limit_reached"
+    assert error["retryable"] is True
+    assert error["contract_version"] == "1"
     diagnostic = caplog.messages[-1]
     assert "request_id=webcam-truncated-1" in diagnostic
     assert "failure_category=token_limit_reached" in diagnostic
@@ -559,6 +591,8 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
     assert data_url not in caplog.text
     assert "Bearer local" not in caplog.text
     assert metrics.json()["last_request"]["output_failure_category"] == "token_limit_reached"
+    assert metrics.json()["last_request"]["structured_failure_reason"] == "token_limit_reached"
+    assert metrics.json()["last_request"]["retryable"] is True
     assert metrics.json()["last_request"]["finish_reason"] == "length"
 
 
@@ -605,13 +639,65 @@ async def test_non_truncation_validation_failures_use_safe_categories(
             )
 
     assert response.status_code == 502
-    assert response.json()["error"]["code"] == "invalid_model_output"
+    error = response.json()["error"]
+    assert error["code"] == "invalid_model_output"
+    expected_reason = {
+        "invalid_json": "invalid_json",
+        "unsupported_fence": "invalid_json",
+        "schema_violation": "schema_validation_failed",
+        "prohibited_sensitive_attribute": "safety_validation_failed",
+        "prohibited_identity": "safety_validation_failed",
+    }[expected_category]
+    assert error["reason"] == expected_reason
+    assert error["retryable"] is False
     diagnostic = caplog.messages[-1]
     assert f"failure_category={expected_category}" in diagnostic
     assert "completion_tokens=42" in diagnostic
     assert "effective_token_limit=512" in diagnostic
     assert "token_limit_reached=False" in diagnostic
     assert output not in caplog.text
+
+
+def test_shared_scenechat_v1_fixtures_match_the_modeldeck_contract() -> None:
+    fixtures = json.loads(SCENECHAT_CONTRACT_FIXTURES.read_text(encoding="utf-8"))
+
+    assert fixtures["contract_version"] == "1"
+    for case in fixtures["cases"]:
+        if case["expected"] == "valid":
+            content, _analysis = canonicalise_model_output(json.dumps(case["output"]))
+            assert json.loads(content) == case["output"]
+            continue
+
+        raw_output = case.get("raw_output") or json.dumps(case["output"])
+        with pytest.raises(ModelOutputValidationError) as raised:
+            canonicalise_model_output(raw_output)
+        reason, retryable = _structured_output_failure(
+            raised.value,
+            completion_tokens=case.get("completion_tokens", 1),
+            effective_token_limit=case.get("effective_token_limit", 1024),
+        )
+        assert reason == case["reason"]
+        assert retryable is (reason == "token_limit_reached")
+
+
+def test_invalid_model_output_error_has_stable_retry_metadata() -> None:
+    response = _error_response(
+        502,
+        "invalid_model_output",
+        "The model returned output that did not satisfy the SceneChat contract.",
+        reason="token_limit_reached",
+        retryable=True,
+    )
+
+    assert json.loads(response.body)["error"] == {
+        "message": "The model returned output that did not satisfy the SceneChat contract.",
+        "type": "server_error",
+        "param": None,
+        "code": "invalid_model_output",
+        "contract_version": "1",
+        "reason": "token_limit_reached",
+        "retryable": True,
+    }
 
 
 @pytest.mark.asyncio

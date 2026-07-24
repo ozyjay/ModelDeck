@@ -136,6 +136,26 @@ def _output_failure_category(
     return error.category
 
 
+def _structured_output_failure(
+    error: ModelOutputValidationError,
+    *,
+    completion_tokens: int,
+    effective_token_limit: int,
+) -> tuple[str, bool]:
+    category = _output_failure_category(
+        error,
+        completion_tokens=completion_tokens,
+        effective_token_limit=effective_token_limit,
+    )
+    if category == "token_limit_reached":
+        return "token_limit_reached", True
+    if category in {"invalid_json", "unsupported_fence"}:
+        return "invalid_json", False
+    if category == "schema_violation":
+        return "schema_validation_failed", False
+    return "safety_validation_failed", False
+
+
 class ResponseFormat(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -426,10 +446,20 @@ class TransformersSceneChatEngine:
 
 
 class SceneChatRequestError(Exception):
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        reason: str | None = None,
+        retryable: bool | None = None,
+    ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.reason = reason
+        self.retryable = retryable
         super().__init__(message)
 
 
@@ -546,7 +576,13 @@ def create_app(
 
     @app.exception_handler(SceneChatRequestError)
     async def scenechat_error(_request: Request, error: SceneChatRequestError) -> JSONResponse:
-        return _error_response(error.status_code, error.code, error.message)
+        return _error_response(
+            error.status_code,
+            error.code,
+            error.message,
+            reason=error.reason,
+            retryable=error.retryable,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, _error: RequestValidationError) -> JSONResponse:
@@ -723,6 +759,8 @@ def create_app(
         image: Image.Image | None = None
         diagnostic: dict[str, Any] = {
             **reported_vision_settings,
+            "contract_version": CONTRACT_VERSION,
+            "retry_count": 0,
             "queue_seconds": round(queue_seconds, 6),
             "prompt_tokens": None,
             "preprocessing_seconds": None,
@@ -734,6 +772,8 @@ def create_app(
             "finish_reason": None,
             "token_limit_reached": False,
             "output_failure_category": None,
+            "structured_failure_reason": None,
+            "retryable": False,
             "outcome": "internal_error",
             "error_code": "internal_error",
         }
@@ -790,6 +830,13 @@ def create_app(
                     completion_tokens=result.completion_tokens,
                     effective_token_limit=effective_token_limit,
                 )
+                failure_reason, retryable = _structured_output_failure(
+                    error,
+                    completion_tokens=result.completion_tokens,
+                    effective_token_limit=effective_token_limit,
+                )
+                diagnostic["structured_failure_reason"] = failure_reason
+                diagnostic["retryable"] = retryable
                 _log_output_validation_failure(
                     request_id=request_id,
                     error=error,
@@ -801,6 +848,8 @@ def create_app(
                     502,
                     "invalid_model_output",
                     "The model returned output that did not satisfy the SceneChat contract.",
+                    reason=failure_reason,
+                    retryable=retryable,
                 ) from error
             diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
             latency = time.perf_counter() - started
@@ -823,6 +872,7 @@ def create_app(
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": config.model_id,
+                "scenechat_contract": CONTRACT_VERSION,
                 "choices": [
                     {
                         "index": 0,
@@ -884,6 +934,11 @@ def create_app(
             try:
                 content, _analysis = canonicalise_model_output(result.text)
             except ModelOutputValidationError as error:
+                failure_reason, retryable = _structured_output_failure(
+                    error,
+                    completion_tokens=result.completion_tokens,
+                    effective_token_limit=config.maximum_new_tokens,
+                )
                 _log_output_validation_failure(
                     request_id=request_id,
                     error=error,
@@ -895,6 +950,8 @@ def create_app(
                     502,
                     "invalid_model_output",
                     "The model returned output that did not satisfy the SceneChat contract.",
+                    reason=failure_reason,
+                    retryable=retryable,
                 ) from error
             return {
                 "ok": True,
@@ -1082,7 +1139,8 @@ def _record_request_diagnostics(request: Request, diagnostic: dict[str, Any]) ->
         "input_bytes=%s visual_tokens=%s queue_seconds=%s preprocessing_seconds=%s "
         "inference_seconds=%s validation_seconds=%s total_worker_seconds=%s "
         "prompt_tokens=%s completion_tokens=%s tokens_per_second=%s finish_reason=%s "
-        "token_limit_reached=%s output_failure_category=%s outcome=%s error_code=%s",
+        "token_limit_reached=%s output_failure_category=%s structured_failure_reason=%s "
+        "retryable=%s contract_version=%s retry_count=%s outcome=%s error_code=%s",
         diagnostic.get("visual_token_budget"),
         diagnostic.get("image_patch_size"),
         diagnostic.get("image_pooling_kernel_size"),
@@ -1101,6 +1159,10 @@ def _record_request_diagnostics(request: Request, diagnostic: dict[str, Any]) ->
         diagnostic.get("finish_reason"),
         diagnostic.get("token_limit_reached"),
         diagnostic.get("output_failure_category"),
+        diagnostic.get("structured_failure_reason"),
+        diagnostic.get("retryable"),
+        diagnostic.get("contract_version"),
+        diagnostic.get("retry_count"),
         diagnostic.get("outcome"),
         diagnostic.get("error_code"),
     )
@@ -1167,17 +1229,28 @@ async def _run_generation(
     return result
 
 
-def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
+def _error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    reason: str | None = None,
+    retryable: bool | None = None,
+) -> JSONResponse:
+    error = {
+        "message": message,
+        "type": "invalid_request_error" if status_code < 500 else "server_error",
+        "param": None,
+        "code": code,
+        "contract_version": CONTRACT_VERSION,
+    }
+    if reason is not None:
+        error["reason"] = reason
+    if retryable is not None:
+        error["retryable"] = retryable
     return JSONResponse(
         status_code=status_code,
-        content={
-            "error": {
-                "message": message,
-                "type": "invalid_request_error" if status_code < 500 else "server_error",
-                "param": None,
-                "code": code,
-            }
-        },
+        content={"error": error},
     )
 
 

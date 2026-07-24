@@ -126,3 +126,19 @@ revision 34 is retained as immutable rollback history.
 
 Any further decoding, prompt, model or runtime change requires a new immutable Worker and
 a fresh isolated qualification.
+
+## 0.2.3 concise-contract replacement
+
+Packaged runtime 0.2.3 applies the common concise internal response instruction to all
+seven curated questions, exposes SceneChat contract version 1 in the trusted response
+envelope, and returns structured safe reasons for invalid model output. The external
+allowlisted prompt, version 1 schema, 1,024-token hard ceiling, single-request admission,
+privacy boundaries and absence of cloud fallback are unchanged.
+
+This repository change does not reclassify the retained 0.2.2 evidence. Do not treat
+restarting that Worker under the updated ModelDeck build as continued 0.2.2 qualification;
+the worker implementation is supplied by the installed ModelDeck code. Create an immutable
+0.2.3 replacement and rerun the isolated seven-question benchmark plus the required
+combined-load and downstream SceneChat fixture checks before promotion. Until that evidence
+is retained, Open2026 revision 35 and its original 0.2.2 build remain the documented
+qualified configuration.

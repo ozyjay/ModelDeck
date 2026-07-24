@@ -1,0 +1,87 @@
+{
+  "contract_version": "1",
+  "cases": [
+    {
+      "id": "normal_valid_response",
+      "expected": "valid",
+      "output": {
+        "summary": "A monitor and keyboard are visible on a demonstration desk.",
+        "objects": [
+          {
+            "label": "monitor",
+            "description": "A dark display stands on the desk.",
+            "approximate_location": "centre"
+          },
+          {
+            "label": "keyboard",
+            "description": "A keyboard is positioned in front of the display.",
+            "approximate_location": "foreground"
+          }
+        ],
+        "relationships": [
+          "The keyboard is in front of the monitor."
+        ],
+        "uncertainties": [
+          "The display content is unclear."
+        ],
+        "safety_notes": []
+      }
+    },
+    {
+      "id": "concise_minimum_response",
+      "expected": "valid",
+      "output": {
+        "summary": "A desk is visible.",
+        "objects": [],
+        "relationships": [],
+        "uncertainties": [],
+        "safety_notes": []
+      }
+    },
+    {
+      "id": "safe_non_assertive_disclaimer",
+      "expected": "valid",
+      "output": {
+        "summary": "A person is visible near a demonstration table.",
+        "objects": [],
+        "relationships": [],
+        "uncertainties": [],
+        "safety_notes": [
+          "No identity or sensitive personal attribute was inferred."
+        ]
+      }
+    },
+    {
+      "id": "prohibited_identity_claim",
+      "expected": "invalid",
+      "reason": "safety_validation_failed",
+      "output": {
+        "summary": "Their name is Example Visitor.",
+        "objects": [],
+        "relationships": [],
+        "uncertainties": [],
+        "safety_notes": []
+      }
+    },
+    {
+      "id": "prohibited_sensitive_claim",
+      "expected": "invalid",
+      "reason": "safety_validation_failed",
+      "output": {
+        "summary": "A disabled person is near the demonstration table.",
+        "objects": [],
+        "relationships": [],
+        "uncertainties": [],
+        "safety_notes": []
+      }
+    },
+    {
+      "id": "truncated_token_exhaustion",
+      "expected": "invalid",
+      "reason": "token_limit_reached",
+      "completion_tokens": 1024,
+      "effective_token_limit": 1024,
+      "raw_output": "{\"summary\":\"A demonstration scene is visible\",\"objects\":["
+    }
+  ]
+}
