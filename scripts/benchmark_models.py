@@ -240,20 +240,20 @@ class BenchmarkRunner:
                 )
         live = self.get("/api/live")
         for worker in resolved:
-            routes = [
-                route
-                for route in live.get("routes", [])
-                if worker["id"] in route.get("worker_ids", [])
+            capabilities = [
+                capability
+                for capability in live.get("capabilities", [])
+                if worker["id"] in capability.get("worker_ids", [])
             ]
-            if not routes:
+            if not capabilities:
                 raise BenchmarkError(
-                    f"Worker {worker['name']} is not assigned to a Route in the published Event"
+                    f"Worker {worker['name']} is not assigned to a capability in the active Routing Profile"
                 )
-            if len(routes) > 1:
+            if len(capabilities) > 1:
                 raise BenchmarkError(
-                    f"Worker {worker['name']} serves several published Routes; benchmark them separately"
+                    f"Worker {worker['name']} serves several published capabilities; benchmark them separately"
                 )
-            worker["gateway_model"] = routes[0]["public_name"]
+            worker["gateway_model"] = capabilities[0]["public_name"]
         return resolved, self.get("/api/hardware")
 
     def stop_all(self) -> None:

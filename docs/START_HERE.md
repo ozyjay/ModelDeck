@@ -1,29 +1,28 @@
 # Start here
 
-ModelDeck manages local Model runtimes and publishes stable Routes for demo applications.
-It begins with no configured Workers or routing.
+ModelDeck manages local Model runtimes and publishes stable capabilities for local
+applications. It begins with no configured Workers or routing profile.
 
 1. Run `pwsh -NoProfile -File scripts/setup.ps1` to prepare the control plane and target
    inference environments. Use `-ControlPlaneOnly` only for lightweight development.
-2. If this checkout has a v1 database, run
-   `pwsh -NoProfile -File scripts/cutover_v2.ps1 -WhatIf`, review the paths, then run the
-   command without `-WhatIf`. The exact SQLite files are backed up; caches and evidence
-   artefacts are not deleted.
+2. If a v2 configuration database exists, run
+   `pwsh -NoProfile -File scripts/migrate_v2_to_v3.ps1 -WhatIf`, review the backup path,
+   then run it without `-WhatIf`. Startup refuses an unmigrated v2 database.
 3. Run `pwsh -NoProfile -File scripts/verify.ps1`.
 4. Start ModelDeck with `pwsh -NoProfile -File scripts/run.ps1` and open
    <http://127.0.0.1:3600>.
-5. In **Models**, create a named Worker from a recognised cached Model.
-   For local SceneChat Route rehearsal, **Workers → Create SceneChat mock** creates an
-   explicitly labelled deterministic CPU fallback that does not inspect the image.
-6. In **Events**, create an Event, add a Route, choose its protocol, assign the primary
-   and ordered backup Workers, and associate the Route with a Demo.
-7. Validate and publish the Event. Publishing routing does not start Workers.
-8. In **Workers**, start and smoke-test the selected Worker. In **Live**, rehearse the
-   published Route through the gateway.
+5. In **Models**, create a named Worker from a recognised, cached Model revision.
+6. In **Routing profiles**, create a profile, add each capability needed by concurrent
+   applications, choose its trusted protocol, and set primary and backup Workers.
+7. Validate and publish the profile. Publishing changes routing only; it does not start
+   Workers.
+8. In **Workers**, start and smoke-test a selected real Worker. In **Live**, inspect the
+   published capabilities and rehearse a ready capability through the gateway.
 
-The mental model is deliberately small: Models are discovered data, Workers execute
-Models, Routes are public contracts, and Events publish versioned sets of Routes and
-Demos. See [architecture](ARCHITECTURE.md) and [operator workflow](DEMO_ROUTE_HOWTO.md).
-
-ModelDeck never downloads Models. HuggingFacePull owns acquisition; ModelDeck performs
+The mental model is small: Models are discovered data, Workers execute Models,
+capabilities are public contracts, and one Routing Profile atomically publishes the active
+set. ModelDeck never downloads Models. HuggingFacePull owns acquisition; ModelDeck performs
 read-only discovery. Services bind to loopback and never use cloud inference fallback.
+
+For tests and debugging, deterministic fixtures live in the test harness. They are not
+available in the operator console and do not count as real-worker evidence.

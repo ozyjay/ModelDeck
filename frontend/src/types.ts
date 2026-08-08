@@ -31,37 +31,35 @@ export interface Worker {
   archived_at: string | null;
 }
 
-export interface Demo { id: string; name: string; route_ids: string[] }
-export interface Route {
+export interface CapabilityBinding {
   id: string;
   display_name: string;
   public_name: string;
   protocol_contract: string;
   worker_ids: string[];
 }
-export interface EventDefinition {
+export interface RoutingProfile {
   id: string;
   name: string;
   description: string;
   qualification: "compatible" | "tested-working";
-  demos: Demo[];
-  routes: Route[];
+  capabilities: CapabilityBinding[];
 }
-export interface EventRecord {
-  definition: EventDefinition;
+export interface RoutingProfileRecord {
+  definition: RoutingProfile;
   created_at: string;
   updated_at: string;
   active: boolean;
   active_revision: number | null;
   latest_revision: number | null;
 }
-export interface EventValidation {
+export interface RoutingProfileValidation {
   valid: boolean;
-  errors: Array<{ route_id?: string; worker_id?: string; message: string }>;
-  warnings: Array<{ route_id?: string; demo_id?: string; message: string }>;
+  errors: Array<{ capability_id?: string; worker_id?: string; message: string }>;
+  warnings: Array<{ capability_id?: string; message: string }>;
 }
-export interface EventRevision {
-  definition: EventDefinition;
+export interface RoutingProfileRevision {
+  definition: RoutingProfile;
   revision: number;
   published_at: string;
   active: boolean;
@@ -76,33 +74,15 @@ export interface ProtocolContract {
   surfaces: string[];
 }
 
-export type MockScenario = "success" | "delayed" | "request-error";
-export interface MockWorkerOption {
-  id: "visual_token_budget";
-  label: string;
-  type: "select";
-  default: number;
-  choices: number[];
-}
-export interface MockWorkerTemplate {
-  id: string;
-  protocol_contract: string;
-  display_name: string;
-  generation_family: string;
-  default_name: string;
-  scenarios: MockScenario[];
-  options: MockWorkerOption[];
-}
-
 export interface LiveWorker { id: string; name: string; state: WorkerState }
-export interface LiveRoute extends Route {
+export interface LiveCapability extends CapabilityBinding {
   workers: Worker[];
   effective_worker: Worker | null;
   ready: boolean;
 }
 export interface LiveState {
-  active_event: { id: string; name: string; revision: number } | null;
-  routes: LiveRoute[];
+  active_profile: { id: string; name: string; revision: number } | null;
+  capabilities: LiveCapability[];
 }
 
 export interface RuntimeTemplate {

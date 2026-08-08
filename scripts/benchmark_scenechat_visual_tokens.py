@@ -280,9 +280,15 @@ def _validate_workers(workers: list[dict[str, Any]]) -> None:
 
 def _validate_route() -> None:
     live = _json_request(f"{MANAGEMENT_URL}/api/live")
-    routes = [route for route in live.get("routes", []) if route.get("public_name") == ROUTE_NAME]
-    if len(routes) != 1:
-        raise RuntimeError(f"The published Event must contain exactly one {ROUTE_NAME!r} Route")
+    capabilities = [
+        capability
+        for capability in live.get("capabilities", [])
+        if capability.get("public_name") == ROUTE_NAME
+    ]
+    if len(capabilities) != 1:
+        raise RuntimeError(
+            f"The active Routing Profile must contain exactly one {ROUTE_NAME!r} capability"
+        )
 
 
 def _profile(worker: dict[str, Any]):

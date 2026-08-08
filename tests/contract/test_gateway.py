@@ -11,7 +11,7 @@ import httpx
 import pytest
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
-from modeldeck.domain import WorkerDefinition
+from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot
 from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
     claim_thermal_capacity,
@@ -19,6 +19,7 @@ from modeldeck.gateway.app import (
     proxy_binary_request,
     proxy_request,
     release_thermal_capacity,
+    resolve_job_worker,
     route_candidates,
     trace_token_metadata_error,
     upstream_headers,
@@ -32,6 +33,7 @@ from modeldeck.thermal import (
     write_thermal_status,
 )
 from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 
 def worker() -> WorkerDefinition:
@@ -69,50 +71,58 @@ async def test_gateway_has_no_routes_or_implicit_defaults_before_publication(tmp
 
 
 @pytest.mark.asyncio
-async def test_gateway_advertises_only_routes_from_active_event_snapshot(tmp_path) -> None:
+async def test_gateway_advertises_openai_models_and_native_capabilities_separately(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path)
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
-    store.initialise_v2()
+    store.initialise_v3()
     definition = worker()
     store.save_worker_definition(definition.model_dump(mode="json"))
-    event_id = str(uuid4())
-    event = {
-        "id": event_id,
-        "name": "Open Day",
-        "description": "",
-        "qualification": "compatible",
-        "demos": [],
-        "routes": [],
-    }
-    store.save_event_draft(event)
-    store.publish_event(
-        event,
-        {
-            "format": "modeldeck-event-routing",
-            "version": 2,
-            "event_id": event_id,
-            "event_name": "Open Day",
-            "revision": 0,
-            "routes": [
-                {
-                    "route_id": str(uuid4()),
-                    "display_name": "Visitor trace",
-                    "public_name": "visitor-trace",
-                    "protocol_contract": "native-ar-trace-v1",
-                    "worker_ids": [definition.id],
-                }
-            ],
-        },
+    profile = RoutingProfile(
+        id=str(uuid4()),
+        name="Local applications",
+        capabilities=[
+            {
+                "id": str(uuid4()),
+                "display_name": "Visitor trace",
+                "public_name": "visitor-trace",
+                "protocol_contract": "native-ar-trace-v1",
+                "worker_ids": [definition.id],
+            },
+            {
+                "id": str(uuid4()),
+                "display_name": "Visitor chat",
+                "public_name": "visitor-chat",
+                "protocol_contract": "openai-chat-v1",
+                "worker_ids": [definition.id],
+            },
+        ],
     )
+    store.save_routing_profile_draft(profile.model_dump(mode="json"))
+    store.publish_routing_profile(profile.model_dump(mode="json"), routing_snapshot(profile, 1))
     app = create_gateway_app(settings=settings)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         models = (await client.get("/v1/models")).json()["data"]
         routes = (await client.get("/v1/routes")).json()["routes"]
+        native = (await client.get("/native/v1/capabilities")).json()["capabilities"]
 
     assert models == [
-        {"id": "visitor-trace", "object": "model", "owned_by": "modeldeck-local", "ready": False}
+        {"id": "visitor-chat", "object": "model", "owned_by": "modeldeck-local", "ready": False}
     ]
-    assert routes == [{"public_name": "visitor-trace", "ready": False}]
+    assert routes == [
+        {"public_name": "visitor-trace", "ready": False},
+        {"public_name": "visitor-chat", "ready": False},
+    ]
+    assert native == [
+        {
+            "id": profile.capabilities[0].id,
+            "display_name": "Visitor trace",
+            "public_name": "visitor-trace",
+            "protocol_contract": "native-ar-trace-v1",
+            "surfaces": ["POST /native/v1/autoregressive/traces"],
+            "ready": False,
+            "metadata": {"generation_family": "autoregressive", "worker_count": 1},
+        }
+    ]
     assert "provider" not in str(models).lower()
 
 
@@ -156,6 +166,25 @@ def test_route_candidates_accept_only_public_route_or_vision_model_identity() ->
     routes = {"visitor-trace": [profile]}
     assert route_candidates(routes, "visitor-trace") == [profile]
     assert route_candidates(routes, profile.model_id) is None
+
+
+@pytest.mark.asyncio
+async def test_diffusion_job_assignment_preserves_worker_affinity_after_gateway_restart(tmp_path) -> None:
+    definition = worker().model_copy(
+        update={
+            "generation_family": "text-diffusion",
+            "capabilities": {"iterative_refinement": True, "intermediate_frames": True},
+        }
+    )
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    store.save_worker_definition(definition.model_dump(mode="json"))
+    store.save_gateway_job_assignment("job-1", definition.id, "text-diffusion", "text-diffusion-v1")
+
+    resolved = await resolve_job_worker("job-1", {}, {}, store)
+
+    assert resolved is not None
+    assert resolved.id == definition.id
 
 
 def gateway_request(payload: dict) -> Request:
@@ -245,6 +274,30 @@ class FakeGatewayClient:
 
     async def aclose(self) -> None:
         pass
+
+
+class FailingStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"data: first\n\n"
+        raise httpx.ReadError("stream ended unexpectedly")
+
+    async def aclose(self) -> None:
+        pass
+
+
+class StreamingFailureClient(FakeGatewayClient):
+    def __init__(self) -> None:
+        super().__init__({"ready": True, "busy": False})
+        self.health_urls: list[str] = []
+        self.send_urls: list[str] = []
+
+    async def get(self, url: str):
+        self.health_urls.append(url)
+        return await super().get(url)
+
+    async def send(self, request: httpx.Request, *, stream: bool = False):
+        self.send_urls.append(str(request.url))
+        return httpx.Response(200, stream=FailingStream(), request=request)
 
 
 class FakeBinaryGatewayClient:
@@ -359,6 +412,31 @@ async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
     diagnostic = request.app.state.last_request_diagnostics
     assert diagnostic["error_code"] == "gateway_timeout"
     assert diagnostic["total_gateway_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_never_fails_over_after_a_stream_has_started(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    primary = worker().to_profile()
+    backup = worker().model_copy(update={"id": str(uuid4()), "port": 8631}).to_profile()
+    fake = StreamingFailureClient()
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request({"model": "visitor-chat", "prompt": "hello", "stream": True})
+
+    response = await proxy_request(
+        request,
+        {"visitor-chat": [primary, backup]},
+        "/v1/completions",
+        None,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert await anext(response.body_iterator) == b"data: first\n\n"
+    with pytest.raises(httpx.ReadError, match="stream ended unexpectedly"):
+        await anext(response.body_iterator)
+    assert fake.health_urls == [f"http://127.0.0.1:{primary.port}/health"]
+    assert fake.send_urls == [f"http://127.0.0.1:{primary.port}/v1/completions"]
 
 
 @pytest.mark.asyncio
@@ -524,7 +602,7 @@ async def test_speech_gateway_returns_wav_and_labels_a_mock_fallback(monkeypatch
     assert response.status_code == 200
     assert response.body == b"RIFFmock-wav"
     assert response.headers["content-type"] == "audio/wav"
-    assert response.headers["x-modeldeck-fallback"] == "mock"
+    assert "x-modeldeck-fallback" not in response.headers
     assert fake.forwarded_json["model"] == profile.alias
     assert fake.forwarded_headers["X-Request-ID"] == "speech-1"
     assert request.app.state.active_request_workers == {}
@@ -560,7 +638,7 @@ async def test_cancellation_targets_only_the_worker_that_owns_the_active_request
 
 
 @pytest.mark.asyncio
-async def test_gateway_propagates_mock_failure_and_labels_fallback(monkeypatch) -> None:
+async def test_gateway_propagates_fixture_worker_failure_without_fallback_header(monkeypatch) -> None:
     import modeldeck.gateway.app as gateway_module
 
     profile = worker().to_profile()
@@ -586,5 +664,5 @@ async def test_gateway_propagates_mock_failure_and_labels_fallback(monkeypatch) 
 
     assert response.status_code == 503
     assert json.loads(response.body)["error"]["code"] == "mock_request_failure"
-    assert response.headers["x-modeldeck-fallback"] == "mock"
+    assert "x-modeldeck-fallback" not in response.headers
     assert request.app.state.last_request_diagnostics["error_code"] == "mock_request_failure"

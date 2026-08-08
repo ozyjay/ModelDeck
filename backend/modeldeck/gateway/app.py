@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
+from modeldeck.gateway.adapters import PROTOCOL_ADAPTERS
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
+from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.speechshift import WHISPER_MAXIMUM_AUDIO_BYTES
 from modeldeck.thermal import (
     THERMAL_STATUS_FILENAME,
@@ -41,7 +43,7 @@ def create_gateway_app(
     settings: Settings | None = None,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
-    app = FastAPI(title="ModelDeck stable local gateway", version="0.2.0")
+    app = FastAPI(title="ModelDeck stable local gateway", version="0.3.0")
     app.state.last_request_diagnostics = None
     app.state.active_request_workers = {}
     app.state.active_request_lock = asyncio.Lock()
@@ -60,8 +62,9 @@ def create_gateway_app(
     base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-    if alias_routes is None:
-        store.initialise_v2()
+    persistence_enabled = alias_routes is None
+    if persistence_enabled:
+        store.initialise_v3()
 
     def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
         if alias_routes is not None:
@@ -73,21 +76,36 @@ def create_gateway_app(
             )
         }
         snapshot = store.active_routing_snapshot()
-        if snapshot is None or snapshot.get("format") != "modeldeck-event-routing":
+        if snapshot is None or snapshot.get("format") != "modeldeck-routing-profile":
             return {}
         routes: dict[str, list[ModelProfile]] = {}
-        for route in snapshot.get("routes", []):
-            if adapter_ids is not None and route.get("protocol_contract") not in adapter_ids:
+        for capability in snapshot.get("capabilities", []):
+            if adapter_ids is not None and capability.get("protocol_contract") not in adapter_ids:
                 continue
-            public_name = str(route.get("public_name", ""))
+            public_name = str(capability.get("public_name", ""))
             if not public_name:
                 continue
             routes[public_name] = [
                 definitions[worker_id].to_profile()
-                for worker_id in route.get("worker_ids", [])
+                for worker_id in capability.get("worker_ids", [])
                 if worker_id in definitions
             ]
         return routes
+
+    def active_capability_records(*, native_only: bool = False) -> list[dict[str, Any]]:
+        if alias_routes is not None:
+            return []
+        snapshot = store.active_routing_snapshot()
+        if snapshot is None or snapshot.get("format") != "modeldeck-routing-profile":
+            return []
+        records = list(snapshot.get("capabilities", []))
+        if native_only:
+            records = [
+                record
+                for record in records
+                if (adapter := PROTOCOL_ADAPTERS.get(str(record.get("protocol_contract")))) and adapter.native
+            ]
+        return records
 
     async def worker_states(routes: dict[str, list[ModelProfile]] | None = None) -> list[dict[str, Any]]:
         result = []
@@ -129,7 +147,10 @@ def create_gateway_app(
 
     @app.get("/v1/models")
     async def models():
-        routes = active_routes()
+        openai_contracts = {
+            adapter.contract_id for adapter in PROTOCOL_ADAPTERS.values() if adapter.openai_model
+        }
+        routes = active_routes(openai_contracts)
         states = {state["id"]: state for state in await worker_states(routes)}
         return {
             "object": "list",
@@ -150,6 +171,35 @@ def create_gateway_app(
         return {
             alias: (candidates[0].capabilities.model_dump() if candidates else CapabilitySet().model_dump())
             for alias, candidates in routes.items()
+        }
+
+    @app.get("/native/v1/capabilities")
+    async def native_capabilities():
+        records = active_capability_records(native_only=True)
+        routes = active_routes(
+            {adapter.contract_id for adapter in PROTOCOL_ADAPTERS.values() if adapter.native}
+        )
+        states = {state["id"]: state for state in await worker_states(routes)}
+        return {
+            "capabilities": [
+                {
+                    "id": record["capability_id"],
+                    "display_name": record["display_name"],
+                    "public_name": record["public_name"],
+                    "protocol_contract": record["protocol_contract"],
+                    "surfaces": list(PROTOCOL_ADAPTERS[record["protocol_contract"]].public_surfaces),
+                    "ready": any(
+                        states[profile.id]["ready"] for profile in routes.get(record["public_name"], [])
+                    ),
+                    "metadata": {
+                        "generation_family": PROTOCOL_CONTRACTS[
+                            record["protocol_contract"]
+                        ].generation_family.value,
+                        "worker_count": len(record["worker_ids"]),
+                    },
+                }
+                for record in records
+            ],
         }
 
     @app.get("/v1/metrics")
@@ -235,8 +285,7 @@ def create_gateway_app(
             body_override=body,
         )
 
-    @app.post("/native/autoregressive/trace")
-    async def trace(request: Request):
+    async def trace_request(request: Request):
         return await proxy_request(
             request,
             active_routes({"native-ar-trace-v1"}),
@@ -244,8 +293,15 @@ def create_gateway_app(
             None,
         )
 
-    @app.post("/v1/refine")
-    async def refine(request: Request):
+    @app.post("/native/v1/autoregressive/traces")
+    async def native_trace(request: Request):
+        return await trace_request(request)
+
+    @app.post("/native/autoregressive/trace", deprecated=True)
+    async def trace(request: Request):
+        return deprecated_response(await trace_request(request), "/native/v1/autoregressive/traces")
+
+    async def refine_request(request: Request):
         return await proxy_request(
             request,
             active_routes({"text-diffusion-v1"}),
@@ -254,42 +310,115 @@ def create_gateway_app(
             timeout_seconds=configured.diffusion_timeout_seconds,
         )
 
-    @app.post("/v1/diffuse")
-    async def diffuse(request: Request):
+    @app.post("/native/v1/text-diffusion/refine")
+    async def native_refine(request: Request):
+        return await refine_request(request)
+
+    @app.post("/v1/refine", deprecated=True)
+    async def refine(request: Request):
+        return deprecated_response(await refine_request(request), "/native/v1/text-diffusion/refine")
+
+    async def diffuse_request(request: Request):
         routes = active_routes({"text-diffusion-v1"})
         response = await proxy_request(request, routes, "/v1/diffuse", None)
         if isinstance(response, JSONResponse) and response.status_code < 300:
             payload = json_loads(response.body)
             if payload.get("job_id"):
-                await resolve_job_worker(str(payload["job_id"]), job_routes, routes)
+                worker = await resolve_job_worker(
+                    str(payload["job_id"]),
+                    job_routes,
+                    routes,
+                    store if persistence_enabled else None,
+                )
+                if worker is not None:
+                    alias = next(
+                        (
+                            public_name
+                            for public_name, candidates in routes.items()
+                            if any(candidate.id == worker.id for candidate in candidates)
+                        ),
+                        "",
+                    )
+                    if persistence_enabled:
+                        store.save_gateway_job_assignment(
+                            str(payload["job_id"]), worker.id, alias, "text-diffusion-v1"
+                        )
         return response
 
-    @app.get("/v1/jobs/{job_id}")
-    async def diffusion_job(job_id: str, request: Request):
-        worker = await resolve_job_worker(job_id, job_routes, active_routes())
+    @app.post("/native/v1/text-diffusion/jobs")
+    async def native_diffuse(request: Request):
+        return await diffuse_request(request)
+
+    @app.post("/v1/diffuse", deprecated=True)
+    async def diffuse(request: Request):
+        return deprecated_response(await diffuse_request(request), "/native/v1/text-diffusion/jobs")
+
+    async def diffusion_job_request(job_id: str, request: Request):
+        worker = await resolve_job_worker(
+            job_id, job_routes, active_routes(), store if persistence_enabled else None
+        )
         if worker is None:
             raise HTTPException(404, "Unknown diffusion job")
         response = await proxy_job_request(worker, f"/v1/jobs/{job_id}")
         if job_response_is_terminal(response):
             await release_thermal_job_capacity(request, job_id)
+            if persistence_enabled:
+                store.delete_gateway_job_assignment(job_id)
         return response
 
-    @app.get("/v1/jobs/{job_id}/events")
-    async def diffusion_job_events(job_id: str):
-        worker = await resolve_job_worker(job_id, job_routes, active_routes())
+    @app.get("/native/v1/text-diffusion/jobs/{job_id}")
+    async def native_diffusion_job(job_id: str, request: Request):
+        return await diffusion_job_request(job_id, request)
+
+    @app.get("/v1/jobs/{job_id}", deprecated=True)
+    async def diffusion_job(job_id: str, request: Request):
+        return deprecated_response(
+            await diffusion_job_request(job_id, request),
+            f"/native/v1/text-diffusion/jobs/{job_id}",
+        )
+
+    async def diffusion_job_events_request(job_id: str):
+        worker = await resolve_job_worker(
+            job_id, job_routes, active_routes(), store if persistence_enabled else None
+        )
         if worker is None:
             raise HTTPException(404, "Unknown diffusion job")
         return await proxy_job_events(worker, f"/v1/jobs/{job_id}/events")
 
-    @app.post("/v1/jobs/{job_id}/cancel")
-    async def cancel_diffusion_job(job_id: str, request: Request):
-        worker = await resolve_job_worker(job_id, job_routes, active_routes())
+    @app.get("/native/v1/text-diffusion/jobs/{job_id}/events")
+    async def native_diffusion_job_events(job_id: str):
+        return await diffusion_job_events_request(job_id)
+
+    @app.get("/v1/jobs/{job_id}/events", deprecated=True)
+    async def diffusion_job_events(job_id: str):
+        return deprecated_response(
+            await diffusion_job_events_request(job_id),
+            f"/native/v1/text-diffusion/jobs/{job_id}/events",
+        )
+
+    async def cancel_diffusion_job_request(job_id: str, request: Request):
+        worker = await resolve_job_worker(
+            job_id, job_routes, active_routes(), store if persistence_enabled else None
+        )
         if worker is None:
             raise HTTPException(404, "Unknown diffusion job")
         response = await proxy_job_request(worker, f"/v1/jobs/{job_id}/cancel", method="POST")
         if response.status_code < 300:
             await release_thermal_job_capacity(request, job_id)
+            if persistence_enabled:
+                store.delete_gateway_job_assignment(job_id)
         return response
+
+    @app.post("/native/v1/text-diffusion/jobs/{job_id}/cancel")
+    async def native_cancel_diffusion_job(job_id: str, request: Request):
+        return await cancel_diffusion_job_request(job_id, request)
+
+    @app.post("/v1/jobs/{job_id}/cancel", deprecated=True)
+    async def cancel_diffusion_job(job_id: str, request: Request):
+        return deprecated_response(
+            await cancel_diffusion_job_request(job_id, request),
+            f"/native/v1/text-diffusion/jobs/{job_id}/cancel",
+        )
 
     @app.post("/v1/requests/{request_id}/cancel")
     async def cancel(request_id: str, request: Request):
@@ -1055,9 +1184,17 @@ async def resolve_job_worker(
     job_id: str,
     job_routes: dict[str, ModelProfile],
     routes: dict[str, list[ModelProfile]],
+    store: CompatibilityStore | None,
 ) -> ModelProfile | None:
     if worker := job_routes.get(job_id):
         return worker
+    if store is not None and (assignment := store.get_gateway_job_assignment(job_id)):
+        record = store.get_worker_definition(assignment["worker_id"])
+        if record is not None:
+            worker = WorkerDefinition.model_validate(record["definition"]).to_profile()
+            if worker.generation_family.value == "text-diffusion":
+                job_routes[job_id] = worker
+                return worker
     candidates = {
         profile.id: profile
         for route_candidates in routes.values()
@@ -1072,6 +1209,8 @@ async def resolve_job_worker(
                 continue
             if response.status_code != 404:
                 job_routes[job_id] = candidate
+                if store is not None:
+                    store.save_gateway_job_assignment(job_id, candidate.id, "", "text-diffusion-v1")
                 return candidate
     return None
 
@@ -1158,10 +1297,13 @@ def upstream_headers(profile: ModelProfile, request_id: str = "") -> dict[str, s
 
 
 def worker_response_headers(profile: ModelProfile) -> dict[str, str]:
-    headers = {}
-    if profile.preferred_runtime == "mock":
-        headers["x-modeldeck-fallback"] = "mock"
-    return headers
+    return {}
+
+
+def deprecated_response(response: Response, successor: str) -> Response:
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = f'<{successor}>; rel="successor-version"'
+    return response
 
 
 def json_loads(payload: bytes) -> Any:

@@ -74,13 +74,11 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  demos: "Demos",
-  display_name: "Route label",
+  capabilities: "Capabilities",
+  display_name: "Capability label",
   name: "Name",
   protocol_contract: "Protocol contract",
   public_name: "API Model ID",
-  route_ids: "Routes used by this Demo",
-  routes: "Routes",
   worker_ids: "Worker order",
 };
 

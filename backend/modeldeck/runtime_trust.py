@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from modeldeck.protocol import GenerationFamily
@@ -235,4 +236,8 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
     )
 }
 
-TRUSTED_RUNTIME_IDS = frozenset({"mock", *TRUSTED_RUNTIME_IMPLEMENTATIONS})
+TEST_HARNESS_ENVIRONMENT = "MODELDECK_TEST_HARNESS"
+TEST_ONLY_RUNTIME_IDS = (
+    frozenset({"mock"}) if os.environ.get(TEST_HARNESS_ENVIRONMENT) == "1" else frozenset()
+)
+TRUSTED_RUNTIME_IDS = frozenset({*TEST_ONLY_RUNTIME_IDS, *TRUSTED_RUNTIME_IMPLEMENTATIONS})

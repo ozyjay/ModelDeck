@@ -68,18 +68,31 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
                     "max_tokens": 2,
                 },
             )
+            canonical_trace = await client.post(
+                "/native/v1/autoregressive/traces",
+                json={
+                    "model": "token-explainer",
+                    "messages": [{"role": "user", "content": "latest question"}],
+                    "max_tokens": 2,
+                },
+            )
             cancellation = await client.post("/v1/requests/gateway-stream/cancel")
         assert stream.status_code == 200
         assert "x-modeldeck-worker" not in stream.headers
-        assert stream.headers["x-modeldeck-fallback"] == "mock"
+        assert "x-modeldeck-fallback" not in stream.headers
         assert "event: token" in stream.text
         assert trace.status_code == 200
+        assert trace.headers["deprecation"] == "true"
+        assert '</native/v1/autoregressive/traces>; rel="successor-version"' in trace.headers["link"]
         assert "x-modeldeck-worker" not in trace.headers
         assert trace.json()["prompt_tokens"][:3] == ["hidden", " ", "policy"]
         assert trace.json()["user_prompt_tokens"] == ["latest", "  ", "question"]
         assert "hidden" not in trace.json()["user_prompt_tokens"]
         assert len(trace.json()["prompt_token_ids"]) == len(trace.json()["prompt_tokens"])
         assert len(trace.json()["user_prompt_token_ids"]) == len(trace.json()["user_prompt_tokens"])
+        assert canonical_trace.status_code == 200
+        assert canonical_trace.headers.get("deprecation") is None
+        assert set(canonical_trace.json()) == set(trace.json())
         assert cancellation.json() == {
             "ok": False,
             "request_id": "gateway-stream",
@@ -105,12 +118,13 @@ async def test_gateway_forwards_diffusion_job_status_events_and_cancellation() -
                 json={"model": "text-diffusion", "prompt": "hello", "denoising_steps": 4},
             )
             job_id = queued.json()["job_id"]
-            status = await client.get(f"/v1/jobs/{job_id}")
-            events = await client.get(f"/v1/jobs/{job_id}/events")
-            cancellation = await client.post(f"/v1/jobs/{job_id}/cancel")
+            status = await client.get(f"/native/v1/text-diffusion/jobs/{job_id}")
+            events = await client.get(f"/native/v1/text-diffusion/jobs/{job_id}/events")
+            cancellation = await client.post(f"/native/v1/text-diffusion/jobs/{job_id}/cancel")
 
         assert "x-modeldeck-worker" not in queued.headers
-        assert queued.headers["x-modeldeck-fallback"] == "mock"
+        assert queued.headers["deprecation"] == "true"
+        assert "x-modeldeck-fallback" not in queued.headers
         assert status.status_code == 200
         assert "x-modeldeck-worker" not in status.headers
         assert status.json()["state"] == "complete"

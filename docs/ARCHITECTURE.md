@@ -4,83 +4,60 @@
 
 ```text
 Model (cached, read-only)
-  └─ Worker (configured runtime; editable name, immutable execution identity)
-       └─ Route (public name + protocol; primary Worker + ordered backups)
-            └─ Demo (uses one or more shared Routes)
-                 └─ Event (versioned publication boundary)
+  └─ Worker (configured, trusted runtime)
+       └─ Published capability (public model name + one protocol + ordered Workers)
+            └─ Routing Profile (immutable revisions; exactly one active)
 ```
 
-The relationships are references, not ownership. One Model can have several Workers for
-different runtimes or settings. One Worker can serve several Routes. A Route can be shared
-by several Demos in an Event. Removing a Demo therefore does not remove its Routes or
-Workers.
-
-Operator-facing names are labels and can change. Workers, Routes, Demos and Events have
-hidden UUIDs so renaming does not rewrite references. A Route's `public_name` is different:
-it is the external identifier sent by demo clients in the gateway `model` field, so an
-operator edits it intentionally as part of the Route contract.
+A Routing Profile may serve every concurrent local application: an Open Day demo,
+SprintBot, or another project. It is not an ownership boundary for a frontend, repository,
+or event. Workers and their cached models are independent objects and can be referenced by
+many capabilities.
 
 ## Runtime boundary
 
 ```text
-Operator console/API :3600 ── WorkerSupervisor ── trusted Worker processes on loopback
+Operator console/API :3600 ── WorkerSupervisor ── allowlisted local Workers
           │                         │
-          │                         └─ fixed argument arrays; no browser-supplied commands
-          └─ SQLite configuration, evidence and active Event snapshot
+          │                         └─ fixed argument arrays; no browser commands or paths
+          └─ SQLite profiles, revisions, evidence, and durable job ownership
 
-Demo applications ── gateway :8600 ── published Route ── first ready Worker in order
+Applications ── gateway :8600 ── active capability ── first ready Worker before work begins
 ```
 
-`.venv` owns the management service, gateway, supervisor, discovery, fallback fixtures and
-tests. `.venv-rocm72` owns the primary ROCm inference stack. `.venv-rocm72-q4` isolates the
-Q4 GPTQ dependencies. Model libraries and tensors never enter the management process;
-stopping a Worker process is the memory-recovery boundary.
+`.venv` owns the management service, gateway, supervisor, discovery and tests.
+`.venv-rocm72` owns the primary ROCm inference stack; `.venv-rocm72-q4` isolates Q4
+dependencies. Model libraries and tensors never enter the management process.
 
-## Trusted configuration
+## Code-owned protocols
 
-Operator configuration and executable trust are separate:
+The gateway has a static protocol-adapter registry. An adapter owns its contract,
+validation, public surfaces, worker-path mapping, stream/job handling, timeout class and
+smoke request. Operators can bind only these contracts; they cannot configure a route,
+schema, operation, command, path, or environment variable.
 
-- Operators CRUD Events and Workers and edit names, Route contracts and Worker order.
-- ModelDeck code owns protocol contracts and launch builders.
-- Versioned runtime templates select an installed launch builder and bounded settings.
-- Worker creation accepts a discovered pinned Model, a trusted runtime template and
-  bounded options. It never accepts a command, executable, path, arbitrary argument,
-  environment variable or remote-code flag from the web interface.
+Use an OpenAI-compatible route whenever it expresses the application need. Add a native
+ModelDeck protocol only for a reusable, low-level interaction such as a token candidate
+trace or incremental text-diffusion frames. Project-specific behaviour stays in the
+project rather than expanding ModelDeck.
 
-No Worker instances or public Route aliases are seeded. The trusted templates describe
-what may be created, not what exists.
+## Publication and recovery
 
-## Event lifecycle
+Each profile has one mutable draft and immutable published revisions. Validation checks
+Worker existence, protocol compatibility, ordered Worker references, and where requested,
+matching tested-working evidence. Publishing atomically selects the active profile without
+starting or stopping a process; rollback selects an existing immutable revision.
 
-Each Event has one mutable autosaved draft and zero or more immutable published revisions.
-Validation checks that all Worker references exist, the generation family and capabilities
-match the protocol, Worker order is unambiguous, and any requested tested-working policy
-has matching evidence. Publishing creates a revision and atomically replaces the one live
-routing snapshot. It never starts or stops a process.
+The gateway is local-only. It starts with no published capabilities, sends no cloud
+fallback, chooses a backup only before a request or job begins, and persists
+text-diffusion job ownership for restart-safe polling/cancellation. Test fixtures are not
+operator-visible and cannot be represented as a public fallback.
 
-An earlier revision can be made live again exactly. Discarding a draft restores the newest
-published definition. Published revisions retain their Worker UUID references; replacing a
-Worker can rebind mutable drafts but never silently rewrites history.
+## v2 to v3 migration
 
-## Gateway
-
-The gateway has one routing authority: the active Event snapshot. With no published Event,
-`/v1/models` is empty and requests return structured `local_route_unavailable` responses.
-For each Route the gateway tries the primary Worker and then backups in displayed order,
-using readiness rather than process existence. No cloud fallback occurs.
-
-Routes are exposed only on surfaces permitted by their trusted protocol contract. The
-gateway does not expose physical Worker identity as an application-facing provider layer.
-Mock/replay use remains explicit and is signalled as fallback evidence.
-
-## Persistence and cut-over
-
-SQLite schema v2 stores Workers, Event drafts, Event revisions, the active routing
-snapshot, exact Model cache policy and compatibility evidence. A legacy unversioned
-database is refused rather than guessed or auto-migrated. `scripts/cutover_v2.ps1` moves
-only the exact database, WAL and SHM files to a timestamped backup and initialises an empty
-v2 database.
-
-Worker smoke tests make a real bounded generation request and record both success and
-failure against the detected hardware, OS, ROCm/library versions, pinned Model revision,
-runtime, data type and relevant environment overrides.
+SQLite schema v3 stores Workers, Routing Profile drafts and revisions, one active routing
+snapshot, model cache policy, compatibility evidence and gateway job assignments. A v2
+database is refused at startup. Run `scripts/migrate_v2_to_v3.ps1`: it backs up the
+database/WAL/SHM files, converts every Event revision into a profile revision, preserves
+routes as capabilities and the active routing selection, drops Demo membership, and leaves
+Workers, model caches and evidence untouched.

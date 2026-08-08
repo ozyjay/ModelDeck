@@ -6,8 +6,9 @@ runtime, explicit generation family, model revision, device, state, and readines
 
 ## Autoregressive worker
 
-Canonical routes are `POST /v1/chat/completions`, `/v1/completions`, and
-`/native/autoregressive/trace`. A trace records prompt token IDs, selected generated token
+Worker routes are `POST /v1/chat/completions`, `/v1/completions`, and
+`/native/autoregressive/trace`. The gateway publishes the specialised trace contract as
+`POST /native/v1/autoregressive/traces`. A trace records prompt token IDs, selected generated token
 ID/string, normalised probability, top-k alternatives, accumulated text, and timestamp.
 The trace response also includes worker-tokenizer-owned readable prompt metadata:
 
@@ -64,8 +65,12 @@ It advertises health while loading and becomes ready only after explicit warmup.
 
 ## Text-diffusion worker
 
-Canonical routes are `POST /v1/refine`, `/v1/diffuse`, `GET /v1/jobs/{job_id}`, `POST
-/v1/jobs/{job_id}/cancel`, and `GET /v1/jobs/{job_id}/events`. Frame events contain step,
+Worker routes are `POST /v1/refine`, `/v1/diffuse`, `GET /v1/jobs/{job_id}`, `POST
+/v1/jobs/{job_id}/cancel`, and `GET /v1/jobs/{job_id}/events`. The gateway exposes their
+specialised contract as `POST /native/v1/text-diffusion/refine`,
+`POST /native/v1/text-diffusion/jobs`, `GET /native/v1/text-diffusion/jobs/{job_id}`,
+`GET /native/v1/text-diffusion/jobs/{job_id}/events`, and
+`POST /native/v1/text-diffusion/jobs/{job_id}/cancel`. Frame events contain step,
 total steps, text, masked/stable token counts where available, completion, and seed. A
 terminal frame never exceeds its declared total steps and reports `finish_reason` as
 `stop`, `length`, or `cancelled`. Model-specific structured response parsing removes
@@ -74,10 +79,9 @@ Native iterative refinement is canonical; it is not implemented by calling an AR
 loop. Job event streams publish refinement frames as the engine produces them rather than
 waiting to replay the completed frame collection.
 
-The autoregressive, text-diffusion, and SceneChat mocks are deterministic and
-contract-shaped. A SceneChat mock returns schema-valid placeholder analysis without
-inspecting the supplied image and is signalled by the gateway with
-`x-modeldeck-fallback: mock`. Mock output is not evidence that a real model or ROCm stack
+Deterministic mock/replay workers belong only to the test harness. They are not described
+by a public capability, cannot be created from the operator console, and never produce a
+gateway fallback header. Fixture output is not evidence that a real model or ROCm stack
 works.
 
 ## SceneChat vision-language compatibility worker

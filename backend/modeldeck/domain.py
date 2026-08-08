@@ -98,17 +98,9 @@ class WorkerDefinition(BaseModel):
         )
 
 
-class DemoDefinition(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class CapabilityBinding(BaseModel):
+    """One public, profile-local capability backed by trusted local Workers."""
 
-    id: str
-    name: str = Field(min_length=1, max_length=80)
-    route_ids: list[str] = Field(default_factory=list)
-
-    _valid_id = field_validator("id")(_uuid)
-
-
-class RouteDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
@@ -120,60 +112,51 @@ class RouteDefinition(BaseModel):
     _valid_id = field_validator("id")(_uuid)
 
     @model_validator(mode="after")
-    def trusted_contract_and_unique_workers(self) -> RouteDefinition:
+    def trusted_contract_and_unique_workers(self) -> CapabilityBinding:
         if self.protocol_contract not in PROTOCOL_CONTRACTS:
-            raise ValueError("route protocol contract is not trusted")
+            raise ValueError("capability protocol contract is not trusted")
         if len(self.worker_ids) != len(set(self.worker_ids)):
-            raise ValueError("route workers must be unique")
+            raise ValueError("capability workers must be unique")
         for worker_id in self.worker_ids:
             _uuid(worker_id)
         return self
 
 
-class EventDefinition(BaseModel):
+class RoutingProfile(BaseModel):
+    """A revisioned, atomically published set of local capabilities."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
     qualification: EventQualification = "compatible"
-    demos: list[DemoDefinition] = Field(default_factory=list)
-    routes: list[RouteDefinition] = Field(default_factory=list)
+    capabilities: list[CapabilityBinding] = Field(default_factory=list)
 
     _valid_id = field_validator("id")(_uuid)
 
     @model_validator(mode="after")
-    def unique_and_referenced_children(self) -> EventDefinition:
-        demo_ids = [demo.id for demo in self.demos]
-        route_ids = [route.id for route in self.routes]
-        public_names = [route.public_name.casefold() for route in self.routes]
-        if len(demo_ids) != len(set(demo_ids)):
-            raise ValueError("demo identifiers must be unique")
-        if len(route_ids) != len(set(route_ids)):
-            raise ValueError("route identifiers must be unique")
+    def unique_capabilities(self) -> RoutingProfile:
+        capability_ids = [capability.id for capability in self.capabilities]
+        public_names = [capability.public_name.casefold() for capability in self.capabilities]
+        if len(capability_ids) != len(set(capability_ids)):
+            raise ValueError("capability identifiers must be unique")
         if len(public_names) != len(set(public_names)):
             duplicates = {public_name for public_name in public_names if public_names.count(public_name) > 1}
             conflicting_routes = [
-                f"'{route.display_name}' ({route.public_name})"
-                for route in self.routes
-                if route.public_name.casefold() in duplicates
+                f"'{capability.display_name}' ({capability.public_name})"
+                for capability in self.capabilities
+                if capability.public_name.casefold() in duplicates
             ]
             raise ValueError(
-                "API Model IDs must be unique within an Event; conflicting Routes: "
+                "API Model IDs must be unique within a Routing Profile; conflicting capabilities: "
                 + ", ".join(conflicting_routes)
             )
-        known_routes = set(route_ids)
-        for demo in self.demos:
-            if len(demo.route_ids) != len(set(demo.route_ids)):
-                raise ValueError(f"demo '{demo.name}' contains a Route more than once")
-            unknown = set(demo.route_ids) - known_routes
-            if unknown:
-                raise ValueError(f"demo '{demo.name}' references unknown Routes")
         return self
 
 
-def validate_event(
-    definition: EventDefinition,
+def validate_routing_profile(
+    definition: RoutingProfile,
     workers: Iterable[WorkerDefinition],
     compatibility_tests: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -181,21 +164,13 @@ def validate_event(
     tests = list(compatibility_tests)
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
-    routes: list[dict[str, Any]] = []
-    used_routes = {route_id for demo in definition.demos for route_id in demo.route_ids}
-    if not definition.routes:
-        warnings.append({"message": "This Event publishes no Routes"})
-    for demo in definition.demos:
-        if not demo.route_ids:
-            warnings.append({"demo_id": demo.id, "message": f"Demo '{demo.name}' uses no Routes"})
-    for route in definition.routes:
-        if route.id not in used_routes:
-            warnings.append(
-                {"route_id": route.id, "message": f"Route '{route.display_name}' is not used by a Demo"}
-            )
-        contract = PROTOCOL_CONTRACTS[route.protocol_contract]
+    capabilities: list[dict[str, Any]] = []
+    if not definition.capabilities:
+        warnings.append({"message": "This Routing Profile publishes no capabilities"})
+    for capability in definition.capabilities:
+        contract = PROTOCOL_CONTRACTS[capability.protocol_contract]
         resolved = []
-        for index, worker_id in enumerate(route.worker_ids):
+        for index, worker_id in enumerate(capability.worker_ids):
             worker = by_id.get(worker_id)
             messages: list[str] = []
             if worker is None:
@@ -222,7 +197,7 @@ def validate_event(
                 if definition.qualification == "tested-working" and not _has_matching_success(worker, tests):
                     messages.append("No matching tested-working evidence is recorded")
             for message in messages:
-                errors.append({"route_id": route.id, "worker_id": worker_id, "message": message})
+                errors.append({"capability_id": capability.id, "worker_id": worker_id, "message": message})
             resolved.append(
                 {
                     "worker_id": worker_id,
@@ -230,26 +205,28 @@ def validate_event(
                     "valid": not messages,
                 }
             )
-        routes.append({"route_id": route.id, "public_name": route.public_name, "workers": resolved})
-    return {"valid": not errors, "errors": errors, "warnings": warnings, "routes": routes}
+        capabilities.append(
+            {"capability_id": capability.id, "public_name": capability.public_name, "workers": resolved}
+        )
+    return {"valid": not errors, "errors": errors, "warnings": warnings, "capabilities": capabilities}
 
 
-def routing_snapshot(definition: EventDefinition, revision: int) -> dict[str, Any]:
+def routing_snapshot(definition: RoutingProfile, revision: int) -> dict[str, Any]:
     return {
-        "format": "modeldeck-event-routing",
-        "version": 2,
-        "event_id": definition.id,
-        "event_name": definition.name,
+        "format": "modeldeck-routing-profile",
+        "version": 3,
+        "profile_id": definition.id,
+        "profile_name": definition.name,
         "revision": revision,
-        "routes": [
+        "capabilities": [
             {
-                "route_id": route.id,
-                "display_name": route.display_name,
-                "public_name": route.public_name,
-                "protocol_contract": route.protocol_contract,
-                "worker_ids": list(route.worker_ids),
+                "capability_id": capability.id,
+                "display_name": capability.display_name,
+                "public_name": capability.public_name,
+                "protocol_contract": capability.protocol_contract,
+                "worker_ids": list(capability.worker_ids),
             }
-            for route in definition.routes
+            for capability in definition.capabilities
         ],
     }
 

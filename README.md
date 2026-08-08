@@ -5,14 +5,15 @@ Desktop. Its operator model has four concepts:
 
 - a **Model** is a read-only, pinned snapshot discovered in the local cache;
 - a **Worker** is one operator-created, startable runtime configuration for a Model;
-- a **Route** is a public model name and protocol contract with one primary Worker and
-  ordered backups; and
-- an **Event** is the versioned set of Demos and shared Routes needed for an occasion.
+- a **published capability** is a public model name and trusted protocol contract with one
+  primary Worker and ordered backups; and
+- a **Routing Profile** is the versioned, atomically published set of capabilities for all
+  currently supported local applications.
 
-Publishing an Event changes gateway routing atomically. It does not start Workers. Worker
-names, Event names, Demo names, Route display names and public Route names are editable;
+Publishing a Routing Profile changes gateway routing atomically. It does not start Workers. Worker
+names, profile names, capability display names and public model names are editable;
 internal UUIDs and trusted execution definitions are deliberately not presented as
-operator-facing names. ModelDeck starts with no configured Workers, Events or Routes.
+operator-facing names. ModelDeck starts with no configured Workers, profiles or capabilities.
 
 ROCm workers are core ModelDeck functionality for the target Framework Desktop. They load
 only when explicitly started and never download weights. The management plane, gateway,
@@ -38,8 +39,8 @@ to differ.
 
 ModelDeck deliberately uses three environments with different responsibilities:
 
-- `.venv` is the control plane: management service, supervisor, gateway, catalogue,
-  mock/replay fallbacks, and development tests.
+- `.venv` is the control plane: management service, supervisor, gateway, catalogue, and
+  development tests. Deterministic mock/replay fixtures are test-harness-only.
 - `.venv-rocm72` is the primary inference runtime: the pinned ROCm, PyTorch, and
   Transformers stack for Qwen and the DiffusionGemma BF16 baseline.
 - `.venv-rocm72-q4` is the isolated inference runtime for DiffusionGemma Q4 and its GPTQ
@@ -57,29 +58,36 @@ The operator console can collapse individual sections or every section at once. 
 display preferences are retained in local browser storage and do not change ModelDeck
 configuration.
 
-Use **Models** to create a Worker from a recognised cached revision. Use **Events** to
-define shared Routes, assign the primary and ordered backup Workers, group Routes into
-Demos, validate the draft and publish it. Use **Workers** for lifecycle control and real
-generation smoke tests. Use **Live** to see only the published routing snapshot and
-rehearse a Route end-to-end through the gateway. Open Day mode locks configuration
+Use **Models** to create a Worker from a recognised cached revision. Use **Routing profiles** to
+define published capabilities, assign primary and ordered backup Workers, validate the
+draft and publish it. Use **Workers** for lifecycle control and real generation smoke tests.
+Use **Live** to see only the published routing snapshot and rehearse a capability
+end-to-end through the gateway. Open Day mode locks configuration
 changes server-side while leaving explicit Worker lifecycle controls available.
 
-Event edits autosave to a mutable draft. Publishing creates an immutable revision;
-historical revisions can be made live again without reconstructing them. An Event can
+Routing Profile edits autosave to a mutable draft. Publishing creates an immutable revision;
+historical revisions can be made live again without reconstructing them. A profile can
 require merely protocol-compatible Workers or matching tested-working evidence. A Worker
 smoke test records successful or failed generation evidence against the detected hardware,
 runtime, library and pinned Model fingerprint.
 
-Existing v1 databases are not interpreted as v2 configuration. Back up and replace only
-the configuration database with:
+Existing v1 databases can be backed up and replaced with an empty v3 configuration using:
 
 ```powershell
 pwsh -NoProfile -File scripts/cutover_v2.ps1
 ```
 
 The cut-over script stops ModelDeck, moves the exact SQLite database files under
-`var/backups/`, and creates an empty v2 database. Model caches, logs, benchmark reports and
-trusted runtime manifests are preserved. Use `-WhatIf` to inspect the file operations.
+`var/backups/`, and creates an empty v3 database. To preserve a v2 configuration, use:
+
+```powershell
+pwsh -NoProfile -File scripts/migrate_v2_to_v3.ps1
+```
+
+It backs up the SQLite database, converts Event revisions to Routing Profile revisions,
+preserves active routing and Workers, and omits Demo membership. Startup refuses an
+unmigrated v2 database. Model caches, logs, benchmark reports and trusted runtime manifests
+are preserved. Use `-WhatIf` to inspect the file operations.
 
 For lightweight development or CI on a machine without the target GPU, run
 `pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
@@ -117,7 +125,7 @@ from the Hugging Face cache. A revision cannot be disallowed while it has config
 Workers. A Q4 runtime configured from a downloaded Hugging Face release follows the policy
 of that derivative repository and revision separately from its upstream base Model.
 
-Benchmark all configured physical Workers that have exactly one published Route:
+Benchmark all configured physical Workers that have exactly one published capability:
 
 ```powershell
 pwsh -NoProfile -File scripts/benchmark_models.ps1
@@ -137,8 +145,8 @@ After changing `frontend/`, rebuild with
 `pwsh -NoProfile -File scripts/build_frontend.ps1`. Verification rejects a stale
 committed bundle.
 
-Mock and replay workers remain explicit fallback/test choices. Stop all ModelDeck workers
-and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
+Test fixtures are not available in the operator UI or gateway as fallback choices. Stop all
+ModelDeck workers and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
 and next steps.
 
@@ -184,7 +192,7 @@ Compatible real GPU workers should share `.venv-rocm72`; add another GPU environ
 compatibility evidence demonstrates a dependency conflict.
 
 The setup scripts install the control-plane and trusted runtime dependencies; they do not
-create Worker instances or public Routes. Cached Models are discovered read-only after
+create Worker instances or published capabilities. Cached Models are discovered read-only after
 startup. Physical acceptance evidence belongs to the exact Worker fingerprint created on
 the target machine. None of the smoke tests download Model files.
 

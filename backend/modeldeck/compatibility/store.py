@@ -38,15 +38,15 @@ def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
 
 
 class CompatibilityStore:
-    """SQLite persistence for the v2 ModelDeck domain and compatibility evidence."""
+    """SQLite persistence for routing profiles and compatibility evidence."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
 
     def initialise(self) -> None:
-        self.initialise_v2()
+        self.initialise_v3()
 
-    def initialise_v2(self) -> None:
+    def initialise_v3(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as database:
             tables = {
@@ -63,8 +63,12 @@ class CompatibilityStore:
                 row = database.execute(
                     "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
                 ).fetchone()
-                if row is None or str(row[0]) != "2":
-                    raise LegacyDatabaseError("The ModelDeck database schema is not version 2")
+                if row is None:
+                    raise LegacyDatabaseError("The ModelDeck database schema has no version")
+                if str(row[0]) == "2":
+                    raise LegacyDatabaseError("Run scripts/migrate_v2_to_v3.ps1 before starting ModelDeck.")
+                if str(row[0]) != "3":
+                    raise LegacyDatabaseError("The ModelDeck database schema is not version 3")
             database.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -82,26 +86,33 @@ class CompatibilityStore:
                     updated_at TEXT NOT NULL,
                     archived_at TEXT
                 );
-                CREATE TABLE IF NOT EXISTS events (
+                CREATE TABLE IF NOT EXISTS routing_profiles (
                     id TEXT PRIMARY KEY,
                     draft_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS event_revisions (
-                    event_id TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS routing_profile_revisions (
+                    profile_id TEXT NOT NULL,
                     revision INTEGER NOT NULL,
                     document_json TEXT NOT NULL,
                     published_at TEXT NOT NULL,
-                    PRIMARY KEY (event_id, revision),
-                    FOREIGN KEY (event_id) REFERENCES events(id)
+                    PRIMARY KEY (profile_id, revision),
+                    FOREIGN KEY (profile_id) REFERENCES routing_profiles(id)
                 );
-                CREATE TABLE IF NOT EXISTS active_event (
+                CREATE TABLE IF NOT EXISTS active_routing_profile (
                     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-                    event_id TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
                     revision INTEGER NOT NULL,
                     routing_json TEXT NOT NULL,
                     published_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS gateway_job_assignments (
+                    job_id TEXT PRIMARY KEY,
+                    worker_id TEXT NOT NULL,
+                    capability_name TEXT NOT NULL,
+                    protocol_contract TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS model_cache_policy (
                     model_id TEXT NOT NULL,
@@ -126,7 +137,7 @@ class CompatibilityStore:
             )
             now = _now()
             database.execute(
-                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '2', ?) "
+                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '3', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 (now,),
             )
@@ -206,17 +217,17 @@ class CompatibilityStore:
             cursor = database.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
         return cursor.rowcount > 0
 
-    def list_events(self) -> list[dict[str, Any]]:
+    def list_routing_profiles(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         with sqlite3.connect(self.path) as database:
             rows = database.execute(
-                "SELECT events.id, events.draft_json, events.created_at, events.updated_at, "
-                "active.event_id IS NOT NULL, active.revision, "
-                "(SELECT MAX(revision) FROM event_revisions WHERE event_id = events.id) "
-                "FROM events LEFT JOIN active_event AS active "
-                "ON active.singleton_id = 1 AND active.event_id = events.id "
-                "ORDER BY json_extract(events.draft_json, '$.name') COLLATE NOCASE"
+                "SELECT profiles.id, profiles.draft_json, profiles.created_at, profiles.updated_at, "
+                "active.profile_id IS NOT NULL, active.revision, "
+                "(SELECT MAX(revision) FROM routing_profile_revisions WHERE profile_id = profiles.id) "
+                "FROM routing_profiles AS profiles LEFT JOIN active_routing_profile AS active "
+                "ON active.singleton_id = 1 AND active.profile_id = profiles.id "
+                "ORDER BY json_extract(profiles.draft_json, '$.name') COLLATE NOCASE"
             ).fetchall()
         return [
             {
@@ -230,44 +241,48 @@ class CompatibilityStore:
             for row in rows
         ]
 
-    def get_event(self, event_id: str) -> dict[str, Any] | None:
-        return next((item for item in self.list_events() if item["definition"]["id"] == event_id), None)
+    def get_routing_profile(self, profile_id: str) -> dict[str, Any] | None:
+        return next(
+            (item for item in self.list_routing_profiles() if item["definition"]["id"] == profile_id),
+            None,
+        )
 
-    def save_event_draft(self, document: Mapping[str, Any]) -> dict[str, Any]:
+    def save_routing_profile_draft(self, document: Mapping[str, Any]) -> dict[str, Any]:
         now = _now()
-        event_id = str(document["id"])
+        profile_id = str(document["id"])
         with sqlite3.connect(self.path) as database:
             database.execute(
-                "INSERT INTO events (id, draft_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
+                "INSERT INTO routing_profiles (id, draft_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET draft_json = excluded.draft_json, "
                 "updated_at = excluded.updated_at",
-                (event_id, json.dumps(dict(document), sort_keys=True), now, now),
+                (profile_id, json.dumps(dict(document), sort_keys=True), now, now),
             )
-        return self.get_event(event_id)  # type: ignore[return-value]
+        return self.get_routing_profile(profile_id)  # type: ignore[return-value]
 
-    def delete_event(self, event_id: str) -> bool:
+    def delete_routing_profile(self, profile_id: str) -> bool:
         with sqlite3.connect(self.path) as database:
             active = database.execute(
-                "SELECT 1 FROM active_event WHERE singleton_id = 1 AND event_id = ?", (event_id,)
+                "SELECT 1 FROM active_routing_profile WHERE singleton_id = 1 AND profile_id = ?",
+                (profile_id,),
             ).fetchone()
             revision = database.execute(
-                "SELECT 1 FROM event_revisions WHERE event_id = ? LIMIT 1", (event_id,)
+                "SELECT 1 FROM routing_profile_revisions WHERE profile_id = ? LIMIT 1", (profile_id,)
             ).fetchone()
             if active or revision:
-                raise RuntimeError("Published Events cannot be deleted")
-            cursor = database.execute("DELETE FROM events WHERE id = ?", (event_id,))
+                raise RuntimeError("Published Routing Profiles cannot be deleted")
+            cursor = database.execute("DELETE FROM routing_profiles WHERE id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def list_event_revisions(self, event_id: str) -> list[dict[str, Any]]:
+    def list_routing_profile_revisions(self, profile_id: str) -> list[dict[str, Any]]:
         with sqlite3.connect(self.path) as database:
             rows = database.execute(
-                "SELECT revision, document_json, published_at FROM event_revisions "
-                "WHERE event_id = ? ORDER BY revision DESC",
-                (event_id,),
+                "SELECT revision, document_json, published_at FROM routing_profile_revisions "
+                "WHERE profile_id = ? ORDER BY revision DESC",
+                (profile_id,),
             ).fetchall()
             active = database.execute(
-                "SELECT revision FROM active_event WHERE singleton_id = 1 AND event_id = ?",
-                (event_id,),
+                "SELECT revision FROM active_routing_profile WHERE singleton_id = 1 AND profile_id = ?",
+                (profile_id,),
             ).fetchone()
         active_revision = int(active[0]) if active else None
         return [
@@ -280,55 +295,61 @@ class CompatibilityStore:
             for row in rows
         ]
 
-    def get_event_revision(self, event_id: str, revision: int) -> dict[str, Any] | None:
+    def get_routing_profile_revision(self, profile_id: str, revision: int) -> dict[str, Any] | None:
         return next(
-            (item for item in self.list_event_revisions(event_id) if item["revision"] == revision),
+            (
+                item
+                for item in self.list_routing_profile_revisions(profile_id)
+                if item["revision"] == revision
+            ),
             None,
         )
 
-    def publish_event(self, document: Mapping[str, Any], routing: Mapping[str, Any]) -> dict[str, Any]:
-        event_id = str(document["id"])
+    def publish_routing_profile(
+        self, document: Mapping[str, Any], routing: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        profile_id = str(document["id"])
         published_at = _now()
         with sqlite3.connect(self.path) as database:
             row = database.execute(
-                "SELECT COALESCE(MAX(revision), 0) FROM event_revisions WHERE event_id = ?",
-                (event_id,),
+                "SELECT COALESCE(MAX(revision), 0) FROM routing_profile_revisions WHERE profile_id = ?",
+                (profile_id,),
             ).fetchone()
             revision = int(row[0]) + 1
             database.execute(
-                "INSERT INTO event_revisions (event_id, revision, document_json, published_at) "
+                "INSERT INTO routing_profile_revisions (profile_id, revision, document_json, published_at) "
                 "VALUES (?, ?, ?, ?)",
-                (event_id, revision, json.dumps(dict(document), sort_keys=True), published_at),
+                (profile_id, revision, json.dumps(dict(document), sort_keys=True), published_at),
             )
-            self._set_active(database, event_id, revision, routing, published_at)
-        return self.get_event_revision(event_id, revision)  # type: ignore[return-value]
+            self._set_active_routing_profile(database, profile_id, revision, routing, published_at)
+        return self.get_routing_profile_revision(profile_id, revision)  # type: ignore[return-value]
 
-    def activate_event_revision(
-        self, event_id: str, revision: int, routing: Mapping[str, Any]
+    def activate_routing_profile_revision(
+        self, profile_id: str, revision: int, routing: Mapping[str, Any]
     ) -> dict[str, Any]:
-        record = self.get_event_revision(event_id, revision)
+        record = self.get_routing_profile_revision(profile_id, revision)
         if record is None:
-            raise KeyError("Unknown Event revision")
+            raise KeyError("Unknown Routing Profile revision")
         with sqlite3.connect(self.path) as database:
-            self._set_active(database, event_id, revision, routing, _now())
+            self._set_active_routing_profile(database, profile_id, revision, routing, _now())
         return record
 
     @staticmethod
-    def _set_active(
+    def _set_active_routing_profile(
         database: sqlite3.Connection,
-        event_id: str,
+        profile_id: str,
         revision: int,
         routing: Mapping[str, Any],
         published_at: str,
     ) -> None:
         snapshot = {**dict(routing), "revision": revision}
         database.execute(
-            "INSERT INTO active_event "
-            "(singleton_id, event_id, revision, routing_json, published_at) "
+            "INSERT INTO active_routing_profile "
+            "(singleton_id, profile_id, revision, routing_json, published_at) "
             "VALUES (1, ?, ?, ?, ?) ON CONFLICT(singleton_id) DO UPDATE SET "
-            "event_id = excluded.event_id, revision = excluded.revision, "
+            "profile_id = excluded.profile_id, revision = excluded.revision, "
             "routing_json = excluded.routing_json, published_at = excluded.published_at",
-            (event_id, revision, json.dumps(snapshot, sort_keys=True), published_at),
+            (profile_id, revision, json.dumps(snapshot, sort_keys=True), published_at),
         )
 
     def active_routing_snapshot(self) -> dict[str, Any] | None:
@@ -337,38 +358,66 @@ class CompatibilityStore:
         try:
             with sqlite3.connect(self.path) as database:
                 row = database.execute(
-                    "SELECT routing_json FROM active_event WHERE singleton_id = 1"
+                    "SELECT routing_json FROM active_routing_profile WHERE singleton_id = 1"
                 ).fetchone()
         except sqlite3.OperationalError:
             return None
         return json.loads(row[0]) if row else None
 
-    def discard_event_draft(self, event_id: str) -> dict[str, Any]:
-        revisions = self.list_event_revisions(event_id)
+    def discard_routing_profile_draft(self, profile_id: str) -> dict[str, Any]:
+        revisions = self.list_routing_profile_revisions(profile_id)
         if not revisions:
-            raise RuntimeError("An unpublished Event has no published revision to restore")
-        return self.save_event_draft(revisions[0]["definition"])
+            raise RuntimeError("An unpublished Routing Profile has no published revision to restore")
+        return self.save_routing_profile_draft(revisions[0]["definition"])
 
-    def rebind_event_drafts(self, old_worker_id: str, new_worker_id: str) -> list[str]:
+    def rebind_routing_profile_drafts(self, old_worker_id: str, new_worker_id: str) -> list[str]:
         changed: list[str] = []
         with sqlite3.connect(self.path) as database:
-            rows = database.execute("SELECT id, draft_json FROM events").fetchall()
-            for event_id, document_json in rows:
+            rows = database.execute("SELECT id, draft_json FROM routing_profiles").fetchall()
+            for profile_id, document_json in rows:
                 document = json.loads(document_json)
                 touched = False
-                for route in document.get("routes", []):
-                    if old_worker_id in route.get("worker_ids", []):
-                        route["worker_ids"] = [
-                            new_worker_id if item == old_worker_id else item for item in route["worker_ids"]
+                for capability in document.get("capabilities", []):
+                    if old_worker_id in capability.get("worker_ids", []):
+                        capability["worker_ids"] = [
+                            new_worker_id if item == old_worker_id else item
+                            for item in capability["worker_ids"]
                         ]
                         touched = True
                 if touched:
                     database.execute(
-                        "UPDATE events SET draft_json = ?, updated_at = ? WHERE id = ?",
-                        (json.dumps(document, sort_keys=True), _now(), event_id),
+                        "UPDATE routing_profiles SET draft_json = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(document, sort_keys=True), _now(), profile_id),
                     )
-                    changed.append(str(event_id))
+                    changed.append(str(profile_id))
         return changed
+
+    def save_gateway_job_assignment(
+        self, job_id: str, worker_id: str, capability_name: str, protocol_contract: str
+    ) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT OR REPLACE INTO gateway_job_assignments "
+                "(job_id, worker_id, capability_name, protocol_contract, created_at) VALUES (?, ?, ?, ?, ?)",
+                (job_id, worker_id, capability_name, protocol_contract, _now()),
+            )
+
+    def get_gateway_job_assignment(self, job_id: str) -> dict[str, str] | None:
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT worker_id, capability_name, protocol_contract "
+                "FROM gateway_job_assignments WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return (
+            {"worker_id": str(row[0]), "capability_name": str(row[1]), "protocol_contract": str(row[2])}
+            if row
+            else None
+        )
+
+    def delete_gateway_job_assignment(self, job_id: str) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute("DELETE FROM gateway_job_assignments WHERE job_id = ?", (job_id,))
 
     def list_model_cache_policy(self) -> dict[tuple[str, str], bool]:
         if not self.path.exists():

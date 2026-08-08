@@ -21,7 +21,7 @@ from modeldeck.hardware import probe_environment
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
 from modeldeck.thermal import ThermalPolicyManager
-from modeldeck.v2_api import create_v2_router
+from modeldeck.v2_api import create_v3_router
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
 FRONTEND_FALLBACK = """<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
@@ -53,7 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-    store.initialise_v2()
+    store.initialise_v3()
     definitions = {
         worker.id: worker
         for worker in (
@@ -76,8 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="ModelDeck management API",
-        version="0.2.0",
-        description="Local-only management for Events, Routes and isolated model Workers.",
+        version="0.3.0",
+        description="Local-only management for Routing Profiles, capabilities and isolated model Workers.",
         lifespan=lifespan,
     )
     app.state.settings = configured
@@ -95,7 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
-    app.include_router(create_v2_router())
+    app.include_router(create_v3_router())
 
     @app.middleware("http")
     async def browser_security_headers(request: Request, call_next):
@@ -119,7 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "service": "modeldeck-management",
-            "schema_version": 2,
+            "schema_version": 3,
             "open_day": configured.open_day,
             "downloads_allowed": configured.allow_downloads,
             "gateway_url": f"http://{configured.host}:{configured.gateway_port}",

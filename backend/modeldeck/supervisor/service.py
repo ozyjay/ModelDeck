@@ -17,6 +17,7 @@ import httpx
 
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import WorkerEvent, WorkerState
+from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
     QWEN_TTS_MAXIMUM_CODEC_TOKENS,
@@ -751,7 +752,6 @@ def _text_diffusion_launch(
 
 
 TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
-    "mock": _mock_launch,
     "transformers-rocm": _autoregressive_launch,
     "vision-language-transformers-rocm": _vision_language_launch,
     "qwen35-vision-language-transformers-rocm": _qwen35_vision_language_launch,
@@ -763,6 +763,8 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "qwen3-tts-rocm": _qwen_tts_launch,
     "whisper-small-en-rocm": _speech_recognition_launch,
 }
+if "mock" in TRUSTED_RUNTIME_IDS:
+    TRUSTED_LAUNCH_BUILDERS["mock"] = _mock_launch
 
 
 def build_mock_worker_command(profile: ModelProfile) -> list[str]:

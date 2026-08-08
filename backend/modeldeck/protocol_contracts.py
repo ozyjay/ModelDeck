@@ -38,7 +38,7 @@ PROTOCOL_CONTRACTS = {
             display_name="Native autoregressive trace",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
             required_capabilities=("top_k_trace",),
-            surfaces=("POST /native/autoregressive/trace",),
+            surfaces=("POST /native/v1/autoregressive/traces",),
         ),
         ProtocolContract(
             id="scene-analysis-v1",
@@ -52,7 +52,11 @@ PROTOCOL_CONTRACTS = {
             display_name="Text diffusion",
             generation_family=GenerationFamily.TEXT_DIFFUSION,
             required_capabilities=("iterative_refinement", "intermediate_frames"),
-            surfaces=("POST /v1/refine", "POST /v1/diffuse", "GET/POST /v1/jobs/*"),
+            surfaces=(
+                "POST /native/v1/text-diffusion/refine",
+                "POST /native/v1/text-diffusion/jobs",
+                "GET/POST /native/v1/text-diffusion/jobs/*",
+            ),
         ),
         ProtocolContract(
             id="speech-conversation-v1",

@@ -9,23 +9,23 @@ describe("API error messages", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       detail: [{
         type: "string_pattern_mismatch",
-        loc: ["body", "routes", 1, "public_name"],
+        loc: ["body", "capabilities", 1, "public_name"],
         msg: "String should match the required pattern",
       }],
     }), { status: 422, headers: { "Content-Type": "application/json" } })));
 
-    await expect(putJson("/api/events/example/draft", {})).rejects.toThrow(
-      "Validation failed: Routes → item 2 → API Model ID: String should match the required pattern",
+    await expect(putJson("/api/routing-profiles/example/draft", {})).rejects.toThrow(
+      "Validation failed: Capabilities → item 2 → API Model ID: String should match the required pattern",
     );
   });
 
-  it("keeps structured Event validation details on API errors", async () => {
-    const validation = { valid: false, errors: [{ route_id: "route-1", message: "Unknown Worker" }], warnings: [], routes: [] };
+  it("keeps structured Routing Profile validation details on API errors", async () => {
+    const validation = { valid: false, errors: [{ capability_id: "capability-1", message: "Unknown Worker" }], warnings: [], capabilities: [] };
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      detail: { message: "Event validation failed", validation },
+      detail: { message: "Routing Profile validation failed", validation },
     }), { status: 409, headers: { "Content-Type": "application/json" } })));
 
-    const error = await postJson("/api/events/example/publish").catch((reason) => reason);
+    const error = await postJson("/api/routing-profiles/example/publish").catch((reason) => reason);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 409, detail: { validation } });
   });

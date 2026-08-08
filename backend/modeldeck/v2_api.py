@@ -11,10 +11,14 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.catalogue import discover_huggingface_models
-from modeldeck.domain import EventDefinition, WorkerDefinition, routing_snapshot, validate_event
+from modeldeck.domain import (
+    RoutingProfile,
+    WorkerDefinition,
+    routing_snapshot,
+    validate_routing_profile,
+)
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.hardware import probe_environment
-from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES, MockWorkerTemplate
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
@@ -42,36 +46,6 @@ class WorkerCreateRequest(BaseModel):
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
-class MockSceneChatWorkerCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    visual_token_budget: VisualTokenBudget = 70
-
-
-class MockWorkerCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    protocol_contract: str
-    name: str | None = Field(default=None, min_length=1, max_length=80)
-    scenario: Literal["success", "delayed", "request-error"] = "success"
-    delay_ms: int | None = Field(default=None, ge=1, le=120_000)
-    visual_token_budget: VisualTokenBudget | None = None
-
-    def validated_template(self) -> MockWorkerTemplate:
-        template = MOCK_WORKER_TEMPLATES.get(self.protocol_contract)
-        if template is None:
-            raise ValueError("protocol contract has no trusted mock implementation")
-        if self.scenario == "delayed" and self.delay_ms is None:
-            raise ValueError("delayed mock Workers require delay_ms")
-        if self.scenario != "delayed" and self.delay_ms is not None:
-            raise ValueError("delay_ms is only valid for delayed mock Workers")
-        if self.protocol_contract == "scene-analysis-v1":
-            return template
-        if self.visual_token_budget is not None:
-            raise ValueError("visual_token_budget is only valid for scene-analysis-v1")
-        return template
-
-
 class WorkerRenameRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,7 +69,7 @@ class WorkerReplacementRequest(BaseModel):
     rebind_drafts: bool = True
 
 
-def create_v2_router() -> APIRouter:
+def create_v3_router() -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.get("/protocol-contracts")
@@ -113,10 +87,6 @@ def create_v2_router() -> APIRouter:
                 for contract in PROTOCOL_CONTRACTS.values()
             ]
         }
-
-    @router.get("/mock-worker-templates")
-    async def mock_worker_templates():
-        return {"templates": [template.public_dict() for template in MOCK_WORKER_TEMPLATES.values()]}
 
     @router.get("/workers")
     async def list_workers(request: Request):
@@ -230,80 +200,6 @@ def create_v2_router() -> APIRouter:
         request.app.state.worker_definitions[worker_id] = definition
         return _worker_response(request, store.get_worker_definition(worker_id))
 
-    async def create_mock_worker(payload: MockWorkerCreateRequest, request: Request):
-        _require_mutable(request)
-        try:
-            template = payload.validated_template()
-        except ValueError as error:
-            raise HTTPException(422, str(error)) from error
-        records = _worker_records(request, include_archived=True)
-        used_ports = {int(record["definition"]["port"]) for record in records}
-        port = next((candidate for candidate in LOCAL_PORT_RANGE if candidate not in used_ports), None)
-        if port is None:
-            raise HTTPException(409, "No local ModelDeck Worker ports are available")
-        active_names = {str(record["definition"]["name"]).casefold() for record in _worker_records(request)}
-        requested_name = " ".join(payload.name.split()) if payload.name else ""
-        visual_option = next(
-            (option for option in template.options if option["id"] == "visual_token_budget"), None
-        )
-        visual_token_budget = payload.visual_token_budget or (
-            int(visual_option["default"]) if visual_option else None
-        )
-        base_name = requested_name or template.default_name
-        if payload.protocol_contract == "scene-analysis-v1" and not requested_name:
-            base_name += f" {visual_token_budget}"
-        name = base_name
-        suffix = 2
-        while name.casefold() in active_names:
-            name = f"{base_name} ({suffix})"
-            suffix += 1
-        worker_id = str(uuid4())
-        definition = WorkerDefinition(
-            id=worker_id,
-            name=name,
-            model_id=template.model_id,
-            revision="fixture-v1",
-            generation_family=template.contract.generation_family,
-            runtime="mock",
-            lifecycle="on-demand",
-            port=port,
-            dtype="auto",
-            capabilities=template.capabilities,
-            settings={
-                "mock_contract_id": payload.protocol_contract,
-                "mock_scenario": payload.scenario,
-                **({"mock_delay_ms": payload.delay_ms} if payload.delay_ms is not None else {}),
-                **(template.fixed_settings or {}),
-                **(
-                    {"visual_token_budget": visual_token_budget}
-                    if payload.protocol_contract == "scene-analysis-v1"
-                    else {}
-                ),
-            },
-        )
-        store = request.app.state.compatibility_store
-        store.save_worker_definition(definition.model_dump(mode="json"))
-        try:
-            request.app.state.supervisor.register_profile(definition.to_profile())
-        except ValueError as error:
-            store.delete_worker_definition(worker_id)
-            raise HTTPException(409, str(error)) from error
-        request.app.state.worker_definitions[worker_id] = definition
-        return _worker_response(request, store.get_worker_definition(worker_id))
-
-    router.add_api_route("/workers/mocks", create_mock_worker, methods=["POST"], status_code=201)
-
-    @router.post("/workers/mock-scenechat", status_code=201, deprecated=True)
-    async def create_mock_scenechat_worker(payload: MockSceneChatWorkerCreateRequest, request: Request):
-        return await create_mock_worker(
-            MockWorkerCreateRequest(
-                protocol_contract="scene-analysis-v1",
-                name=f"SceneChat mock {payload.visual_token_budget}",
-                visual_token_budget=payload.visual_token_budget,
-            ),
-            request,
-        )
-
     @router.get("/workers/{worker_id}")
     async def get_worker(worker_id: str, request: Request):
         record = request.app.state.compatibility_store.get_worker_definition(worker_id)
@@ -361,12 +257,12 @@ def create_v2_router() -> APIRouter:
             ),
             request,
         )
-        rebound_events = []
+        rebound_profiles = []
         if payload.rebind_drafts:
-            rebound_events = request.app.state.compatibility_store.rebind_event_drafts(
+            rebound_profiles = request.app.state.compatibility_store.rebind_routing_profile_drafts(
                 worker_id, replacement["id"]
             )
-        return {"replacement": replacement, "rebound_event_drafts": rebound_events}
+        return {"replacement": replacement, "rebound_profile_drafts": rebound_profiles}
 
     @router.delete("/workers/{worker_id}")
     async def archive_worker(worker_id: str, request: Request):
@@ -481,122 +377,110 @@ def create_v2_router() -> APIRouter:
         )
         return {"ok": result == "tested-working", "worker_id": worker_id, "test": record}
 
-    @router.get("/events")
-    async def list_events(request: Request):
-        return {"events": request.app.state.compatibility_store.list_events()}
+    @router.get("/routing-profiles")
+    async def list_routing_profiles(request: Request):
+        return {"profiles": request.app.state.compatibility_store.list_routing_profiles()}
 
-    @router.post("/events", status_code=201)
-    async def create_event(payload: EventDefinition, request: Request):
+    @router.post("/routing-profiles", status_code=201)
+    async def create_routing_profile(payload: RoutingProfile, request: Request):
         _require_mutable(request)
         store = request.app.state.compatibility_store
-        if store.get_event(payload.id) is not None:
-            raise HTTPException(409, "That Event already exists")
-        return store.save_event_draft(payload.model_dump(mode="json"))
+        if store.get_routing_profile(payload.id) is not None:
+            raise HTTPException(409, "That Routing Profile already exists")
+        return store.save_routing_profile_draft(payload.model_dump(mode="json"))
 
-    @router.get("/events/{event_id}")
-    async def get_event(event_id: str, request: Request):
-        record = request.app.state.compatibility_store.get_event(event_id)
+    @router.get("/routing-profiles/{profile_id}")
+    async def get_routing_profile(profile_id: str, request: Request):
+        record = request.app.state.compatibility_store.get_routing_profile(profile_id)
         if record is None:
-            raise HTTPException(404, "Unknown Event")
+            raise HTTPException(404, "Unknown Routing Profile")
         return record
 
-    @router.put("/events/{event_id}/draft")
-    async def save_event_draft(event_id: str, payload: EventDefinition, request: Request):
+    @router.put("/routing-profiles/{profile_id}/draft")
+    async def save_routing_profile_draft(profile_id: str, payload: RoutingProfile, request: Request):
         _require_mutable(request)
-        if payload.id != event_id:
-            raise HTTPException(409, "The Event identifier cannot be changed")
+        if payload.id != profile_id:
+            raise HTTPException(409, "The Routing Profile identifier cannot be changed")
         store = request.app.state.compatibility_store
-        if store.get_event(event_id) is None:
-            raise HTTPException(404, "Unknown Event")
-        return store.save_event_draft(payload.model_dump(mode="json"))
+        if store.get_routing_profile(profile_id) is None:
+            raise HTTPException(404, "Unknown Routing Profile")
+        return store.save_routing_profile_draft(payload.model_dump(mode="json"))
 
-    @router.delete("/events/{event_id}/draft")
-    async def discard_event_draft(event_id: str, request: Request):
+    @router.delete("/routing-profiles/{profile_id}/draft")
+    async def discard_routing_profile_draft(profile_id: str, request: Request):
         _require_mutable(request)
         try:
-            return request.app.state.compatibility_store.discard_event_draft(event_id)
+            return request.app.state.compatibility_store.discard_routing_profile_draft(profile_id)
         except RuntimeError as error:
             raise HTTPException(409, str(error)) from error
 
-    @router.delete("/events/{event_id}")
-    async def delete_event(event_id: str, request: Request):
+    @router.delete("/routing-profiles/{profile_id}")
+    async def delete_routing_profile(profile_id: str, request: Request):
         _require_mutable(request)
         try:
-            removed = request.app.state.compatibility_store.delete_event(event_id)
+            removed = request.app.state.compatibility_store.delete_routing_profile(profile_id)
         except RuntimeError as error:
             raise HTTPException(409, str(error)) from error
         if not removed:
-            raise HTTPException(404, "Unknown Event")
-        return {"ok": True, "event_id": event_id}
+            raise HTTPException(404, "Unknown Routing Profile")
+        return {"ok": True, "profile_id": profile_id}
 
-    @router.post("/events/{event_id}/validate")
-    async def validate_stored_event(event_id: str, request: Request):
-        definition = _event_definition(event_id, request)
-        return _validate(definition, request)
+    @router.post("/routing-profiles/{profile_id}/validate")
+    async def validate_stored_routing_profile(profile_id: str, request: Request):
+        return _validate(_routing_profile_definition(profile_id, request), request)
 
-    @router.post("/events/{event_id}/publish", status_code=201)
-    async def publish_event(event_id: str, request: Request):
+    @router.post("/routing-profiles/{profile_id}/publish", status_code=201)
+    async def publish_routing_profile(profile_id: str, request: Request):
         _require_mutable(request)
-        definition = _event_definition(event_id, request)
+        definition = _routing_profile_definition(profile_id, request)
         validation = _validate(definition, request)
         if not validation["valid"]:
-            raise HTTPException(409, {"message": "Event validation failed", "validation": validation})
-        snapshot = routing_snapshot(definition, 0)
-        revision = request.app.state.compatibility_store.publish_event(
-            definition.model_dump(mode="json"), snapshot
+            raise HTTPException(
+                409, {"message": "Routing Profile validation failed", "validation": validation}
+            )
+        revision = request.app.state.compatibility_store.publish_routing_profile(
+            definition.model_dump(mode="json"), routing_snapshot(definition, 0)
         )
-        return {"event_id": event_id, "revision": revision["revision"], "active": True}
+        return {"profile_id": profile_id, "revision": revision["revision"], "active": True}
 
-    @router.get("/events/{event_id}/revisions")
-    async def event_revisions(event_id: str, request: Request):
-        if request.app.state.compatibility_store.get_event(event_id) is None:
-            raise HTTPException(404, "Unknown Event")
-        return {"revisions": request.app.state.compatibility_store.list_event_revisions(event_id)}
+    @router.get("/routing-profiles/{profile_id}/revisions")
+    async def routing_profile_revisions(profile_id: str, request: Request):
+        if request.app.state.compatibility_store.get_routing_profile(profile_id) is None:
+            raise HTTPException(404, "Unknown Routing Profile")
+        return {"revisions": request.app.state.compatibility_store.list_routing_profile_revisions(profile_id)}
 
-    @router.post("/events/{event_id}/routes/{route_id}/smoke")
-    async def smoke_event_route(event_id: str, route_id: str, request: Request):
+    @router.post("/routing-profiles/{profile_id}/capabilities/{capability_id}/smoke")
+    async def smoke_routing_profile_capability(profile_id: str, capability_id: str, request: Request):
         snapshot = request.app.state.compatibility_store.active_routing_snapshot()
-        if snapshot is None or snapshot.get("event_id") != event_id:
-            raise HTTPException(409, "Publish this Event before smoke-testing its Routes")
-        route = next(
-            (item for item in snapshot.get("routes", []) if item.get("route_id") == route_id),
+        if snapshot is None or snapshot.get("profile_id") != profile_id:
+            raise HTTPException(409, "Publish this Routing Profile before smoke-testing capabilities")
+        capability = next(
+            (item for item in snapshot.get("capabilities", []) if item.get("capability_id") == capability_id),
             None,
         )
-        if route is None:
-            raise HTTPException(404, "The Route is not in the live Event revision")
-        path, body = _route_smoke_request(route)
-        settings = request.app.state.settings
-        if route["protocol_contract"] == "text-diffusion-v1":
-            timeout = settings.diffusion_timeout_seconds
-        elif route["protocol_contract"] == "speech-synthesis-v1":
-            timeout = settings.speech_synthesis_timeout_seconds
-        elif route["protocol_contract"] == "speech-recognition-v1":
-            timeout = settings.speech_recognition_timeout_seconds
-        elif route["protocol_contract"].startswith("translation-"):
-            timeout = settings.translation_timeout_seconds
-        else:
-            timeout = max(60.0, settings.scenechat_timeout_seconds)
+        if capability is None:
+            raise HTTPException(404, "The capability is not in the live Routing Profile revision")
+        path, body = _capability_smoke_request(capability)
+        timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    f"http://{settings.host}:{settings.gateway_port}{path}", json=body
+                    f"http://{request.app.state.settings.host}:{request.app.state.settings.gateway_port}{path}",
+                    json=body,
                 )
             response.raise_for_status()
-            if route["protocol_contract"] == "speech-synthesis-v1":
-                if not response.headers.get("content-type", "").startswith("audio/wav"):
-                    raise ValueError("speech synthesis smoke test did not return audio/wav")
-                if not response.content.startswith(b"RIFF"):
-                    raise ValueError("speech synthesis smoke test did not return a WAV payload")
-                result = {"audio": True}
-            else:
-                result = response.json()
+            result = (
+                {"audio": True}
+                if capability["protocol_contract"] == "speech-synthesis-v1"
+                else response.json()
+            )
         except (httpx.HTTPError, ValueError) as error:
-            raise HTTPException(503, f"Gateway Route smoke test failed: {error}") from error
+            raise HTTPException(503, f"Gateway capability smoke test failed: {error}") from error
         return {
             "ok": True,
-            "event_id": event_id,
-            "route_id": route_id,
-            "public_name": route["public_name"],
+            "profile_id": profile_id,
+            "capability_id": capability_id,
+            "public_name": capability["public_name"],
             "evidence": next(
                 (
                     name
@@ -607,49 +491,51 @@ def create_v2_router() -> APIRouter:
             ),
         }
 
-    @router.post("/events/{event_id}/revisions/{revision}/publish")
-    async def reactivate_event_revision(event_id: str, revision: int, request: Request):
+    @router.post("/routing-profiles/{profile_id}/revisions/{revision}/publish")
+    async def reactivate_routing_profile_revision(profile_id: str, revision: int, request: Request):
         _require_mutable(request)
         store = request.app.state.compatibility_store
-        record = store.get_event_revision(event_id, revision)
+        record = store.get_routing_profile_revision(profile_id, revision)
         if record is None:
-            raise HTTPException(404, "Unknown Event revision")
-        definition = EventDefinition.model_validate(record["definition"])
+            raise HTTPException(404, "Unknown Routing Profile revision")
+        definition = RoutingProfile.model_validate(record["definition"])
         validation = _validate(definition, request)
         if not validation["valid"]:
-            raise HTTPException(409, {"message": "Event validation failed", "validation": validation})
-        store.activate_event_revision(event_id, revision, routing_snapshot(definition, revision))
-        return {"event_id": event_id, "revision": revision, "active": True}
+            raise HTTPException(
+                409, {"message": "Routing Profile validation failed", "validation": validation}
+            )
+        store.activate_routing_profile_revision(profile_id, revision, routing_snapshot(definition, revision))
+        return {"profile_id": profile_id, "revision": revision, "active": True}
 
     @router.get("/live")
     async def live(request: Request):
         snapshot = request.app.state.compatibility_store.active_routing_snapshot()
         if snapshot is None:
-            return {"active_event": None, "routes": []}
+            return {"active_profile": None, "capabilities": []}
         workers = {item["id"]: item for item in await list_workers(request)}
-        routes = []
-        for route in snapshot.get("routes", []):
-            chain = [workers.get(worker_id) for worker_id in route.get("worker_ids", [])]
+        capabilities = []
+        for capability in snapshot.get("capabilities", []):
+            chain = [workers.get(worker_id) for worker_id in capability.get("worker_ids", [])]
             effective = next(
                 (worker for worker in chain if worker and worker["state"] in {"ready", "busy"}),
                 None,
             )
-            routes.append(
+            capabilities.append(
                 {
-                    **route,
-                    "id": route["route_id"],
+                    **capability,
+                    "id": capability["capability_id"],
                     "workers": [worker for worker in chain if worker],
                     "effective_worker": effective,
                     "ready": effective is not None,
                 }
             )
         return {
-            "active_event": {
-                "id": snapshot["event_id"],
-                "name": snapshot["event_name"],
+            "active_profile": {
+                "id": snapshot["profile_id"],
+                "name": snapshot["profile_name"],
                 "revision": snapshot["revision"],
             },
-            "routes": routes,
+            "capabilities": capabilities,
         }
 
     return router
@@ -669,7 +555,7 @@ def _add_lifecycle_route(router: APIRouter, operation: str) -> None:
             raise HTTPException(409, str(error)) from error
 
     router.add_api_route(
-        f"/workers/{{worker_id}}/{operation}", lifecycle, methods=["POST"], name=f"v2_{operation}_worker"
+        f"/workers/{{worker_id}}/{operation}", lifecycle, methods=["POST"], name=f"v3_{operation}_worker"
     )
 
 
@@ -737,27 +623,27 @@ def _require_worker(request: Request, worker_id: str) -> WorkerDefinition:
 def _worker_usage(worker_id: str, request: Request):
     references = []
     store = request.app.state.compatibility_store
-    for event in store.list_events():
-        for route in event["definition"].get("routes", []):
-            if worker_id in route.get("worker_ids", []):
+    for profile in store.list_routing_profiles():
+        for capability in profile["definition"].get("capabilities", []):
+            if worker_id in capability.get("worker_ids", []):
                 references.append(
                     {
-                        "event_id": event["definition"]["id"],
-                        "event_name": event["definition"]["name"],
-                        "route_id": route["id"],
-                        "route_name": route["display_name"],
+                        "profile_id": profile["definition"]["id"],
+                        "profile_name": profile["definition"]["name"],
+                        "capability_id": capability["id"],
+                        "capability_name": capability["display_name"],
                         "kind": "draft",
                     }
                 )
-        for revision in store.list_event_revisions(event["definition"]["id"]):
-            for route in revision["definition"].get("routes", []):
-                if worker_id in route.get("worker_ids", []):
+        for revision in store.list_routing_profile_revisions(profile["definition"]["id"]):
+            for capability in revision["definition"].get("capabilities", []):
+                if worker_id in capability.get("worker_ids", []):
                     references.append(
                         {
-                            "event_id": event["definition"]["id"],
-                            "event_name": event["definition"]["name"],
-                            "route_id": route["id"],
-                            "route_name": route["display_name"],
+                            "profile_id": profile["definition"]["id"],
+                            "profile_name": profile["definition"]["name"],
+                            "capability_id": capability["id"],
+                            "capability_name": capability["display_name"],
                             "kind": "active" if revision["active"] else "history",
                             "revision": revision["revision"],
                         }
@@ -771,16 +657,16 @@ def _worker_usage(worker_id: str, request: Request):
     }
 
 
-def _event_definition(event_id: str, request: Request) -> EventDefinition:
-    record = request.app.state.compatibility_store.get_event(event_id)
+def _routing_profile_definition(profile_id: str, request: Request) -> RoutingProfile:
+    record = request.app.state.compatibility_store.get_routing_profile(profile_id)
     if record is None:
-        raise HTTPException(404, "Unknown Event")
-    return EventDefinition.model_validate(record["definition"])
+        raise HTTPException(404, "Unknown Routing Profile")
+    return RoutingProfile.model_validate(record["definition"])
 
 
-def _validate(definition: EventDefinition, request: Request):
+def _validate(definition: RoutingProfile, request: Request):
     workers = list(request.app.state.worker_definitions.values())
-    return validate_event(definition, workers, request.app.state.compatibility_store.list_tests())
+    return validate_routing_profile(definition, workers, request.app.state.compatibility_store.list_tests())
 
 
 def _require_mutable(request: Request) -> None:
@@ -793,9 +679,9 @@ def _integer_template_default(settings: dict[str, object], name: str, fallback: 
     return value if isinstance(value, int) and not isinstance(value, bool) else fallback
 
 
-def _route_smoke_request(route):
-    public_name = route["public_name"]
-    contract = route["protocol_contract"]
+def _capability_smoke_request(capability):
+    public_name = capability["public_name"]
+    contract = capability["protocol_contract"]
     if contract == "openai-chat-v1":
         return "/v1/chat/completions", {
             "model": public_name,
@@ -813,7 +699,7 @@ def _route_smoke_request(route):
             "stream": False,
         }
     if contract == "native-ar-trace-v1":
-        return "/native/autoregressive/trace", {
+        return "/native/v1/autoregressive/traces", {
             "model": public_name,
             "prompt": "Reply with the word ready.",
             "max_tokens": 4,
@@ -822,7 +708,7 @@ def _route_smoke_request(route):
             "seed": 7,
         }
     if contract == "text-diffusion-v1":
-        return "/v1/refine", {
+        return "/native/v1/text-diffusion/refine", {
             "model": public_name,
             "prompt": "A local Worker is ready.",
             "denoising_steps": 4,
@@ -857,6 +743,19 @@ def _route_smoke_request(route):
             "audio_base64": "AAAAAA==",
         }
     raise HTTPException(409, "This protocol requires an interactive smoke-test client")
+
+
+def _capability_smoke_timeout(contract: str, request: Request) -> float:
+    settings = request.app.state.settings
+    if contract == "text-diffusion-v1":
+        return settings.diffusion_timeout_seconds
+    if contract == "speech-synthesis-v1":
+        return settings.speech_synthesis_timeout_seconds
+    if contract == "speech-recognition-v1":
+        return settings.speech_recognition_timeout_seconds
+    if contract.startswith("translation-"):
+        return settings.translation_timeout_seconds
+    return max(60.0, settings.scenechat_timeout_seconds)
 
 
 def _worker_smoke_request(definition: WorkerDefinition):

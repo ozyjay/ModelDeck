@@ -38,14 +38,14 @@ function Resolve-ModelDeckRoute {
     )
 
     $Live = Invoke-RestMethod -Uri "$ManagementUrl/api/live" -TimeoutSec 10
-    $Matches = @($Live.routes | Where-Object {
+    $Matches = @($Live.capabilities | Where-Object {
         $_.worker_ids -contains $WorkerId -and (-not $PublicName -or $_.public_name -eq $PublicName)
     })
     if ($Matches.Count -eq 0) {
-        throw 'The Worker is not assigned to a matching Route in the published Event.'
+        throw 'The Worker is not assigned to a matching capability in the active Routing Profile.'
     }
     if ($Matches.Count -gt 1 -and -not $PublicName) {
-        throw "The Worker serves several Routes. Supply -RouteName: $($Matches.public_name -join ', ')"
+        throw "The Worker serves several capabilities. Supply -RouteName: $($Matches.public_name -join ', ')"
     }
     return $Matches[0]
 }
