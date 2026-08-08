@@ -322,14 +322,8 @@ def create_v3_router() -> APIRouter:
                 generation_payload = generation_response.json()
                 if health_payload.get("ready") is not True:
                     raise RuntimeError("Worker health did not report ready")
-                smoke_evidence = (
-                    generation_payload.get("events")
-                    or generation_payload.get("frames")
-                    or generation_payload.get("ok")
-                    or generation_payload.get("choices")
-                )
-                if not smoke_evidence:
-                    raise RuntimeError("Smoke request returned no generation evidence")
+                if not _has_smoke_evidence(definition, generation_payload):
+                    raise RuntimeError("Smoke response contained no valid Worker evidence")
             result = "tested-working"
             failure_class = None
             error_summary = None
@@ -828,3 +822,22 @@ def _worker_smoke_request(definition: WorkerDefinition):
     if definition.generation_family == "speech-recognition":
         return "/native/speech-recognition/smoke", None, None
     raise HTTPException(409, "This Worker family does not support an automatic smoke test")
+
+
+def _has_smoke_evidence(definition: WorkerDefinition, payload: dict[str, object]) -> bool:
+    if definition.generation_family != "embedding":
+        return bool(
+            payload.get("events") or payload.get("frames") or payload.get("ok") or payload.get("choices")
+        )
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return False
+    for index, item in enumerate(data):
+        if not isinstance(item, dict) or item.get("object") != "embedding" or item.get("index") != index:
+            return False
+        vector = item.get("embedding")
+        if not isinstance(vector, list) or len(vector) != 1024:
+            return False
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in vector):
+            return False
+    return True

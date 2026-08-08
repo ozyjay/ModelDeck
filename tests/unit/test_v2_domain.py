@@ -10,7 +10,7 @@ from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot,
 from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
-from modeldeck.v2_api import _worker_smoke_request
+from modeldeck.v2_api import _has_smoke_evidence, _worker_smoke_request
 
 
 def worker_definition() -> WorkerDefinition:
@@ -171,6 +171,36 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert path == "/v1/embeddings"
     assert body["input"] == ["The local Worker is ready."]
     assert headers is None
+
+
+def test_embedding_smoke_requires_ordered_1024_dimension_vectors() -> None:
+    embedding = worker_definition().model_copy(
+        update={"generation_family": "embedding", "capabilities": {"embeddings": True}}
+    )
+    valid = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": 0, "embedding": [0.0] * 1024},
+            {"object": "embedding", "index": 1, "embedding": [1.0] * 1024},
+        ],
+    }
+
+    assert _has_smoke_evidence(embedding, valid) is True
+    assert _has_smoke_evidence(embedding, {**valid, "data": valid["data"][:1]}) is True
+    assert (
+        _has_smoke_evidence(
+            embedding,
+            {**valid, "data": [{"object": "embedding", "index": 1, "embedding": [0.0] * 1024}]},
+        )
+        is False
+    )
+    assert (
+        _has_smoke_evidence(
+            embedding,
+            {**valid, "data": [{"object": "embedding", "index": 0, "embedding": [0.0] * 1023}]},
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
