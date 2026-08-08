@@ -44,6 +44,26 @@ capability in the active Routing Profile. `GET /v1/models` lists only capabiliti
 protocol adapter explicitly declares OpenAI-model compatibility; native-only capabilities
 are not presented as OpenAI models.
 
+Each item in `GET /v1/models` has the existing `id`, `object`, `owned_by`, and `ready`
+fields plus `revision`. `revision` is the authoritative, pinned upstream snapshot revision
+of the capability's primary Worker. For normal Hugging Face-backed Workers, ModelDeck
+obtains it from the exact locally cached snapshot selected when the Worker was created
+(normally the Hugging Face commit revision). For a Worker that loads a separately versioned
+derivative artefact, such as the ModelDeck DiffusionGemma Q4 release, it is instead the
+artefact repository revision because that is the checkpoint actually loaded; the release
+manifest separately binds its base-model revision.
+
+The value is persisted in the Worker definition and therefore remains stable across
+ModelDeck restarts while the published capability and its primary Worker are unchanged.
+Publishing a capability with a Worker for a different cached revision or derivative
+artefact changes it. ModelDeck does not currently maintain a verified digest over every
+local model file, so it deliberately does not expose a synthetic `digest`. Manual mutation
+of files inside a cached snapshot after Worker creation is outside this guarantee. A
+capability may have a different-revision backup Worker; `revision` identifies the ordered
+primary Worker, while an individual request can use a backup only when the primary is
+unavailable. ModelDeck currently has no OpenAI embeddings adapter, so no embedding models
+are advertised until that surface is supported.
+
 - `GET /v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/routes`, `/v1/thermal`,
   `/v1/metrics`
 - `POST /v1/chat/completions`, `/v1/completions`, `/v1/translations`

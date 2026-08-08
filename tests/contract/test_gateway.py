@@ -52,6 +52,30 @@ def worker() -> WorkerDefinition:
     )
 
 
+def published_chat_profile(worker_id: str, *, profile_id: str | None = None) -> RoutingProfile:
+    return RoutingProfile(
+        id=profile_id or str(uuid4()),
+        name="Local applications",
+        capabilities=[
+            {
+                "id": str(uuid4()),
+                "display_name": "Visitor chat",
+                "public_name": "visitor-chat",
+                "protocol_contract": "openai-chat-v1",
+                "worker_ids": [worker_id],
+            }
+        ],
+    )
+
+
+async def listed_model_revision(settings: Settings) -> str:
+    app = create_gateway_app(settings=settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        models = (await client.get("/v1/models")).json()["data"]
+    assert len(models) == 1
+    return models[0]["revision"]
+
+
 @pytest.mark.asyncio
 async def test_gateway_has_no_routes_or_implicit_defaults_before_publication(tmp_path) -> None:
     app = create_gateway_app(settings=Settings(data_dir=tmp_path))
@@ -106,7 +130,13 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         native = (await client.get("/native/v1/capabilities")).json()["capabilities"]
 
     assert models == [
-        {"id": "visitor-chat", "object": "model", "owned_by": "modeldeck-local", "ready": False}
+        {
+            "id": "visitor-chat",
+            "object": "model",
+            "owned_by": "modeldeck-local",
+            "revision": "revision-1",
+            "ready": False,
+        }
     ]
     assert routes == [
         {"public_name": "visitor-trace", "ready": False},
@@ -124,6 +154,73 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         }
     ]
     assert "provider" not in str(models).lower()
+
+
+@pytest.mark.asyncio
+async def test_gateway_model_revision_is_stable_across_restart_and_changes_with_snapshot(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    original = worker()
+    store.save_worker_definition(original.model_dump(mode="json"))
+    profile = published_chat_profile(original.id)
+    store.save_routing_profile_draft(profile.model_dump(mode="json"))
+    store.publish_routing_profile(profile.model_dump(mode="json"), routing_snapshot(profile, 1))
+
+    assert await listed_model_revision(settings) == "revision-1"
+    # A new gateway instance reads the immutable Worker revision from the persisted profile.
+    assert await listed_model_revision(settings) == "revision-1"
+
+    replacement = worker().model_copy(update={"name": "Trace Worker revision 2", "revision": "revision-2"})
+    store.save_worker_definition(replacement.model_dump(mode="json"))
+    updated_capability = profile.capabilities[0].model_copy(update={"worker_ids": [replacement.id]})
+    updated_profile = profile.model_copy(update={"capabilities": [updated_capability]})
+    store.save_routing_profile_draft(updated_profile.model_dump(mode="json"))
+    store.publish_routing_profile(
+        updated_profile.model_dump(mode="json"), routing_snapshot(updated_profile, 2)
+    )
+
+    assert await listed_model_revision(settings) == "revision-2"
+
+
+@pytest.mark.asyncio
+async def test_gateway_model_revision_uses_and_tracks_loaded_derivative_artifact(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    original = worker().model_copy(
+        update={
+            "model_id": "example/base-model",
+            "revision": "base-revision",
+            "artifact_model_id": "example/quantised-model",
+            "artifact_revision": "artifact-revision-1",
+        }
+    )
+    store.save_worker_definition(original.model_dump(mode="json"))
+    profile = published_chat_profile(original.id)
+    store.save_routing_profile_draft(profile.model_dump(mode="json"))
+    store.publish_routing_profile(profile.model_dump(mode="json"), routing_snapshot(profile, 1))
+
+    assert await listed_model_revision(settings) == "artifact-revision-1"
+
+    replacement = worker().model_copy(
+        update={
+            "name": "Trace Worker artefact revision 2",
+            "model_id": "example/base-model",
+            "revision": "base-revision",
+            "artifact_model_id": "example/quantised-model",
+            "artifact_revision": "artifact-revision-2",
+        }
+    )
+    store.save_worker_definition(replacement.model_dump(mode="json"))
+    updated_capability = profile.capabilities[0].model_copy(update={"worker_ids": [replacement.id]})
+    updated_profile = profile.model_copy(update={"capabilities": [updated_capability]})
+    store.save_routing_profile_draft(updated_profile.model_dump(mode="json"))
+    store.publish_routing_profile(
+        updated_profile.model_dump(mode="json"), routing_snapshot(updated_profile, 2)
+    )
+
+    assert await listed_model_revision(settings) == "artifact-revision-2"
 
 
 def test_trace_metadata_validation_requires_aligned_readable_tokens() -> None:

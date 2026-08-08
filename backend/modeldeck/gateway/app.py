@@ -160,6 +160,10 @@ def create_gateway_app(
                     "id": alias,
                     "object": "model",
                     "owned_by": "modeldeck-local",
+                    # A derivative artefact is the checkpoint the Worker loads, so its
+                    # pinned upstream revision is the model's authoritative identity.
+                    # Otherwise the Worker loads its configured base snapshot revision.
+                    "revision": candidates[0].artifact_revision or candidates[0].revision,
                     "ready": any(states[profile.id]["ready"] for profile in candidates),
                 }
                 for alias, candidates in routes.items()
