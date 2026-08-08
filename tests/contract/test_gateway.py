@@ -16,6 +16,7 @@ from modeldeck.gateway import create_gateway_app
 from modeldeck.gateway.app import (
     claim_thermal_capacity,
     invalid_trace_metadata,
+    model_discovery_record,
     proxy_binary_request,
     proxy_request,
     release_thermal_capacity,
@@ -45,7 +46,7 @@ def worker() -> WorkerDefinition:
         generation_family="autoregressive",
         runtime="mock",
         lifecycle="on-demand",
-        port=8630,
+        port=65535,
         dtype="float16",
         capabilities={"chat": True, "completions": True, "top_k_trace": True},
         settings={},
@@ -136,6 +137,8 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
             "owned_by": "modeldeck-local",
             "revision": "revision-1",
             "ready": False,
+            "runtime": "mock",
+            "accelerator": "mock",
         }
     ]
     assert routes == [
@@ -232,6 +235,25 @@ def test_trace_metadata_validation_requires_aligned_readable_tokens() -> None:
     }
     assert trace_token_metadata_error(valid) is None
     assert "align" in trace_token_metadata_error({**valid, "prompt_tokens": ["one"]})
+
+
+def test_model_discovery_reports_ready_rocm_worker_accelerator_metadata() -> None:
+    profile = worker().model_copy(update={"runtime": "transformers-rocm"}).to_profile()
+
+    record = model_discovery_record(
+        "sprintbot-qwen",
+        [profile],
+        {
+            profile.id: {
+                "ready": True,
+                "health": {"runtime": "transformers-rocm", "rocm_version": "7.2.1"},
+            }
+        },
+    )
+
+    assert record["runtime"] == "transformers-rocm"
+    assert record["accelerator"] == "rocm"
+    assert record["ready"] is True
 
 
 def test_invalid_trace_metadata_error_uses_worker_language_without_route_leakage() -> None:

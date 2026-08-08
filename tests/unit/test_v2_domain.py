@@ -24,7 +24,7 @@ def worker_definition() -> WorkerDefinition:
         runtime_template_id="autoregressive-transformers",
         runtime_template_version="2",
         lifecycle="on-demand",
-        port=8630,
+        port=65535,
         dtype="float16",
         capabilities={"chat": True, "completions": True, "top_k_trace": True},
         settings={},

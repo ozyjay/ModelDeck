@@ -63,6 +63,14 @@ capability may have a different-revision backup Worker; `revision` identifies th
 primary Worker, while an individual request can use a backup only when the primary is
 unavailable.
 
+Model records also contain `runtime` and `accelerator`, which describe the first ready
+Worker in the capability's ordered routing list—the same Worker that receives a new gateway
+request. `runtime` comes from that Worker's health report when it is ready, otherwise from
+the configured primary Worker. `accelerator` is code-owned metadata derived from the
+verified runtime and health evidence: ready ROCm Workers report `rocm`; Vulkan, CPU, and
+test-harness Workers report `vulkan`, `cpu`, and `mock` respectively. A model with
+`ready: false` is not accelerator-resident proof, even when its configured runtime is ROCm.
+
 `POST /v1/embeddings` is an OpenAI-compatible, local-only embeddings surface. It accepts a
 published embedding `model` and a non-empty string or ordered array of strings in `input`.
 The current trusted Qwen embedding Worker returns exactly 1,024 float vectors, with one

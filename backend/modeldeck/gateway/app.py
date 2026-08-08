@@ -179,17 +179,7 @@ def create_gateway_app(
         return {
             "object": "list",
             "data": [
-                {
-                    "id": alias,
-                    "object": "model",
-                    "owned_by": "modeldeck-local",
-                    # A derivative artefact is the checkpoint the Worker loads, so its
-                    # pinned upstream revision is the model's authoritative identity.
-                    # Otherwise the Worker loads its configured base snapshot revision.
-                    "revision": candidates[0].artifact_revision or candidates[0].revision,
-                    "ready": any(states[profile.id]["ready"] for profile in candidates),
-                }
-                for alias, candidates in routes.items()
+                model_discovery_record(alias, candidates, states) for alias, candidates in routes.items()
             ],
         }
 
@@ -1327,6 +1317,52 @@ async def worker_health(
 
 def endpoint(profile: ModelProfile) -> str:
     return f"http://127.0.0.1:{profile.port}"
+
+
+def model_discovery_record(
+    alias: str,
+    candidates: list[ModelProfile],
+    states: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe the Worker currently selected by normal gateway routing.
+
+    The first ready Worker is the same candidate a new request would receive. When every
+    Worker is unavailable, retain the primary Worker's configured runtime identity but mark
+    the model not ready, so clients cannot treat the accelerator field as availability proof.
+    """
+
+    selected = next((profile for profile in candidates if states[profile.id]["ready"]), candidates[0])
+    state = states[selected.id]
+    health = state.get("health") if isinstance(state.get("health"), dict) else {}
+    runtime = health.get("runtime") if state["ready"] else None
+    runtime = runtime if isinstance(runtime, str) and runtime else selected.preferred_runtime
+    return {
+        "id": alias,
+        "object": "model",
+        "owned_by": "modeldeck-local",
+        # A derivative artefact is the checkpoint the Worker loads, so its pinned upstream
+        # revision is the model's authoritative identity. Otherwise it loads the base snapshot.
+        "revision": selected.artifact_revision or selected.revision,
+        "ready": state["ready"],
+        "runtime": runtime,
+        "accelerator": accelerator_for_runtime(runtime, health),
+    }
+
+
+def accelerator_for_runtime(runtime: str, health: dict[str, Any]) -> str:
+    """Return a code-owned accelerator identity, preferring Worker health evidence."""
+
+    if health.get("rocm_version"):
+        return "rocm"
+    if runtime.endswith("-rocm"):
+        return "rocm"
+    if runtime == "llama-vulkan":
+        return "vulkan"
+    if runtime == "marian-transformers-cpu":
+        return "cpu"
+    if runtime == "mock":
+        return "mock"
+    return "unknown"
 
 
 def route_candidates(

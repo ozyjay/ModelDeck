@@ -78,6 +78,8 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
                 "owned_by": "modeldeck-local",
                 "revision": "0123456789abcdef0123456789abcdef01234567",
                 "ready": True,
+                "runtime": "mock",
+                "accelerator": "mock",
             }
         ]
     finally:

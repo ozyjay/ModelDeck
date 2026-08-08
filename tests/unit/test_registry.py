@@ -21,6 +21,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
 
     assert set(templates) == {
         "autoregressive-transformers",
+        "embedding-transformers",
         "scenechat-gemma4",
         "scenechat-qwen35",
         "diffusiongemma-transformers",
