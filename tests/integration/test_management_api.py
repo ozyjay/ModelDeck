@@ -83,6 +83,28 @@ async def test_management_has_no_public_event_or_mock_worker_api(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_management_ignores_persisted_untrusted_workers(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    legacy_worker = worker_definition(name="Legacy mock").model_copy(
+        update={"runtime": "retired-test-runtime"}
+    )
+    store.save_worker_definition(legacy_worker.model_dump(mode="json"))
+
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            workers = await client.get("/api/workers")
+            direct = await client.get(f"/api/workers/{legacy_worker.id}")
+
+    assert workers.json() == []
+    assert direct.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_profile_publish_rollback_and_live_capabilities(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")

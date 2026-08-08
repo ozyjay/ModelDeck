@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ from modeldeck.thermal import ThermalPolicyManager
 from modeldeck.v2_api import create_v3_router
 
 FRONTEND_ROOT = Path(__file__).parent / "api/static"
+LOGGER = logging.getLogger(__name__)
 FRONTEND_FALLBACK = """<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>ModelDeck</title></head>
 <body><main><h1>ModelDeck operator console is not built</h1>
@@ -54,12 +56,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     store.initialise_v3()
-    definitions = {
-        worker.id: worker
-        for worker in (
-            WorkerDefinition.model_validate(record["definition"]) for record in store.list_workers()
-        )
-    }
+    definitions: dict[str, WorkerDefinition] = {}
+    worker_profiles = []
+    for record in store.list_workers():
+        try:
+            definition = WorkerDefinition.model_validate(record["definition"])
+            profile = definition.to_profile()
+        except ValueError as error:
+            # Keep historical Worker and evidence records intact, but never expose or
+            # launch a runtime that is no longer trusted by the production gateway.
+            LOGGER.warning(
+                "Ignoring persisted Worker %s because its runtime is not trusted: %s",
+                record["definition"].get("id", "unknown"),
+                error,
+            )
+            continue
+        definitions[definition.id] = definition
+        worker_profiles.append(profile)
     thermal_manager = ThermalPolicyManager(
         configured.thermal_throttling,
         data_dir=configured.data_dir,
@@ -85,7 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.compatibility_store = store
     app.state.worker_definitions = definitions
     app.state.supervisor = WorkerSupervisor(
-        [definition.to_profile() for definition in definitions.values()],
+        worker_profiles,
         log_dir=configured.log_dir,
         thermal_manager=thermal_manager,
     )

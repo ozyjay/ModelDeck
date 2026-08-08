@@ -69,12 +69,15 @@ def create_gateway_app(
     def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
         if alias_routes is not None:
             return {name: list(candidates) for name, candidates in base_routes.items()}
-        definitions = {
-            definition.id: definition
-            for definition in (
-                WorkerDefinition.model_validate(record["definition"]) for record in store.list_workers()
-            )
-        }
+        profiles: dict[str, ModelProfile] = {}
+        for record in store.list_workers():
+            try:
+                definition = WorkerDefinition.model_validate(record["definition"])
+                profiles[definition.id] = definition.to_profile()
+            except ValueError:
+                # A historical Worker may use a retired test-only runtime. It remains
+                # in SQLite for migration/evidence purposes but cannot be routed.
+                continue
         snapshot = store.active_routing_snapshot()
         if snapshot is None or snapshot.get("format") != "modeldeck-routing-profile":
             return {}
@@ -86,9 +89,7 @@ def create_gateway_app(
             if not public_name:
                 continue
             routes[public_name] = [
-                definitions[worker_id].to_profile()
-                for worker_id in capability.get("worker_ids", [])
-                if worker_id in definitions
+                profiles[worker_id] for worker_id in capability.get("worker_ids", []) if worker_id in profiles
             ]
         return routes
 

@@ -202,6 +202,7 @@ def create_v3_router() -> APIRouter:
 
     @router.get("/workers/{worker_id}")
     async def get_worker(worker_id: str, request: Request):
+        _require_worker(request, worker_id)
         record = request.app.state.compatibility_store.get_worker_definition(worker_id)
         if record is None:
             raise HTTPException(404, "Unknown Worker")
@@ -210,6 +211,7 @@ def create_v3_router() -> APIRouter:
     @router.patch("/workers/{worker_id}")
     async def rename_worker(worker_id: str, payload: WorkerRenameRequest, request: Request):
         _require_mutable(request)
+        _require_worker(request, worker_id)
         store = request.app.state.compatibility_store
         record = store.get_worker_definition(worker_id)
         if record is None:
@@ -225,8 +227,7 @@ def create_v3_router() -> APIRouter:
 
     @router.get("/workers/{worker_id}/usage")
     async def worker_usage(worker_id: str, request: Request):
-        if request.app.state.compatibility_store.get_worker_definition(worker_id) is None:
-            raise HTTPException(404, "Unknown Worker")
+        _require_worker(request, worker_id)
         return _worker_usage(worker_id, request)
 
     @router.post("/workers/{worker_id}/replacement", status_code=201)
@@ -267,6 +268,7 @@ def create_v3_router() -> APIRouter:
     @router.delete("/workers/{worker_id}")
     async def archive_worker(worker_id: str, request: Request):
         _require_mutable(request)
+        _require_worker(request, worker_id)
         store = request.app.state.compatibility_store
         record = store.get_worker_definition(worker_id)
         if record is None:
@@ -560,7 +562,11 @@ def _add_lifecycle_route(router: APIRouter, operation: str) -> None:
 
 
 def _worker_records(request: Request, *, include_archived: bool = False):
-    return request.app.state.compatibility_store.list_workers(include_archived=include_archived)
+    return [
+        record
+        for record in request.app.state.compatibility_store.list_workers(include_archived=include_archived)
+        if record["definition"].get("id") in request.app.state.worker_definitions
+    ]
 
 
 def _worker_integer_setting(definition: WorkerDefinition, name: str) -> int | None:
