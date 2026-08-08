@@ -32,7 +32,7 @@ const profile: RoutingProfileRecord = {
 function responses(configured = false): Record<string, unknown> {
   const workers = configured ? [worker] : [];
   return {
-    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 3, open_day: false, downloads_allowed: false, gateway_url: "http://127.0.0.1:8600" },
+    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 3, configuration_locked: false, offline_only: true, gateway_url: "http://127.0.0.1:8600" },
     "/api/gateway/status": { available: true, health: { status: "ok", ready_workers: 0 }, models: { data: [] }, routes: { routes: [] }, error: null },
     "/api/hardware": { configured: { profile_id: "framework", os: "Fedora", gpu: "Radeon", gpu_architecture: "gfx1151", rocm_family: "7.2", work_mount: "/mnt/work" }, detected: { fedora_release: "44", kernel: "6.0", python: "3.13", rocm_packages: [], gpu_device_nodes: {}, memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] }, diagnostic_note: "" },
     "/api/telemetry": { memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] },

@@ -1,7 +1,7 @@
 # Security and privacy
 
 All defaults bind to `127.0.0.1`. LAN exposure requires an explicit future decision and
-threat review. Open Day mode forces downloads off.
+threat review. ModelDeck is always offline-only and never downloads models at runtime.
 
 The frontend cannot submit commands, executable paths, raw runtime arguments, environment
 variables, tokens, arbitrary filesystem paths, Docker access, camera data, uploads, or
@@ -20,6 +20,10 @@ values literally without expansion or command execution, does not print values, 
 closed on unknown, duplicate, malformed, or unterminated entries. Existing process
 environment variables take precedence. `.env` is not readable or writable through the
 management API or operator console.
+
+Use `MODELDECK_CONFIGURATION_LOCKED=1` to prevent management-plane configuration changes
+for a prepared deployment. The legacy `MODELDECK_OPEN_DAY` name is accepted temporarily with
+a deprecation warning.
 
 Visitor prompts and generated content are not stored or logged. Supervisor log capture is
 bounded to the latest 500 records per worker and redacts prompt, output, authorisation,

@@ -145,8 +145,8 @@ export interface ManagementHealth {
   status: string;
   service: string;
   schema_version: number;
-  open_day: boolean;
-  downloads_allowed: boolean;
+  configuration_locked: boolean;
+  offline_only: boolean;
   gateway_url: string;
 }
 

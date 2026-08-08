@@ -133,8 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "service": "modeldeck-management",
             "schema_version": 3,
-            "open_day": configured.open_day,
-            "downloads_allowed": configured.allow_downloads,
+            "configuration_locked": configured.configuration_locked,
+            "offline_only": True,
             "gateway_url": f"http://{configured.host}:{configured.gateway_port}",
         }
 
@@ -334,8 +334,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def _require_mutable(request: Request) -> None:
-    if request.app.state.settings.open_day:
-        raise HTTPException(423, "Configuration is locked while Open Day mode is active")
+    if request.app.state.settings.configuration_locked:
+        raise HTTPException(423, "Configuration is locked by the local deployment policy")
 
 
 def _frontend_index() -> FileResponse | HTMLResponse:

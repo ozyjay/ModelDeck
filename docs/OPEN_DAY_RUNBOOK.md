@@ -9,7 +9,8 @@ fallbacks for a demonstrated hardware or model failure, not the primary presenta
    at the event.
 2. Run `pwsh -NoProfile -File scripts/check_ports.ps1` and
    `pwsh -NoProfile -File scripts/check_environment.ps1`.
-3. Run `pwsh -NoProfile -File scripts/run.ps1 -OpenDay`. It forces downloads off.
+3. Run `pwsh -NoProfile -File scripts/run.ps1 -LockConfiguration`. ModelDeck is always
+   offline-only; this locks configuration for the prepared event deployment.
 4. Open `http://127.0.0.1:3600`; confirm gateway health and `/mnt/work` status.
 5. Start the selected ROCm worker and wait for `ready`, not merely a PID. Confirm the
    gateway reports that ROCm profile as the effective provider before opening the demo.
@@ -35,7 +36,7 @@ on port 8000. Before the event:
    `http://127.0.0.1:8600/v1`, use model `scenechat-vision`, and keep
    `VISION_PROVIDER=vllm` for this phase. SceneChat does not need the worker credential.
 4. Run `pwsh -NoProfile -File scripts/smoke_rocm_scenechat.ps1`. It preflights port 8000 and
-   the snapshot, starts Open Day mode, waits for readiness, exercises native smoke and both
+   the snapshot, locks the prepared configuration, waits for readiness, exercises native smoke and both
    `/v1` routes, then stops the worker and confirms process exit.
 5. If using a configured alternative such as Gemma 4 26B, start and smoke-test its unique
    worker first, then choose it under **Workers → SceneChat provider**. SceneChat continues

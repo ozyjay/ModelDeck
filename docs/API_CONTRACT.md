@@ -33,8 +33,9 @@ A Routing Profile contains a name, description, qualification policy and profile
 published capabilities. A capability has a display name, public `model` name, one trusted
 protocol contract, and ordered compatible Worker IDs. Index zero is primary. Publishing
 validates a draft, creates an immutable revision, and atomically makes it the one active
-profile; it never starts Workers. Earlier revisions can be made active again. Open Day mode
-locks profile mutation server-side while preserving reads and explicit Worker controls.
+profile; it never starts Workers. Earlier revisions can be made active again. The local
+configuration lock blocks profile mutation server-side while preserving reads and explicit
+Worker controls.
 
 ## Gateway (`:8600`)
 

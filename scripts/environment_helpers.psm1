@@ -6,7 +6,7 @@ $script:AllowedEnvironmentNames = [System.Collections.Generic.HashSet[string]]::
 @(
     'HF_HOME',
     'HF_HUB_CACHE',
-    'MODELDECK_ALLOW_DOWNLOADS',
+    'MODELDECK_CONFIGURATION_LOCKED',
     'MODELDECK_DATA_DIR',
     'MODELDECK_DIAGNOSTIC_CAPTURE',
     'MODELDECK_DIFFUSION_TIMEOUT_SECONDS',
@@ -15,7 +15,12 @@ $script:AllowedEnvironmentNames = [System.Collections.Generic.HashSet[string]]::
     'MODELDECK_LOG_DIR',
     'MODELDECK_MANAGEMENT_PORT',
     'MODELDECK_MARIAN_PYTHON',
+    # Deprecated transition input. New local configuration must use
+    # MODELDECK_CONFIGURATION_LOCKED.
     'MODELDECK_OPEN_DAY',
+    # Deprecated transition input. ModelDeck is always offline-only, so this
+    # setting is ignored.
+    'MODELDECK_ALLOW_DOWNLOADS',
     'MODELDECK_ROCM72_PYTHON',
     'MODELDECK_ROCM72_Q4_PYTHON',
     'MODELDECK_RUN_WHISPER_HARDWARE_TESTS',

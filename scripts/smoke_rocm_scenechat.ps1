@@ -11,7 +11,7 @@ $StartedServices = $false
 $WorkerStopped = $false
 
 try {
-    & (Join-Path $PSScriptRoot 'run.ps1') -OpenDay
+    & (Join-Path $PSScriptRoot 'run.ps1') -LockConfiguration
     $StartedServices = $true
     Start-Sleep -Seconds 1
 

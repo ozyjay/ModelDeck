@@ -59,6 +59,8 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
             live = await client.get("/api/live")
 
     assert health.json()["schema_version"] == 3
+    assert health.json()["configuration_locked"] is False
+    assert health.json()["offline_only"] is True
     assert workers.json() == []
     assert profiles.json() == {"profiles": []}
     assert live.json() == {"active_profile": None, "capabilities": []}
@@ -182,8 +184,8 @@ def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_open_day_mode_locks_profile_mutation_but_keeps_reads_available(tmp_path) -> None:
-    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", open_day=True))
+async def test_configuration_lock_blocks_profile_mutation_but_keeps_reads_available(tmp_path) -> None:
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", configuration_locked=True))
     profile = profile_document(str(uuid4()), name="Locked")
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(

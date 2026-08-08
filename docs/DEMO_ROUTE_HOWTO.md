@@ -24,7 +24,7 @@ ModelDeck capability only for reusable low-level interactions, such as autoregre
 candidate traces or iterative text-diffusion frames. A feature unique to one project
 belongs in that project's code rather than in a ModelDeck adapter.
 
-Open Day mode locks all profile edits and publication server-side. It intentionally leaves
-explicit Worker lifecycle actions available so a prepared profile can still be operated
-locally. Deterministic fixtures are test-harness tools: they do not appear in this workflow
-and are never evidence that a hardware Worker is ready.
+`MODELDECK_CONFIGURATION_LOCKED=1` locks all profile edits and publication server-side. It
+intentionally leaves explicit Worker lifecycle actions available so a prepared profile can
+still be operated locally. Deterministic fixtures are test-harness tools: they do not appear
+in this workflow and are never evidence that a hardware Worker is ready.

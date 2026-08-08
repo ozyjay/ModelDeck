@@ -97,11 +97,11 @@ def test_env_loader_rejects_duplicates_and_malformed_lines(tmp_path: Path) -> No
     assert "Expected NAME=VALUE" in malformed_result.stderr
 
 
-def test_run_script_loads_dotenv_before_open_day_overrides() -> None:
+def test_run_script_loads_dotenv_before_configuration_lock_overrides() -> None:
     script = RUN_SCRIPT.read_text(encoding="utf-8")
 
     assert "environment_helpers.psm1" in script
-    assert script.index("Import-ModelDeckEnvironment") < script.index("if ($OpenDay)")
+    assert script.index("Import-ModelDeckEnvironment") < script.index("if ($LockConfiguration)")
 
 
 def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
@@ -119,8 +119,8 @@ def test_checked_in_env_example_uses_only_supported_names() -> None:
     result = _run_pwsh(
         "Remove-Item Env:MODELDECK_HOST,Env:MODELDECK_MANAGEMENT_PORT,"
         "Env:MODELDECK_GATEWAY_PORT,Env:MODELDECK_DATA_DIR,Env:MODELDECK_LOG_DIR,"
-        "Env:MODELDECK_OPEN_DAY,Env:MODELDECK_SCENECHAT_API_KEY,"
-        "Env:MODELDECK_ALLOW_DOWNLOADS,Env:MODELDECK_DIAGNOSTIC_CAPTURE,"
+        "Env:MODELDECK_CONFIGURATION_LOCKED,Env:MODELDECK_SCENECHAT_API_KEY,"
+        "Env:MODELDECK_DIAGNOSTIC_CAPTURE,"
         "Env:MODELDECK_DIFFUSION_TIMEOUT_SECONDS,Env:MODELDECK_SCENECHAT_TIMEOUT_SECONDS "
         "-ErrorAction SilentlyContinue; "
         f"Import-Module '{HELPERS}' -Force; Import-ModelDeckEnvironment -Path '{ENV_EXAMPLE}'"

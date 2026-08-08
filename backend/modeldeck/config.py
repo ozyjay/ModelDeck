@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,8 +30,7 @@ class Settings:
     gateway_port: int = 8600
     data_dir: Path = Path(".modeldeck")
     log_dir: Path = Path("var/log/workers")
-    open_day: bool = False
-    allow_downloads: bool = False
+    configuration_locked: bool = False
     diagnostic_capture: bool = False
     diffusion_timeout_seconds: float = 900.0
     scenechat_timeout_seconds: float = 75.0
@@ -45,8 +45,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
-        open_day = _bool_env("MODELDECK_OPEN_DAY")
-        allow_downloads = _bool_env("MODELDECK_ALLOW_DOWNLOADS") and not open_day
+        configuration_locked = _configuration_locked_from_env()
         thermal_defaults = ThermalPolicyConfig()
         sensor_id = os.getenv("MODELDECK_THERMAL_SENSOR_ID") or None
         thermal_throttling = ThermalPolicyConfig(
@@ -114,8 +113,7 @@ class Settings:
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
             data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),
             log_dir=Path(os.getenv("MODELDECK_LOG_DIR", "var/log/workers")),
-            open_day=open_day,
-            allow_downloads=allow_downloads,
+            configuration_locked=configuration_locked,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
             diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),
             scenechat_timeout_seconds=float(os.getenv("MODELDECK_SCENECHAT_TIMEOUT_SECONDS", "75")),
@@ -128,3 +126,16 @@ class Settings:
             ),
             thermal_throttling=thermal_throttling,
         )
+
+
+def _configuration_locked_from_env() -> bool:
+    if os.getenv("MODELDECK_CONFIGURATION_LOCKED") is not None:
+        return _bool_env("MODELDECK_CONFIGURATION_LOCKED")
+    if os.getenv("MODELDECK_OPEN_DAY") is not None:
+        warnings.warn(
+            "MODELDECK_OPEN_DAY is deprecated; use MODELDECK_CONFIGURATION_LOCKED instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _bool_env("MODELDECK_OPEN_DAY")
+    return False

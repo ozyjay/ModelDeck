@@ -51,7 +51,7 @@ try {
 
     $ShouldStopServices = $true
     Write-Host "Starting ModelDeck booth services at $ConsoleUrl"
-    & (Join-Path $PSScriptRoot 'run.ps1') -OpenDay
+    & (Join-Path $PSScriptRoot 'run.ps1') -LockConfiguration
     Wait-ModelDeckBoothReady
 
     New-Item -ItemType Directory -Force -Path $ProfileDirectory | Out-Null

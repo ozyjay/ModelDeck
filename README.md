@@ -32,10 +32,15 @@ pwsh -NoProfile -File scripts/run.ps1
 gateway processes. Only the variables documented in `.env.example` are accepted; unknown,
 duplicate, malformed, or unterminated entries stop startup without printing their values.
 Values are literal and are never evaluated as PowerShell. Variables already set in the
-launching process take precedence, and `-OpenDay` still forces its safety overrides after
+launching process take precedence, and `-LockConfiguration` forces configuration locking after
 loading. The checked-in defaults work without a `.env`; create one when local ports,
 storage, timeouts, runtime interpreters, cache location, or the SceneChat credential need
 to differ.
+
+Use `MODELDECK_CONFIGURATION_LOCKED=1` (or `scripts/run.ps1 -LockConfiguration`) for a
+prepared, read-only configuration. The former `MODELDECK_OPEN_DAY` and `-OpenDay` names are
+accepted temporarily while local launch files are updated. ModelDeck is always offline-only;
+`MODELDECK_ALLOW_DOWNLOADS` no longer changes runtime behaviour.
 
 ModelDeck deliberately uses three environments with different responsibilities:
 
@@ -62,7 +67,7 @@ Use **Models** to create a Worker from a recognised cached revision. Use **Routi
 define published capabilities, assign primary and ordered backup Workers, validate the
 draft and publish it. Use **Workers** for lifecycle control and real generation smoke tests.
 Use **Live** to see only the published routing snapshot and rehearse a capability
-end-to-end through the gateway. Open Day mode locks configuration
+end-to-end through the gateway. A local deployment policy can lock configuration
 changes server-side while leaving explicit Worker lifecycle controls available.
 
 Routing Profile edits autosave to a mutable draft. Publishing creates an immutable revision;

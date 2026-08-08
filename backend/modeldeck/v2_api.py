@@ -676,8 +676,8 @@ def _validate(definition: RoutingProfile, request: Request):
 
 
 def _require_mutable(request: Request) -> None:
-    if request.app.state.settings.open_day:
-        raise HTTPException(423, "Configuration is locked while Open Day mode is active")
+    if request.app.state.settings.configuration_locked:
+        raise HTTPException(423, "Configuration is locked by the local deployment policy")
 
 
 def _integer_template_default(settings: dict[str, object], name: str, fallback: int) -> int:

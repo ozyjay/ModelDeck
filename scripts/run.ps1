@@ -1,13 +1,12 @@
 [CmdletBinding()]
-param([switch]$OpenDay)
+param([Alias('OpenDay')][switch]$LockConfiguration)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 Import-Module (Join-Path $PSScriptRoot 'environment_helpers.psm1') -Force
 Import-ModelDeckEnvironment -Path (Join-Path (Get-Location) '.env')
-if ($OpenDay) {
-    $Env:MODELDECK_OPEN_DAY = '1'
-    $Env:MODELDECK_ALLOW_DOWNLOADS = '0'
+if ($LockConfiguration) {
+    $Env:MODELDECK_CONFIGURATION_LOCKED = '1'
 }
 if (-not (Test-Path '.venv/bin/modeldeck')) { throw 'Run scripts/setup.ps1 first.' }
 & (Join-Path $PSScriptRoot 'check_ports.ps1')
