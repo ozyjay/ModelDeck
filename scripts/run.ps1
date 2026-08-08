@@ -15,6 +15,10 @@ $management = Start-Process .venv/bin/modeldeck -RedirectStandardOutput var/log/
 $gateway = Start-Process .venv/bin/modeldeck-gateway -RedirectStandardOutput var/log/gateway.log -RedirectStandardError var/log/gateway-error.log -PassThru
 Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
-Write-Host 'Management: http://127.0.0.1:3600'
-Write-Host 'Gateway:    http://127.0.0.1:8600/v1/health'
+$ManagementHost = if ($Env:MODELDECK_HOST) { $Env:MODELDECK_HOST } else { '127.0.0.1' }
+$ManagementPort = if ($Env:MODELDECK_MANAGEMENT_PORT) { $Env:MODELDECK_MANAGEMENT_PORT } else { '3600' }
+$GatewayHost = if ($Env:MODELDECK_GATEWAY_HOST) { $Env:MODELDECK_GATEWAY_HOST } else { '127.0.0.1' }
+$GatewayPort = if ($Env:MODELDECK_GATEWAY_PORT) { $Env:MODELDECK_GATEWAY_PORT } else { '8600' }
+Write-Host "Management: http://${ManagementHost}:${ManagementPort}"
+Write-Host "Gateway:    http://${GatewayHost}:${GatewayPort}/v1/health"
 Write-Host 'Workers:    Managed from the ModelDeck console; no Worker instances or public Routes are seeded.'

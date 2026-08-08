@@ -1,7 +1,54 @@
 from __future__ import annotations
 
 import pytest
-from modeldeck.config import Settings
+from modeldeck.config import Settings, gateway_base_url
+from modeldeck.gateway import app as gateway_app
+
+
+def test_gateway_host_defaults_to_loopback(monkeypatch) -> None:
+    monkeypatch.delenv("MODELDECK_GATEWAY_HOST", raising=False)
+
+    assert Settings.from_env().gateway_host == "127.0.0.1"
+
+
+def test_gateway_host_does_not_change_legacy_settings_positional_arguments() -> None:
+    settings = Settings("127.0.0.1", 13600, 18600)
+
+    assert settings.management_port == 13600
+    assert settings.gateway_port == 18600
+    assert settings.gateway_host == "127.0.0.1"
+
+
+def test_gateway_host_allows_docker_default_bridge_without_moving_management(monkeypatch) -> None:
+    monkeypatch.setenv("MODELDECK_HOST", "127.0.0.1")
+    monkeypatch.setenv("MODELDECK_GATEWAY_HOST", "172.17.0.1")
+
+    settings = Settings.from_env()
+
+    assert settings.host == "127.0.0.1"
+    assert settings.gateway_host == "172.17.0.1"
+    assert gateway_base_url(settings.gateway_host, settings.gateway_port) == "http://172.17.0.1:8600"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "not-an-address"])
+def test_gateway_host_rejects_unsafe_or_invalid_bind_addresses(monkeypatch, host: str) -> None:
+    monkeypatch.setenv("MODELDECK_GATEWAY_HOST", host)
+
+    with pytest.raises(ValueError, match="MODELDECK_GATEWAY_HOST"):
+        Settings.from_env()
+
+
+def test_gateway_process_binds_to_the_configured_docker_bridge(monkeypatch, tmp_path) -> None:
+    settings = Settings(gateway_host="172.17.0.1", gateway_port=18600, data_dir=tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(gateway_app.Settings, "from_env", classmethod(lambda _cls: settings))
+    monkeypatch.setattr(gateway_app, "create_gateway_app", lambda **_kwargs: object())
+    monkeypatch.setattr(gateway_app.uvicorn, "run", lambda app, **kwargs: captured.update(kwargs))
+
+    gateway_app.main()
+
+    assert captured["host"] == "172.17.0.1"
+    assert captured["port"] == 18600
 
 
 def test_configuration_lock_uses_the_deployment_neutral_environment_name(monkeypatch) -> None:

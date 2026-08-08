@@ -59,6 +59,30 @@ boundary.
 - Stable gateway: <http://127.0.0.1:8600/v1/health>
 - API documentation: <http://127.0.0.1:3600/docs>
 
+### SprintBot in Docker
+
+Keep the management service on loopback. To give a local SprintBot container access to the
+stable gateway, set this explicit bridge bind in `.env` before running ModelDeck:
+
+```text
+MODELDECK_GATEWAY_HOST=172.17.0.1
+```
+
+ModelDeck then remains unavailable on the LAN and exposes the gateway to the container at
+`http://host.docker.internal:8600/v1`. Ensure host firewall rules permit TCP 8600 only from
+the Docker bridge and loopback traffic. ModelDeck deliberately rejects `0.0.0.0` and LAN
+addresses; use a separately approved restricted reverse proxy and firewall deployment if
+broader access is ever required.
+
+After launch, verify the listener and SprintBot's fail-closed inference configuration from
+PowerShell:
+
+```powershell
+ss --tcp --listening --numeric 'sport = :8600'
+# Expected: 172.17.0.1:8600
+docker compose exec dashboard sprintbot-inference-check
+```
+
 The operator console can collapse individual sections or every section at once. These
 display preferences are retained in local browser storage and do not change ModelDeck
 configuration.

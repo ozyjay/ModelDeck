@@ -1,7 +1,9 @@
 # API contract
 
 All services bind to `127.0.0.1` by default. ModelDeck never forwards to a cloud
-provider, downloads a model, or accepts executable configuration from a client.
+provider, downloads a model, or accepts executable configuration from a client. The gateway
+alone can explicitly bind to Docker's default bridge address (`172.17.0.1`) through
+`MODELDECK_GATEWAY_HOST`; management remains on its separately configured loopback host.
 
 ## Management (`:3600`)
 
@@ -38,6 +40,12 @@ configuration lock blocks profile mutation server-side while preserving reads an
 Worker controls.
 
 ## Gateway (`:8600`)
+
+`MODELDECK_GATEWAY_HOST` defaults to `127.0.0.1`. The only non-loopback value accepted by
+the local-only policy is Docker's default bridge address, `172.17.0.1`, which permits a
+container to reach `http://host.docker.internal:8600/v1`. Wildcard (`0.0.0.0` or `::`) and
+LAN addresses are rejected during configuration parsing. Uvicorn then binds the selected
+address and reports an unavailable address or occupied port at startup.
 
 `/v1` contains standard model APIs. The `model` field must identify a compatible
 capability in the active Routing Profile. `GET /v1/models` lists only capabilities whose

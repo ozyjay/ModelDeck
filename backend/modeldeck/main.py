@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
-from modeldeck.config import Settings
+from modeldeck.config import Settings, gateway_base_url
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
 from modeldeck.registry import runtime_template_registrations
@@ -135,7 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "schema_version": 3,
             "configuration_locked": configured.configuration_locked,
             "offline_only": True,
-            "gateway_url": f"http://{configured.host}:{configured.gateway_port}",
+            "gateway_url": gateway_base_url(configured.gateway_host, configured.gateway_port),
         }
 
     @app.get("/api/gateway/status")
@@ -346,7 +346,7 @@ def _frontend_index() -> FileResponse | HTMLResponse:
 
 
 async def _gateway_status(settings: Settings) -> dict:
-    base_url = f"http://{settings.host}:{settings.gateway_port}"
+    base_url = gateway_base_url(settings.gateway_host, settings.gateway_port)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(1.5, connect=0.4)) as client:
             health_response, models_response, routes_response = await asyncio.gather(

@@ -10,6 +10,7 @@ $script:AllowedEnvironmentNames = [System.Collections.Generic.HashSet[string]]::
     'MODELDECK_DATA_DIR',
     'MODELDECK_DIAGNOSTIC_CAPTURE',
     'MODELDECK_DIFFUSION_TIMEOUT_SECONDS',
+    'MODELDECK_GATEWAY_HOST',
     'MODELDECK_GATEWAY_PORT',
     'MODELDECK_HOST',
     'MODELDECK_LOG_DIR',

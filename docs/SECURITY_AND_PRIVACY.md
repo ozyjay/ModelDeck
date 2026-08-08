@@ -3,6 +3,15 @@
 All defaults bind to `127.0.0.1`. LAN exposure requires an explicit future decision and
 threat review. ModelDeck is always offline-only and never downloads models at runtime.
 
+The stable gateway may instead bind to Docker's default bridge address `172.17.0.1` when
+an operator sets `MODELDECK_GATEWAY_HOST=172.17.0.1`. This is solely for local Docker
+containers using `host.docker.internal`; the management service remains on its own default
+loopback bind address. The gateway rejects wildcard and LAN bind addresses, including
+`0.0.0.0`, rather than relying on a later network policy decision. Operators using the
+Docker bridge must maintain host firewall rules that allow the gateway port only from the
+Docker bridge and loopback traffic. Do not replace this with a `0.0.0.0` listener unless an
+approved, restricted reverse-proxy and firewall deployment has been designed and reviewed.
+
 The frontend cannot submit commands, executable paths, raw runtime arguments, environment
 variables, tokens, arbitrary filesystem paths, Docker access, camera data, uploads, or
 cloud endpoints. Worker IDs select prevalidated manifests. Subprocesses use argument

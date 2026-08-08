@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import warnings
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 
 from modeldeck.thermal import ThermalPolicyConfig
@@ -23,11 +24,39 @@ def _int_env(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _gateway_host_from_env() -> str:
+    """Return the only gateway bind addresses permitted by the local-only policy."""
+
+    raw_host = os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1").strip()
+    if not raw_host:
+        raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal")
+    try:
+        host = ip_address(raw_host)
+    except ValueError as error:
+        raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal") from error
+
+    docker_default_bridge = ip_address("172.17.0.1")
+    if not (host.is_loopback or host == docker_default_bridge):
+        raise ValueError(
+            "MODELDECK_GATEWAY_HOST must be a loopback address or the Docker default bridge "
+            "address 172.17.0.1; wildcard and LAN addresses are not permitted"
+        )
+    return str(host)
+
+
+def gateway_base_url(host: str, port: int) -> str:
+    """Build an HTTP base URL for a validated gateway bind address."""
+
+    formatted_host = f"[{host}]" if ":" in host else host
+    return f"http://{formatted_host}:{port}"
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = "127.0.0.1"
     management_port: int = 3600
     gateway_port: int = 8600
+    gateway_host: str = "127.0.0.1"
     data_dir: Path = Path(".modeldeck")
     log_dir: Path = Path("var/log/workers")
     configuration_locked: bool = False
@@ -109,6 +138,7 @@ class Settings:
         )
         return cls(
             host=os.getenv("MODELDECK_HOST", "127.0.0.1"),
+            gateway_host=_gateway_host_from_env(),
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
             data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),

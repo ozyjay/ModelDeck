@@ -118,7 +118,7 @@ def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
 def test_checked_in_env_example_uses_only_supported_names() -> None:
     result = _run_pwsh(
         "Remove-Item Env:MODELDECK_HOST,Env:MODELDECK_MANAGEMENT_PORT,"
-        "Env:MODELDECK_GATEWAY_PORT,Env:MODELDECK_DATA_DIR,Env:MODELDECK_LOG_DIR,"
+        "Env:MODELDECK_GATEWAY_HOST,Env:MODELDECK_GATEWAY_PORT,Env:MODELDECK_DATA_DIR,Env:MODELDECK_LOG_DIR,"
         "Env:MODELDECK_CONFIGURATION_LOCKED,Env:MODELDECK_SCENECHAT_API_KEY,"
         "Env:MODELDECK_DIAGNOSTIC_CAPTURE,"
         "Env:MODELDECK_DIFFUSION_TIMEOUT_SECONDS,Env:MODELDECK_SCENECHAT_TIMEOUT_SECONDS "

@@ -1502,7 +1502,7 @@ def main() -> None:
     settings = Settings.from_env()
     uvicorn.run(
         create_gateway_app(settings=settings),
-        host=settings.host,
+        host=settings.gateway_host,
         port=settings.gateway_port,
         log_level="info",
     )

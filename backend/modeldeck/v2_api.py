@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.catalogue import discover_huggingface_models
+from modeldeck.config import gateway_base_url
 from modeldeck.domain import (
     RoutingProfile,
     WorkerDefinition,
@@ -460,8 +461,12 @@ def create_v3_router() -> APIRouter:
         timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
+                gateway_url = gateway_base_url(
+                    request.app.state.settings.gateway_host,
+                    request.app.state.settings.gateway_port,
+                )
                 response = await client.post(
-                    f"http://{request.app.state.settings.host}:{request.app.state.settings.gateway_port}{path}",
+                    f"{gateway_url}{path}",
                     json=body,
                 )
             response.raise_for_status()
