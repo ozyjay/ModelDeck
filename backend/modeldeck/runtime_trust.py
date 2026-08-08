@@ -14,6 +14,7 @@ class TrustedRuntimeImplementation:
     capabilities: frozenset[str]
     template_settings: frozenset[str]
     cache_settings: frozenset[str]
+    additional_generation_families: frozenset[GenerationFamily] = frozenset()
 
 
 # This registry is deliberately code-owned. A locally installed manifest may select one
@@ -24,7 +25,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
     for implementation in (
         TrustedRuntimeImplementation(
             id="transformers-rocm",
-            display_name="Autoregressive Transformers ROCm",
+            display_name="Transformers ROCm",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
             capabilities=frozenset(
                 {
@@ -36,6 +37,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                     "seeded_generation",
                     "streaming",
                     "cancellation",
+                    "embeddings",
                 }
             ),
             template_settings=frozenset(
@@ -45,9 +47,11 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                     "maximum_new_tokens",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
+                    "maximum_input_tokens",
                 }
             ),
             cache_settings=frozenset({"cache_root"}),
+            additional_generation_families=frozenset({GenerationFamily.EMBEDDING}),
         ),
         TrustedRuntimeImplementation(
             id="vision-language-transformers-rocm",

@@ -14,6 +14,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
@@ -36,6 +37,28 @@ from modeldeck.thermal import (
     read_thermal_status,
     write_thermal_workload_activity,
 )
+
+
+class EmbeddingRequest(BaseModel):
+    """The bounded OpenAI embeddings request shape supported by local Workers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1, max_length=128)
+    input: str | list[str]
+
+    @model_validator(mode="after")
+    def non_empty_text_input(self) -> EmbeddingRequest:
+        inputs = [self.input] if isinstance(self.input, str) else self.input
+        if not inputs:
+            raise ValueError("input must contain at least one text string")
+        if len(inputs) > 128:
+            raise ValueError("input supports at most 128 text strings")
+        if any(not value.strip() for value in inputs):
+            raise ValueError("input text strings cannot be empty")
+        if any(len(value) > 32_000 for value in inputs):
+            raise ValueError("input text strings cannot exceed 32000 characters")
+        return self
 
 
 def create_gateway_app(
@@ -255,6 +278,39 @@ def create_gateway_app(
     @app.post("/v1/completions")
     async def completions(request: Request):
         return await proxy_request(request, active_routes({"openai-completions-v1"}), "/v1/completions", None)
+
+    @app.post("/v1/embeddings")
+    async def embeddings(request: Request):
+        try:
+            body = EmbeddingRequest.model_validate(await request.json())
+        except (ValidationError, ValueError) as error:
+            return gateway_error(422, "invalid_embedding_request", str(error), "")
+        routes = active_routes({"openai-embeddings-v1"})
+        candidates = route_candidates(routes, body.model)
+        if not candidates:
+            return gateway_error(
+                404,
+                "model_not_found",
+                f"No published embedding model has ID '{body.model}'.",
+                body.model,
+            )
+        if any(
+            profile.generation_family != GenerationFamily.EMBEDDING or not profile.capabilities.embeddings
+            for profile in candidates
+        ):
+            return gateway_error(
+                409,
+                "incompatible_worker",
+                f"Embedding Route '{body.model}' has no compatible embedding Worker.",
+                body.model,
+            )
+        return await proxy_request(
+            request,
+            routes,
+            "/v1/embeddings",
+            None,
+            body_override=body.model_dump(),
+        )
 
     @app.post("/v1/translations")
     async def translations(request: Request):
@@ -691,7 +747,7 @@ async def proxy_request(
             task.add_done_callback(request.app.state.thermal_job_tasks.discard)
             retain_thermal_claim = True
         if (
-            path in {"/v1/translations", "/v1/audio/transcriptions"}
+            path in {"/v1/translations", "/v1/audio/transcriptions", "/v1/embeddings"}
             and response.is_success
             and isinstance(response_payload, dict)
         ):
@@ -863,6 +919,7 @@ def gateway_operation(path: str) -> str:
     return {
         "/v1/chat/completions": "chat",
         "/v1/completions": "completion",
+        "/v1/embeddings": "embedding",
         "/v1/translations": "translation",
         "/v1/audio/speech": "speech",
         "/v1/audio/transcriptions": "speech",

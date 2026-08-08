@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from modeldeck.profiles import ModelProfile
-from modeldeck.protocol import WorkerEvent, WorkerState
+from modeldeck.protocol import GenerationFamily, WorkerEvent, WorkerState
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
@@ -468,6 +468,37 @@ def _autoregressive_launch(
     )
 
 
+def _embedding_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
+    python = _rocm_python()
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Embeddings Worker requires an allowlisted Hugging Face cache root")
+    environment["HF_HUB_CACHE"] = str(cache_root)
+    return WorkerLaunch(
+        command=[
+            str(python.absolute()),
+            "-m",
+            "modeldeck.workers.embedding_worker",
+            *common,
+            "--dtype",
+            profile.dtype,
+            "--maximum-input-tokens",
+            str(profile.settings.get("maximum_input_tokens", 8192)),
+        ],
+        environment=environment,
+    )
+
+
+def _transformers_rocm_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    if profile.generation_family == GenerationFamily.AUTOREGRESSIVE:
+        return _autoregressive_launch(profile, environment, common)
+    if profile.generation_family == GenerationFamily.EMBEDDING:
+        return _embedding_launch(profile, environment, common)
+    raise ValueError("transformers-rocm supports only autoregressive or embedding Workers")
+
+
 def _vision_language_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -752,7 +783,7 @@ def _text_diffusion_launch(
 
 
 TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
-    "transformers-rocm": _autoregressive_launch,
+    "transformers-rocm": _transformers_rocm_launch,
     "vision-language-transformers-rocm": _vision_language_launch,
     "qwen35-vision-language-transformers-rocm": _qwen35_vision_language_launch,
     "text-diffusion-transformers-rocm": _text_diffusion_launch,

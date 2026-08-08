@@ -59,6 +59,12 @@ MOCK_WORKER_TEMPLATES = {
             {"completions": True, "streaming": True, "cancellation": True},
         ),
         MockWorkerTemplate(
+            "openai-embeddings-v1",
+            "modeldeck/mock-openai-embeddings",
+            "OpenAI embeddings mock",
+            {"embeddings": True, "streaming": False, "cancellation": True},
+        ),
+        MockWorkerTemplate(
             "native-ar-trace-v1",
             "modeldeck/mock-autoregressive-trace",
             "Autoregressive trace mock",
@@ -152,4 +158,5 @@ def legacy_mock_contract(model_id: str, family: GenerationFamily) -> str | None:
         GenerationFamily.TEXT_TRANSLATION: None,
         GenerationFamily.SPEECH_SYNTHESIS: "speech-synthesis-v1",
         GenerationFamily.SPEECH_RECOGNITION: "speech-recognition-v1",
+        GenerationFamily.EMBEDDING: "openai-embeddings-v1",
     }.get(family)

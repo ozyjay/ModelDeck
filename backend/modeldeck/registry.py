@@ -53,7 +53,10 @@ class RuntimeTemplate(BaseModel):
         implementation = TRUSTED_RUNTIME_IMPLEMENTATIONS.get(self.runtime)
         if implementation is None:
             raise ValueError("runtime template does not map to a trusted worker implementation")
-        if self.generation_family != implementation.generation_family:
+        if self.generation_family not in {
+            implementation.generation_family,
+            *implementation.additional_generation_families,
+        }:
             raise ValueError("runtime template generation family does not match its trusted implementation")
         if self.cache_setting not in implementation.cache_settings:
             raise ValueError("runtime template cache binding does not match its trusted implementation")

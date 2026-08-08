@@ -33,6 +33,9 @@ PROTOCOL_ADAPTERS = {
             "openai-completions-v1", ("POST /v1/completions",), "/v1/completions", openai_model=True
         ),
         ProtocolAdapter(
+            "openai-embeddings-v1", ("POST /v1/embeddings",), "/v1/embeddings", openai_model=True
+        ),
+        ProtocolAdapter(
             "native-ar-trace-v1",
             ("POST /native/v1/autoregressive/traces",),
             "/native/autoregressive/trace",

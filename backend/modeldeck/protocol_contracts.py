@@ -34,6 +34,13 @@ PROTOCOL_CONTRACTS = {
             surfaces=("POST /v1/completions",),
         ),
         ProtocolContract(
+            id="openai-embeddings-v1",
+            display_name="OpenAI-compatible embeddings",
+            generation_family=GenerationFamily.EMBEDDING,
+            required_capabilities=("embeddings",),
+            surfaces=("POST /v1/embeddings",),
+        ),
+        ProtocolContract(
             id="native-ar-trace-v1",
             display_name="Native autoregressive trace",
             generation_family=GenerationFamily.AUTOREGRESSIVE,

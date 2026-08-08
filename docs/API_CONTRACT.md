@@ -61,12 +61,34 @@ local model file, so it deliberately does not expose a synthetic `digest`. Manua
 of files inside a cached snapshot after Worker creation is outside this guarantee. A
 capability may have a different-revision backup Worker; `revision` identifies the ordered
 primary Worker, while an individual request can use a backup only when the primary is
-unavailable. ModelDeck currently has no OpenAI embeddings adapter, so no embedding models
-are advertised until that surface is supported.
+unavailable.
+
+`POST /v1/embeddings` is an OpenAI-compatible, local-only embeddings surface. It accepts a
+published embedding `model` and a non-empty string or ordered array of strings in `input`.
+The current trusted Qwen embedding Worker returns exactly 1,024 float vectors, with one
+`data` item per input and its original zero-based `index`. The gateway validates the request
+before it reaches a Worker: malformed or empty input returns HTTP 422, an unpublished model
+returns HTTP 404, and an invalid published Worker binding returns HTTP 409. A published
+embedding model whose local Workers are unavailable returns HTTP 503
+`local_route_unavailable` with `cloud_fallback_attempted: false`.
+
+Embeddings use the code-owned `openai-embeddings-v1` contract, displayed in the operator
+console as **OpenAI-compatible embeddings**. It accepts only Workers with generation family
+`embedding` and the `embeddings` capability; chat, completions, and autoregressive-trace
+Workers cannot be bound to it. `Qwen/Qwen3-Embedding-0.6B` is recognised as an embedding
+Model and is configured with the shared `transformers-rocm` stack through its dedicated
+`embedding-transformers` runtime template. A pre-existing Worker configured with the
+autoregressive template is intentionally incompatible; create a new embedding Worker from
+the recognised cached Model before publication. ModelDeck never repurposes it automatically.
+
+The packaged `modeldeck-core` runtime manifest version 0.2.4 introduces the
+`embedding-transformers` template. Existing Worker definitions retain their recorded
+template version; creating a Worker from the recognised Qwen embedding snapshot uses the
+new embedding template.
 
 - `GET /v1/health`, `/v1/models`, `/v1/capabilities`, `/v1/routes`, `/v1/thermal`,
   `/v1/metrics`
-- `POST /v1/chat/completions`, `/v1/completions`, `/v1/translations`
+- `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/translations`
 - `POST /v1/audio/speech`, `/v1/audio/transcriptions`
 - `WS /v1/speech/conversations`
 - `POST /v1/vision/analyse`, `/v1/requests/{request_id}/cancel`

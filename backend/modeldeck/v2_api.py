@@ -704,6 +704,11 @@ def _capability_smoke_request(capability):
             "temperature": 0,
             "stream": False,
         }
+    if contract == "openai-embeddings-v1":
+        return "/v1/embeddings", {
+            "model": public_name,
+            "input": ["The local Worker is ready."],
+        }
     if contract == "native-ar-trace-v1":
         return "/native/v1/autoregressive/traces", {
             "model": public_name,
@@ -789,6 +794,12 @@ def _worker_smoke_request(definition: WorkerDefinition):
                 "top_k": 3,
                 "seed": 7,
             },
+            None,
+        )
+    if definition.generation_family == "embedding":
+        return (
+            "/v1/embeddings",
+            {"model": model, "input": ["The local Worker is ready."]},
             None,
         )
     if definition.generation_family == "vision-language":

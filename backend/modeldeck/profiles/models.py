@@ -104,4 +104,6 @@ class ModelProfile(BaseModel):
             raise ValueError(
                 "speech-recognition profiles must advertise cancellable, non-streaming audio input"
             )
+        if self.generation_family == GenerationFamily.EMBEDDING and not self.capabilities.embeddings:
+            raise ValueError("embedding profiles must advertise embeddings")
         return self

@@ -39,6 +39,15 @@ class CompletionRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
 
 
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: str | list[str]
+
+    @property
+    def inputs(self) -> list[str]:
+        return [self.input] if isinstance(self.input, str) else self.input
+
+
 class DiffusionRequest(BaseModel):
     model: str = "text-diffusion"
     prompt: str = Field(min_length=1, max_length=4000)
@@ -91,6 +100,8 @@ def capabilities(family: GenerationFamily, contract_id: str | None = None) -> Ca
             image_input=True,
             structured_output=True,
         )
+    if family == GenerationFamily.EMBEDDING:
+        return CapabilitySet(embeddings=True, streaming=False, cancellation=True)
     return CapabilitySet(
         iterative_refinement=True,
         intermediate_frames=True,
@@ -244,6 +255,25 @@ def create_app(
                 media_type="text/event-stream",
             )
         return _legacy_completion_response(body, worker_id)
+
+    @app.post("/v1/embeddings")
+    async def embeddings(body: EmbeddingRequest):
+        _require_family(family, GenerationFamily.EMBEDDING)
+        _require_contract(contract_id, {"openai-embeddings-v1"})
+        if not body.inputs or any(not value.strip() for value in body.inputs):
+            raise HTTPException(422, "input must contain non-empty text strings")
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "embedding": _mock_embedding(value),
+                    "index": index,
+                }
+                for index, value in enumerate(body.inputs)
+            ],
+            "model": body.model,
+        }
 
     @app.post("/native/autoregressive/trace")
     async def trace(body: CompletionRequest):
@@ -654,6 +684,11 @@ def _content_text(content: Any) -> str:
 def _mock_tokenise(text: str) -> tuple[list[int], list[str]]:
     tokens = re.findall(r"\s+|[^\s]+", text)
     return list(range(len(tokens))), tokens
+
+
+def _mock_embedding(text: str) -> list[float]:
+    seed = sum((index + 1) * ord(character) for index, character in enumerate(text))
+    return [round(((seed + index * 17) % 2000 - 1000) / 1000, 6) for index in range(1024)]
 
 
 def _deterministic_wav() -> bytes:

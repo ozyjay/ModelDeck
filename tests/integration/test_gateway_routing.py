@@ -6,6 +6,7 @@ import httpx
 import pytest
 from modeldeck.gateway import create_gateway_app
 from modeldeck.profiles import ModelProfile
+from modeldeck.protocol import GenerationFamily
 from modeldeck.supervisor import WorkerSupervisor
 
 from tests.model_profiles import default_model_profiles
@@ -29,6 +30,90 @@ def mock_diffusion_profile(port: int) -> ModelProfile:
     ).model_dump()
     document["port"] = port
     return ModelProfile.model_validate(document)
+
+
+def mock_embedding_profile(port: int) -> ModelProfile:
+    return ModelProfile.model_validate(
+        {
+            "id": "mock-embedding",
+            "model_id": "modeldeck/mock-openai-embeddings",
+            "revision": "0123456789abcdef0123456789abcdef01234567",
+            "alias": "local-embedding",
+            "generation_family": GenerationFamily.EMBEDDING,
+            "preferred_runtime": "mock",
+            "lifecycle": "on-demand",
+            "port": port,
+            "dtype": "float16",
+            "capabilities": {"embeddings": True, "streaming": False, "cancellation": True},
+            "settings": {"mock_contract_id": "openai-embeddings-v1"},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallback() -> None:
+    profile = mock_embedding_profile(free_port())
+    supervisor = WorkerSupervisor([profile], startup_timeout=8, stop_timeout=2)
+    gateway = create_gateway_app({"sprintbot-embedding": [profile]})
+    try:
+        await supervisor.start(profile.id)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+        ) as client:
+            response = await client.post(
+                "/v1/embeddings",
+                json={"model": "sprintbot-embedding", "input": ["first text", "second text"]},
+            )
+            models = await client.get("/v1/models")
+
+        assert response.status_code == 200
+        assert response.json()["object"] == "list"
+        assert response.json()["model"] == "sprintbot-embedding"
+        assert [item["index"] for item in response.json()["data"]] == [0, 1]
+        assert all(len(item["embedding"]) == 1024 for item in response.json()["data"])
+        assert models.json()["data"] == [
+            {
+                "id": "sprintbot-embedding",
+                "object": "model",
+                "owned_by": "modeldeck-local",
+                "revision": "0123456789abcdef0123456789abcdef01234567",
+                "ready": True,
+            }
+        ]
+    finally:
+        await supervisor.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_gateway_embeddings_reject_invalid_unknown_incompatible_and_unavailable_routes() -> None:
+    profile = mock_embedding_profile(free_port())
+    gateway = create_gateway_app({"sprintbot-embedding": [profile]})
+    incompatible = mock_profile(free_port())
+    incompatible_gateway = create_gateway_app({"sprintbot-embedding": [incompatible]})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+    ) as client:
+        invalid = await client.post("/v1/embeddings", json={"model": "sprintbot-embedding", "input": []})
+        unknown = await client.post("/v1/embeddings", json={"model": "unknown", "input": ["text"]})
+        unavailable = await client.post(
+            "/v1/embeddings", json={"model": "sprintbot-embedding", "input": ["text"]}
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=incompatible_gateway), base_url="http://gateway"
+    ) as client:
+        incompatible_response = await client.post(
+            "/v1/embeddings", json={"model": "sprintbot-embedding", "input": ["text"]}
+        )
+
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_embedding_request"
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "model_not_found"
+    assert unavailable.status_code == 503
+    assert unavailable.json()["error"]["code"] == "local_route_unavailable"
+    assert unavailable.json()["error"]["cloud_fallback_attempted"] is False
+    assert incompatible_response.status_code == 409
+    assert incompatible_response.json()["error"]["code"] == "incompatible_worker"
 
 
 @pytest.mark.asyncio

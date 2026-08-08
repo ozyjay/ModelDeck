@@ -105,6 +105,8 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
         return "speech-conversation"
     if repo_id == "ggml-org/gpt-oss-120b-GGUF":
         return "autoregressive"
+    if repo_id == "Qwen/Qwen3-Embedding-0.6B":
+        return "embedding"
     try:
         config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -127,6 +129,7 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
 def _capability_hints(generation_family: str | None) -> list[str]:
     return {
         "autoregressive": ["text-generation", "chat"],
+        "embedding": ["embeddings"],
         "vision-language": ["text-generation", "chat", "image-input", "structured-output"],
         "text-diffusion": [
             "text-generation",
@@ -170,6 +173,8 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
             "The GPT-OSS MXFP4 GGUF snapshot must contain the official consolidated "
             "artefact or all three legacy shards."
         )
+    if repo_id == "Qwen/Qwen3-Embedding-0.6B":
+        return "embedding-transformers", "Supported by the local 1024-dimensional embeddings ROCm worker."
     try:
         q4_release = inspect_modeldeck_q4_release(snapshot)
     except Q4ReleaseError as error:

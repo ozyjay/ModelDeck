@@ -103,6 +103,30 @@ def test_routing_profile_rejects_duplicate_public_model_names() -> None:
         )
 
 
+def test_embedding_contract_rejects_autoregressive_chat_workers() -> None:
+    chat_worker = worker_definition()
+    profile = RoutingProfile(
+        id=str(uuid4()),
+        name="Local applications",
+        capabilities=[
+            {
+                "id": str(uuid4()),
+                "display_name": "SprintBot embedding",
+                "public_name": "sprintbot-embedding",
+                "protocol_contract": "openai-embeddings-v1",
+                "worker_ids": [chat_worker.id],
+            }
+        ],
+    )
+
+    validation = validate_routing_profile(profile, [chat_worker], [])
+
+    assert validation["valid"] is False
+    messages = [error["message"] for error in validation["errors"]]
+    assert "Requires embedding, got autoregressive" in messages
+    assert "Missing capabilities: embeddings" in messages
+
+
 def test_tested_working_profile_requires_matching_evidence() -> None:
     worker = worker_definition()
     profile = routing_profile(worker.id, qualification="tested-working")
@@ -135,6 +159,17 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     path, body, headers = _worker_smoke_request(diffusion)
     assert path == "/v1/refine"
     assert body["denoising_steps"] == 4
+    assert headers is None
+
+    embedding = autoregressive.model_copy(
+        update={
+            "generation_family": "embedding",
+            "capabilities": {"embeddings": True},
+        }
+    )
+    path, body, headers = _worker_smoke_request(embedding)
+    assert path == "/v1/embeddings"
+    assert body["input"] == ["The local Worker is ready."]
     assert headers is None
 
 

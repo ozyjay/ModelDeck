@@ -63,6 +63,7 @@ class CapabilitySet(BaseModel):
     translation: bool = False
     speech_synthesis: bool = False
     speech_recognition: bool = False
+    embeddings: bool = False
 
 
 class WorkerHealth(BaseModel):

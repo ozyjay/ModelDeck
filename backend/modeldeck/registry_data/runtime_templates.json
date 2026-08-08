@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -15,6 +15,15 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "logits": true, "top_k_trace": true, "hidden_states": "optional", "seeded_generation": true},
       "settings": {"top_k": 5, "startup_timeout_seconds": 300, "warmup_timeout_seconds": 60},
+      "cache_setting": "cache_root"
+    },
+    {
+      "id": "embedding-transformers",
+      "display_name": "Qwen embeddings Transformers ROCm",
+      "runtime": "transformers-rocm",
+      "generation_family": "embedding",
+      "capabilities": {"embeddings": true, "streaming": false, "cancellation": true},
+      "settings": {"maximum_input_tokens": 4096, "startup_timeout_seconds": 300, "warmup_timeout_seconds": 60},
       "cache_setting": "cache_root"
     },
     {
