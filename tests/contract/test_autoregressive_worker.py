@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from modeldeck.workers.autoregressive_worker import (
+    MAX_REQUEST_BYTES,
     EngineConfig,
     GenerationRequest,
     _trace_token_metadata,
@@ -225,3 +226,125 @@ async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> N
     assert engine.last_body is not None
     assert engine.last_body.messages[-1].role == "tool"
     assert follow_up.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_worker_accepts_vscode_agent_multi_message_tool_request() -> None:
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="wayfinder-deep",
+        config=EngineConfig(
+            model_id="Qwen/Qwen2.5-3B-Instruct",
+            revision="pinned",
+            context_length=32_768,
+            maximum_new_tokens=4_096,
+        ),
+        engine=engine,
+    )
+    system_instructions = "Use tools when needed and report concise results. " * 400
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_workspace_file",
+                "description": "Read one allowlisted workspace file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": system_instructions}]},
+        {"role": "user", "content": [{"type": "text", "text": "Inspect the project status."}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_workspace_1",
+                    "type": "function",
+                    "function": {"name": "read_workspace_file", "arguments": '{"path":"status.txt"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_workspace_1", "content": "Workspace is clean."},
+    ]
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "deep-local",
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "max_tokens": 4096,
+                },
+            )
+
+    assert response.status_code == 200
+    assert engine.last_body is not None
+    assert engine.last_body.max_tokens == 4096
+    assert engine.last_body.messages is not None
+    assert len(engine.last_body.messages) == 4
+    assert engine.last_body.messages[0].content == system_instructions
+    assert engine.last_body.tools == tools
+
+
+@pytest.mark.asyncio
+async def test_worker_validation_error_does_not_echo_prompt_input() -> None:
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=engine,
+    )
+    prompt_secret = "prompt-value-that-must-not-appear-in-the-response"
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"messages": [{"role": "invalid", "content": prompt_secret}]},
+            )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "message": "The request does not match the local OpenAI chat contract.",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_request",
+        }
+    }
+    assert prompt_secret not in response.text
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_oversized_request_before_validation() -> None:
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=engine,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                content=b"{}",
+                headers={"Content-Length": str(MAX_REQUEST_BYTES + 1)},
+            )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "request_too_large"

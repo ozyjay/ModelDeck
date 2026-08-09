@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import logging
 import re
 import threading
 import time
@@ -15,10 +16,15 @@ from typing import Any, Protocol
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
+from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
+
+LOGGER = logging.getLogger(__name__)
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,7 @@ class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = Field(pattern=r"^(system|user|assistant|tool)$")
-    content: str | None = Field(default=None, max_length=16_000)
+    content: str | None = None
     name: str | None = Field(default=None, max_length=128)
     tool_call_id: str | None = Field(default=None, max_length=256)
     tool_calls: list[dict[str, Any]] | None = None
@@ -70,14 +76,14 @@ class ChatMessage(BaseModel):
 class GenerationRequest(BaseModel):
     request_id: str | None = None
     model: str = "local-worker"
-    prompt: str | None = Field(default=None, max_length=16_000)
+    prompt: str | None = None
     messages: list[ChatMessage] | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any | None = None
     stream: bool = False
     seed: int = 7
-    max_tokens: int = Field(default=32, ge=1, le=128)
-    min_tokens: int = Field(default=0, ge=0, le=128)
+    max_tokens: int = Field(default=32, ge=1, le=MAXIMUM_NEW_TOKENS_LIMIT)
+    min_tokens: int = Field(default=0, ge=0, le=MAXIMUM_NEW_TOKENS_LIMIT)
     temperature: float = Field(default=0.2, ge=0, le=2)
     top_p: float = Field(default=0.95, gt=0, le=1)
     top_k: int = Field(default=5, ge=1, le=50)
@@ -150,6 +156,12 @@ class TransformersAutoregressiveEngine:
             trust_remote_code=False,
             dtype=dtype,
         )
+        supported_context_length = _model_context_length(model)
+        if self.config.context_length > supported_context_length:
+            raise RuntimeError(
+                "Configured context length "
+                f"{self.config.context_length} exceeds the model-supported limit {supported_context_length}"
+            )
         device = torch.device("cuda:0")
         model.to(device)
         model.eval()
@@ -165,6 +177,7 @@ class TransformersAutoregressiveEngine:
             "device_name": torch.cuda.get_device_name(0),
             "load_seconds": round(time.perf_counter() - started, 4),
             "dtype": self.config.dtype,
+            "model_max_context_tokens": supported_context_length,
         }
 
     def warmup(self) -> None:
@@ -316,6 +329,60 @@ class TransformersAutoregressiveEngine:
         return filtered / filtered.sum()
 
 
+class _RequestBodyTooLarge(Exception):
+    pass
+
+
+class RequestBodyLimitMiddleware:
+    """Bound JSON request bytes before Pydantic receives a potentially huge payload."""
+
+    def __init__(self, app: Any, maximum_bytes: int = MAX_REQUEST_BYTES) -> None:
+        self.app = app
+        self.maximum_bytes = maximum_bytes
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", ()))
+        content_length = headers.get(b"content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.maximum_bytes:
+                    await _error_response(
+                        413,
+                        "request_too_large",
+                        "The JSON request exceeds 4 MiB.",
+                    )(scope, receive, send)
+                    return
+            except ValueError:
+                await _error_response(
+                    422,
+                    "invalid_request",
+                    "Content-Length must be an integer.",
+                )(scope, receive, send)
+                return
+        received = 0
+
+        async def limited_receive() -> dict[str, Any]:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.maximum_bytes:
+                    raise _RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            await _error_response(
+                413,
+                "request_too_large",
+                "The JSON request exceeds 4 MiB.",
+            )(scope, receive, send)
+
+
 def create_app(
     *,
     worker_id: str,
@@ -339,7 +406,20 @@ def create_app(
             app.state.load_task.cancel()
 
     app = FastAPI(title=f"ModelDeck Transformers worker: {worker_id}", lifespan=lifespan)
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.state.shutdown_callback = None
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        # Pydantic's error records include the rejected `input`, which may be prompt text.
+        # Keep only structural diagnostics in local logs and return a stable safe error body.
+        diagnostics = [{"type": item.get("type"), "loc": item.get("loc")} for item in error.errors()]
+        LOGGER.info("Request validation failed path=%s diagnostics=%s", request.url.path, diagnostics)
+        return _error_response(
+            422,
+            "invalid_request",
+            "The request does not match the local OpenAI chat contract.",
+        )
 
     @app.get("/health")
     async def health(request: Request) -> dict[str, Any]:
@@ -565,6 +645,13 @@ def _next_event(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
         return None
 
 
+def _model_context_length(model: Any) -> int:
+    value = getattr(getattr(model, "config", None), "max_position_embeddings", None)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 256:
+        raise RuntimeError("Loaded model does not declare a safe maximum context length")
+    return value
+
+
 def _latest_user_prompt(body: GenerationRequest) -> str:
     if not body.messages:
         return body.prompt or ""
@@ -701,6 +788,20 @@ def _request_metrics(events: list[dict[str, Any]], started: float) -> dict[str, 
 def _ensure_ready(request: Request) -> None:
     if not request.app.state.ready:
         raise HTTPException(503, "Worker is not ready")
+
+
+def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "message": message,
+                "type": "invalid_request_error" if status_code < 500 else "server_error",
+                "param": None,
+                "code": code,
+            }
+        },
+    )
 
 
 def parse_args() -> argparse.Namespace:

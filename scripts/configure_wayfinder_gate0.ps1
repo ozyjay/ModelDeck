@@ -1,22 +1,54 @@
 [CmdletBinding()]
 param(
     [string]$ManagementUrl = 'http://127.0.0.1:3600',
-    [string]$FastWorkerName = 'Qwen2.5 0.5B Instruct',
-    [string]$DeepWorkerName = 'Qwen2.5 3B Instruct'
+    [string]$FastWorkerName = 'WayFinder Qwen2.5 0.5B Instruct',
+    [string]$DeepWorkerName = 'WayFinder Qwen2.5 3B Instruct'
 )
 
 $ErrorActionPreference = 'Stop'
 
-# This is intentionally a management-plane configuration action: it creates no Workers,
-# does not change another profile's draft, and never contacts a remote service.
+# This is intentionally a local management-plane action. It only creates the two named
+# WayFinder Workers from already cached, allowlisted snapshots; it never alters shared
+# Workers, downloads a Model, starts a Worker, or contacts a remote service.
 $workers = @(Invoke-RestMethod -Method Get -Uri "$ManagementUrl/api/workers")
 if ($workers.Count -eq 1 -and $workers[0] -is [array]) { $workers = @($workers[0]) }
-$fast = $workers | Where-Object { $_.name -eq $FastWorkerName -and $_.model_id -eq 'Qwen/Qwen2.5-0.5B-Instruct' } | Select-Object -First 1
-$deep = $workers | Where-Object { $_.name -eq $DeepWorkerName -and $_.model_id -eq 'Qwen/Qwen2.5-3B-Instruct' } | Select-Object -First 1
-if (-not $fast) { throw "No configured fast Worker named '$FastWorkerName' for Qwen/Qwen2.5-0.5B-Instruct was found." }
-if (-not $deep) { throw "No configured deep Worker named '$DeepWorkerName' for Qwen/Qwen2.5-3B-Instruct was found." }
+$catalogue = @((Invoke-RestMethod -Method Get -Uri "$ManagementUrl/api/catalogue").models)
 
-$profiles = @(Invoke-RestMethod -Method Get -Uri "$ManagementUrl/api/routing-profiles").profiles
+function Resolve-WayFinderWorker {
+    param(
+        [string]$Name,
+        [string]$ModelId
+    )
+
+    $existing = $workers | Where-Object { $_.name -eq $Name -and $_.model_id -eq $ModelId } | Select-Object -First 1
+    if ($existing) {
+        if ($existing.settings.context_length -ne 32768 -or $existing.settings.maximum_new_tokens -ne 4096) {
+            throw "Existing WayFinder Worker '$Name' must use context_length=32768 and maximum_new_tokens=4096. Create a replacement rather than changing a shared Worker."
+        }
+        return $existing
+    }
+
+    $model = $catalogue | Where-Object {
+        $_.model_id -eq $ModelId -and $_.download_state -eq 'installed-untested'
+    } | Select-Object -First 1
+    if (-not $model) { throw "No complete cached snapshot for $ModelId was found." }
+    if (-not $model.modeldeck_allowed) { throw "Allow the cached $ModelId snapshot in ModelDeck before configuring WayFinder." }
+    $created = Invoke-RestMethod -Method Post -Uri "$ManagementUrl/api/workers" -ContentType 'application/json' -Body (@{
+        name = $Name
+        model_id = $model.model_id
+        revision = $model.revision
+        runtime_template_id = 'autoregressive-transformers'
+        context_length = 32768
+        maximum_new_tokens = 4096
+    } | ConvertTo-Json)
+    $script:workers = @($workers) + @($created)
+    return $created
+}
+
+$fast = Resolve-WayFinderWorker -Name $FastWorkerName -ModelId 'Qwen/Qwen2.5-0.5B-Instruct'
+$deep = Resolve-WayFinderWorker -Name $DeepWorkerName -ModelId 'Qwen/Qwen2.5-3B-Instruct'
+
+$profiles = @((Invoke-RestMethod -Method Get -Uri "$ManagementUrl/api/routing-profiles").profiles)
 $existing = $profiles | Where-Object { $_.definition.name -eq 'wayfinder-gate0' } | Select-Object -First 1
 $profileId = if ($existing) { $existing.definition.id } else { [guid]::NewGuid().ToString() }
 $definition = [ordered]@{

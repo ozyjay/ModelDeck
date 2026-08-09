@@ -13,7 +13,9 @@ from modeldeck.runtime_trust import TRUSTED_RUNTIME_IMPLEMENTATIONS
 
 TRUST_DIRECTORY_NAME = "trusted-runtime-manifests"
 TRUST_REGISTRY_NAME = "trust.json"
-MAXIMUM_NEW_TOKENS_LIMIT = 1024
+# Four thousand and ninety-six tokens accommodates complete local tool-call responses
+# while remaining well within the 32,768-token Qwen2.5 context window.
+MAXIMUM_NEW_TOKENS_LIMIT = 4096
 BOUNDED_INTEGER_SETTINGS = {
     "top_k": (1, 100),
     "context_length": (256, 32768),
