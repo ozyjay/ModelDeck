@@ -11,9 +11,9 @@ pwsh -NoProfile -File scripts/run.ps1
 pwsh -NoProfile -File scripts/configure_wayfinder_gate0.ps1
 ```
 
-When an existing `.env` deliberately binds the gateway to Docker's `172.17.0.1` bridge for
-SprintBot, `scripts/run.ps1` also starts a loopback companion listener at `127.0.0.1:8600`.
-Do not change that file solely for this trial.
+When SprintBot needs Docker access, set `MODELDECK_ENABLE_DOCKER_BRIDGE=1` in `.env`.
+`scripts/run.ps1` then keeps WayFinder on `127.0.0.1:8600` and adds SprintBot's bridge
+listener at `172.17.0.1:8600`.
 
 The configuration selects the already configured local Workers `Qwen2.5 0.5B Instruct`
 for `fast-local` and `Qwen2.5 3B Instruct` for `deep-local`. It does not download a Model,

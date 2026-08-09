@@ -24,8 +24,8 @@ def _int_env(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
-def _gateway_host_from_env() -> str:
-    """Return the only gateway bind addresses permitted by the local-only policy."""
+def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
+    """Return a gateway bind address permitted by the local-only policy."""
 
     raw_host = os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1").strip()
     if not raw_host:
@@ -36,10 +36,11 @@ def _gateway_host_from_env() -> str:
         raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal") from error
 
     docker_default_bridge = ip_address("172.17.0.1")
-    if not (host.is_loopback or host == docker_default_bridge):
+    if not (host.is_loopback or (docker_bridge_enabled and host == docker_default_bridge)):
         raise ValueError(
-            "MODELDECK_GATEWAY_HOST must be a loopback address or the Docker default bridge "
-            "address 172.17.0.1; wildcard and LAN addresses are not permitted"
+            "MODELDECK_GATEWAY_HOST must be a loopback address; set "
+            "MODELDECK_ENABLE_DOCKER_BRIDGE=1 only for the launcher-managed Docker "
+            "bridge listener at 172.17.0.1"
         )
     return str(host)
 
@@ -57,6 +58,7 @@ class Settings:
     management_port: int = 3600
     gateway_port: int = 8600
     gateway_host: str = "127.0.0.1"
+    docker_bridge_enabled: bool = False
     data_dir: Path = Path(".modeldeck")
     log_dir: Path = Path("var/log/workers")
     configuration_locked: bool = False
@@ -75,6 +77,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         configuration_locked = _configuration_locked_from_env()
+        docker_bridge_enabled = _bool_env("MODELDECK_ENABLE_DOCKER_BRIDGE")
         thermal_defaults = ThermalPolicyConfig()
         sensor_id = os.getenv("MODELDECK_THERMAL_SENSOR_ID") or None
         thermal_throttling = ThermalPolicyConfig(
@@ -138,7 +141,8 @@ class Settings:
         )
         return cls(
             host=os.getenv("MODELDECK_HOST", "127.0.0.1"),
-            gateway_host=_gateway_host_from_env(),
+            gateway_host=_gateway_host_from_env(docker_bridge_enabled=docker_bridge_enabled),
+            docker_bridge_enabled=docker_bridge_enabled,
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
             data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),

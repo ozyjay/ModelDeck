@@ -12,7 +12,7 @@ Write-Host '[2/4] Stopping ModelDeck services…'
 $StoppedServices = 0
 $AbsentServices = 0
 $ForcedServices = 0
-foreach ($Name in @('gateway-loopback', 'gateway', 'management')) {
+foreach ($Name in @('gateway-docker-bridge', 'gateway', 'management')) {
     $Path = "var/run/$Name.pid"
     if (-not (Test-Path $Path)) {
         Write-Host "  $Name`: not running (no PID file)."

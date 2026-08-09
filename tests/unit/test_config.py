@@ -19,27 +19,30 @@ def test_gateway_host_does_not_change_legacy_settings_positional_arguments() -> 
     assert settings.gateway_host == "127.0.0.1"
 
 
-def test_gateway_host_allows_docker_default_bridge_without_moving_management(monkeypatch) -> None:
+def test_docker_bridge_is_an_explicit_secondary_listener_option(monkeypatch) -> None:
     monkeypatch.setenv("MODELDECK_HOST", "127.0.0.1")
-    monkeypatch.setenv("MODELDECK_GATEWAY_HOST", "172.17.0.1")
+    monkeypatch.delenv("MODELDECK_GATEWAY_HOST", raising=False)
+    monkeypatch.setenv("MODELDECK_ENABLE_DOCKER_BRIDGE", "1")
 
     settings = Settings.from_env()
 
     assert settings.host == "127.0.0.1"
-    assert settings.gateway_host == "172.17.0.1"
-    assert gateway_base_url(settings.gateway_host, settings.gateway_port) == "http://172.17.0.1:8600"
+    assert settings.gateway_host == "127.0.0.1"
+    assert settings.docker_bridge_enabled is True
+    assert gateway_base_url(settings.gateway_host, settings.gateway_port) == "http://127.0.0.1:8600"
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "not-an-address"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "172.17.0.1", "not-an-address"])
 def test_gateway_host_rejects_unsafe_or_invalid_bind_addresses(monkeypatch, host: str) -> None:
     monkeypatch.setenv("MODELDECK_GATEWAY_HOST", host)
+    monkeypatch.delenv("MODELDECK_ENABLE_DOCKER_BRIDGE", raising=False)
 
     with pytest.raises(ValueError, match="MODELDECK_GATEWAY_HOST"):
         Settings.from_env()
 
 
-def test_gateway_process_binds_to_the_configured_docker_bridge(monkeypatch, tmp_path) -> None:
-    settings = Settings(gateway_host="172.17.0.1", gateway_port=18600, data_dir=tmp_path)
+def test_gateway_process_binds_to_the_configured_loopback_host(monkeypatch, tmp_path) -> None:
+    settings = Settings(gateway_host="127.0.0.1", gateway_port=18600, data_dir=tmp_path)
     captured: dict[str, object] = {}
     monkeypatch.setattr(gateway_app.Settings, "from_env", classmethod(lambda _cls: settings))
     monkeypatch.setattr(gateway_app, "create_gateway_app", lambda **_kwargs: object())
@@ -47,7 +50,7 @@ def test_gateway_process_binds_to_the_configured_docker_bridge(monkeypatch, tmp_
 
     gateway_app.main()
 
-    assert captured["host"] == "172.17.0.1"
+    assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 18600
 
 

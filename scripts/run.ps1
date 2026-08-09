@@ -15,17 +15,17 @@ $ManagementHost = if ($Env:MODELDECK_HOST) { $Env:MODELDECK_HOST } else { '127.0
 $ManagementPort = if ($Env:MODELDECK_MANAGEMENT_PORT) { $Env:MODELDECK_MANAGEMENT_PORT } else { '3600' }
 $GatewayHost = if ($Env:MODELDECK_GATEWAY_HOST) { $Env:MODELDECK_GATEWAY_HOST } else { '127.0.0.1' }
 $GatewayPort = if ($Env:MODELDECK_GATEWAY_PORT) { $Env:MODELDECK_GATEWAY_PORT } else { '8600' }
+$DockerBridgeEnabled = $Env:MODELDECK_ENABLE_DOCKER_BRIDGE -and $Env:MODELDECK_ENABLE_DOCKER_BRIDGE.Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on')
 $management = Start-Process .venv/bin/modeldeck -RedirectStandardOutput var/log/management.log -RedirectStandardError var/log/management-error.log -PassThru
 $gateway = Start-Process .venv/bin/modeldeck-gateway -RedirectStandardOutput var/log/gateway.log -RedirectStandardError var/log/gateway-error.log -PassThru
-$gatewayLoopback = $null
-if ($GatewayHost -eq '172.17.0.1') {
-    # Retain the established Docker bridge endpoint while also giving local desktop
-    # applications the loopback-only gateway URL. Both processes read the same
-    # immutable published routing set from SQLite.
+$gatewayDockerBridge = $null
+if ($DockerBridgeEnabled) {
+    # The primary listener remains loopback-only. This companion preserves the
+    # Docker bridge endpoint for SprintBot without changing local desktop access.
     $OriginalGatewayHost = $Env:MODELDECK_GATEWAY_HOST
     try {
-        $Env:MODELDECK_GATEWAY_HOST = '127.0.0.1'
-        $gatewayLoopback = Start-Process .venv/bin/modeldeck-gateway -RedirectStandardOutput var/log/gateway-loopback.log -RedirectStandardError var/log/gateway-loopback-error.log -PassThru
+        $Env:MODELDECK_GATEWAY_HOST = '172.17.0.1'
+        $gatewayDockerBridge = Start-Process .venv/bin/modeldeck-gateway -RedirectStandardOutput var/log/gateway-docker-bridge.log -RedirectStandardError var/log/gateway-docker-bridge-error.log -PassThru
     }
     finally {
         if ($null -eq $OriginalGatewayHost) { Remove-Item Env:MODELDECK_GATEWAY_HOST -ErrorAction SilentlyContinue }
@@ -34,8 +34,8 @@ if ($GatewayHost -eq '172.17.0.1') {
 }
 Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
-if ($gatewayLoopback) { Set-Content var/run/gateway-loopback.pid $gatewayLoopback.Id }
+if ($gatewayDockerBridge) { Set-Content var/run/gateway-docker-bridge.pid $gatewayDockerBridge.Id }
 Write-Host "Management: http://${ManagementHost}:${ManagementPort}"
 Write-Host "Gateway:    http://${GatewayHost}:${GatewayPort}/v1/health"
-if ($gatewayLoopback) { Write-Host "Gateway:    http://127.0.0.1:${GatewayPort}/v1/health (local companion)" }
+if ($gatewayDockerBridge) { Write-Host "Gateway:    http://172.17.0.1:${GatewayPort}/v1/health (Docker bridge companion)" }
 Write-Host 'Workers:    Managed from the ModelDeck console; no Worker instances or public Routes are seeded.'

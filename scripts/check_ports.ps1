@@ -14,16 +14,20 @@ $Bindings = @(
         Port = if ($Env:MODELDECK_MANAGEMENT_PORT) { [int]$Env:MODELDECK_MANAGEMENT_PORT } else { 3600 }
     }
 )
-if ($Bindings[0].Host -eq '172.17.0.1') {
-    $Bindings += [pscustomobject]@{ Name = 'gateway-loopback'; Host = '127.0.0.1'; Port = $Bindings[0].Port }
+$BridgeEnabled = $Env:MODELDECK_ENABLE_DOCKER_BRIDGE -and $Env:MODELDECK_ENABLE_DOCKER_BRIDGE.Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on')
+if ($BridgeEnabled) {
+    $Bindings += [pscustomobject]@{ Name = 'gateway-docker-bridge'; Host = '172.17.0.1'; Port = $Bindings[0].Port }
 }
 $Bindings | ForEach-Object {
     $Address = [System.Net.IPAddress]::None
     if (-not [System.Net.IPAddress]::TryParse($_.Host, [ref]$Address)) {
         throw "Invalid $($_.Name) bind address '$($_.Host)'. Use an IP address literal."
     }
-    if ($_.Name -eq 'gateway' -and -not ([System.Net.IPAddress]::IsLoopback($Address) -or $Address.ToString() -eq '172.17.0.1')) {
-        throw "Unsafe gateway bind address '$($_.Host)'. Use loopback or Docker's default bridge 172.17.0.1."
+    if ($_.Name -eq 'gateway' -and -not [System.Net.IPAddress]::IsLoopback($Address)) {
+        throw "Unsafe primary gateway bind address '$($_.Host)'. Use a loopback address."
+    }
+    if ($_.Name -eq 'gateway-docker-bridge' -and $Address.ToString() -ne '172.17.0.1') {
+        throw "Unsafe Docker bridge address '$($_.Host)'."
     }
     $Listener = [System.Net.Sockets.TcpListener]::new($Address, $_.Port)
     try {
