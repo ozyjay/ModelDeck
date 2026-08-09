@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.metadata
+import inspect
 import json
 import logging
 import re
@@ -128,6 +129,7 @@ class TransformersAutoregressiveEngine:
         self.tokenizer: Any = None
         self.model: Any = None
         self.device: Any = None
+        self._supports_logits_to_keep = False
 
     def load(self) -> None:
         import torch
@@ -169,6 +171,7 @@ class TransformersAutoregressiveEngine:
         self.tokenizer = tokenizer
         self.model = model
         self.device = device
+        self._supports_logits_to_keep = "logits_to_keep" in inspect.signature(model.forward).parameters
         self.runtime_details = {
             "torch_version": str(torch.__version__),
             "hip_version": torch.version.hip,
@@ -178,6 +181,7 @@ class TransformersAutoregressiveEngine:
             "load_seconds": round(time.perf_counter() - started, 4),
             "dtype": self.config.dtype,
             "model_max_context_tokens": supported_context_length,
+            "last_token_logits_only": self._supports_logits_to_keep,
         }
 
     def warmup(self) -> None:
@@ -206,6 +210,18 @@ class TransformersAutoregressiveEngine:
             "peak_memory_reserved_bytes": int(self.torch.cuda.max_memory_reserved(0)),
         }
 
+    def validate_token_budget(self, prompt: str, body: GenerationRequest) -> None:
+        """Reject requests that cannot fit before allocating inference tensors."""
+
+        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+        prompt_tokens = int(encoded["input_ids"].shape[-1])
+        if prompt_tokens + body.max_tokens > self.config.context_length:
+            raise ValueError(
+                "Token budget exceeds worker context: "
+                f"prompt_tokens={prompt_tokens}, requested_output_tokens={body.max_tokens}, "
+                f"context_length={self.config.context_length}."
+            )
+
     def trace(
         self,
         *,
@@ -220,11 +236,11 @@ class TransformersAutoregressiveEngine:
         user_prompt = _latest_user_prompt(body)
         user_prompt_ids = _tokenise_without_special_tokens(self.tokenizer, user_prompt)
         user_prompt_tokens = _decode_tokens(self.tokenizer, user_prompt_ids)
-        if len(prompt_ids) + body.max_tokens > self.config.context_length:
-            raise ValueError(
-                f"Prompt plus output exceeds configured context length {self.config.context_length}"
-            )
+        self.validate_token_budget(prompt, body)
         sequence = encoded["input_ids"].to(self.device)
+        attention_mask = encoded.get("attention_mask")
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(self.device)
         generated: list[int] = []
         text_so_far = ""
         stop_sequences = [body.stop] if isinstance(body.stop, str) else list(body.stop or ())
@@ -233,15 +249,29 @@ class TransformersAutoregressiveEngine:
         last_event: dict[str, Any] | None = None
         started = time.perf_counter()
 
+        cached_input_ids: Any | None = None
+        past_key_values: Any | None = None
         for step in range(min(body.max_tokens, self.config.maximum_new_tokens)):
             if cancellation.is_set():
                 yield {"step": step, "cancelled": True, "complete": True, "text_so_far": text_so_far}
                 return
+            forward_arguments = {
+                "input_ids": sequence if cached_input_ids is None else cached_input_ids,
+                "use_cache": True,
+                "output_hidden_states": body.include_hidden_state_summary,
+            }
+            if attention_mask is not None:
+                forward_arguments["attention_mask"] = attention_mask
+            if past_key_values is not None:
+                forward_arguments["past_key_values"] = past_key_values
+            if self._supports_logits_to_keep:
+                forward_arguments["logits_to_keep"] = 1
             with torch.inference_mode():
-                output = self.model(
-                    input_ids=sequence,
-                    use_cache=False,
-                    output_hidden_states=body.include_hidden_state_summary,
+                output = self.model(**forward_arguments)
+            past_key_values = getattr(output, "past_key_values", None)
+            if past_key_values is None:
+                raise RuntimeError(
+                    "The loaded causal language model did not return past_key_values with use_cache=True"
                 )
             logits = output.logits[0, -1].float()
             if body.repetition_penalty != 1 and generated:
@@ -269,9 +299,15 @@ class TransformersAutoregressiveEngine:
             token = self.tokenizer.decode([selected_id], clean_up_tokenization_spaces=False)
             generated.append(selected_id)
             text_so_far += token
-            sequence = torch.cat(
-                (sequence, torch.tensor([[selected_id]], device=self.device, dtype=sequence.dtype)), dim=1
-            )
+            cached_input_ids = torch.tensor([[selected_id]], device=self.device, dtype=sequence.dtype)
+            if attention_mask is not None:
+                attention_mask = torch.cat(
+                    (
+                        attention_mask,
+                        torch.ones((1, 1), device=self.device, dtype=attention_mask.dtype),
+                    ),
+                    dim=1,
+                )
             complete = len(generated) >= body.min_tokens and any(
                 text_so_far.endswith(stop) for stop in stop_sequences
             )
@@ -543,9 +579,16 @@ async def _load_engine(app: FastAPI, engine: AutoregressiveEngine) -> None:
 
 async def _trace_response(request: Request, body: GenerationRequest, engine: AutoregressiveEngine):
     _ensure_ready(request)
-    request_id = body.request_id or str(uuid.uuid4())
+    request_id = body.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
     body.request_id = request_id
     prompt = engine.build_prompt(body)
+    validate_token_budget = getattr(engine, "validate_token_budget", None)
+    if callable(validate_token_budget):
+        try:
+            validate_token_budget(prompt, body)
+        except ValueError as error:
+            LOGGER.info("Request rejected request_id=%s reason=context_token_budget", request_id)
+            return _error_response(422, "context_length_exceeded", str(error))
     cancellation = threading.Event()
     request.app.state.cancellations[request_id] = cancellation
     if body.stream:
@@ -586,6 +629,8 @@ async def _generate_response(
         trace_response = await _trace_response(request, body, engine)
         return trace_response
     result = await _trace_response(request, body, engine)
+    if isinstance(result, JSONResponse):
+        return result
     events = result["events"]
     text = events[-1].get("text_so_far", "") if events else ""
     tool_calls, content = _openai_tool_calls(text)

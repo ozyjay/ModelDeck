@@ -75,6 +75,14 @@ class FakeEngine:
             }
 
 
+class OverBudgetEngine(FakeEngine):
+    def validate_token_budget(self, _prompt: str, _body: GenerationRequest) -> None:
+        raise ValueError(
+            "Token budget exceeds worker context: prompt_tokens=32760, requested_output_tokens=32, "
+            "context_length=32768."
+        )
+
+
 @pytest.mark.asyncio
 async def test_worker_load_warmup_trace_and_stream_contracts() -> None:
     engine = FakeEngine()
@@ -136,6 +144,39 @@ async def test_worker_cancellation_route_sets_only_known_request() -> None:
     assert known.json()["ok"] is True
     assert unknown.json()["ok"] is False
     assert cancellation.is_set()
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_context_overflow_before_starting_inference() -> None:
+    engine = OverBudgetEngine()
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit", context_length=32_768),
+        engine=engine,
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"prompt": "do not echo this prompt", "max_tokens": 32},
+            )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "message": (
+            "Token budget exceeds worker context: prompt_tokens=32760, requested_output_tokens=32, "
+            "context_length=32768."
+        ),
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "context_length_exceeded",
+    }
+    assert "do not echo this prompt" not in response.text
+    assert engine.last_body is not None
+    assert engine.last_body.request_id is not None
 
 
 def test_worker_rejects_misaligned_trace_token_metadata() -> None:

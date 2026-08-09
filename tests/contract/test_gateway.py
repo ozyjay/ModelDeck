@@ -504,6 +504,12 @@ class FakeCancellationClient:
         )
 
 
+class BlockingGatewayClient(FakeGatewayClient):
+    async def send(self, request: httpx.Request, *, stream: bool = False):
+        self.last_request = request
+        await asyncio.Future()
+
+
 @pytest.mark.asyncio
 async def test_gateway_distinguishes_busy_worker_from_unavailable(monkeypatch) -> None:
     import modeldeck.gateway.app as gateway_module
@@ -565,6 +571,54 @@ async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
     diagnostic = request.app.state.last_request_diagnostics
     assert diagnostic["error_code"] == "gateway_timeout"
     assert diagnostic["total_gateway_seconds"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_timeout_cancels_the_active_autoregressive_worker(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().model_copy(update={"capabilities": {"cancellation": True}}).to_profile()
+    upstream = FakeGatewayClient({"ready": True, "busy": False}, timeout=True)
+    cancellation = FakeCancellationClient()
+    clients = iter((upstream, cancellation))
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: next(clients))
+
+    response = await proxy_request(
+        gateway_request({"model": "visitor-chat", "prompt": "hello"}),
+        {"visitor-chat": [profile]},
+        "/v1/completions",
+        None,
+        timeout_seconds=1,
+    )
+
+    assert response.status_code == 504
+    assert cancellation.url == f"http://127.0.0.1:{profile.port}/cancel"
+    assert upstream.last_request is not None
+    assert cancellation.payload == {"request_id": upstream.last_request.headers["x-request-id"]}
+
+
+@pytest.mark.asyncio
+async def test_gateway_client_disconnect_cancels_the_active_autoregressive_worker(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().model_copy(update={"capabilities": {"cancellation": True}}).to_profile()
+    upstream = BlockingGatewayClient({"ready": True, "busy": False})
+    cancellation = FakeCancellationClient()
+    clients = iter((upstream, cancellation))
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: next(clients))
+
+    response = await proxy_request(
+        gateway_request({"model": "visitor-chat", "prompt": "hello"}),
+        {"visitor-chat": [profile]},
+        "/v1/completions",
+        None,
+        timeout_seconds=1,
+    )
+
+    assert response.status_code == 499
+    assert cancellation.url == f"http://127.0.0.1:{profile.port}/cancel"
+    assert upstream.last_request is not None
+    assert cancellation.payload == {"request_id": upstream.last_request.headers["x-request-id"]}
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,10 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,8 @@ from modeldeck.thermal import (
     read_thermal_status,
     write_thermal_workload_activity,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EmbeddingRequest(BaseModel):
@@ -638,7 +642,10 @@ async def proxy_request(
     body.pop("automatic", None)
     client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=0.5))
     selected = None
-    request_id = str(body.get("request_id") or "")
+    # Every proxied cancellable request gets a private correlation ID. It is sent in
+    # a header so public OpenAI payloads remain unchanged while the gateway can
+    # still stop work when its own client has gone away.
+    request_id = str(body.get("request_id") or uuid.uuid4())
     request_claimed = False
     retain_thermal_claim = False
     health_results: list[dict[str, Any] | None] = []
@@ -665,17 +672,16 @@ async def proxy_request(
                 return response
             _record_gateway_diagnostic(request, alias, started, "error", "local_route_unavailable")
             return unavailable(alias, candidates[0].generation_family.value)
-        if request_id:
-            request_claimed = await claim_active_request(request, request_id, selected)
-            if not request_claimed:
-                await client.aclose()
-                await release_thermal_capacity(request)
-                return gateway_error(
-                    409,
-                    "duplicate_request_id",
-                    f"Request ID '{request_id}' is already active.",
-                    alias,
-                )
+        request_claimed = await claim_active_request(request, request_id, selected)
+        if not request_claimed:
+            await client.aclose()
+            await release_thermal_capacity(request)
+            return gateway_error(
+                409,
+                "duplicate_request_id",
+                f"Request ID '{request_id}' is already active.",
+                alias,
+            )
         body["model"] = (
             selected.alias
             if path in {"/v1/translations", "/v1/audio/transcriptions"}
@@ -687,8 +693,14 @@ async def proxy_request(
             json=body,
             headers=upstream_headers(selected, request_id),
         )
-        response = await client.send(upstream, stream=bool(body.get("stream")))
+        response = await send_with_disconnect_check(
+            request,
+            client,
+            upstream,
+            stream=bool(body.get("stream")),
+        )
     except httpx.TimeoutException:
+        await cancel_worker_inference(selected, request_id)
         await client.aclose()
         await release_thermal_capacity(request)
         if request_claimed:
@@ -700,6 +712,26 @@ async def proxy_request(
             f"The local Worker for Route '{alias}' did not respond within the gateway deadline.",
             alias,
         )
+    except WorkerRequestDisconnected:
+        await cancel_worker_inference(selected, request_id)
+        await client.aclose()
+        await release_thermal_capacity(request)
+        if request_claimed:
+            await release_active_request(request, request_id, selected)
+        _record_gateway_diagnostic(request, alias, started, "error", "client_disconnected")
+        return gateway_error(
+            499,
+            "client_disconnected",
+            "The gateway client disconnected before the local Worker completed.",
+            alias,
+        )
+    except asyncio.CancelledError:
+        await cancel_worker_inference(selected, request_id)
+        await client.aclose()
+        await release_thermal_capacity(request)
+        if request_claimed:
+            await release_active_request(request, request_id, selected)
+        raise
     except (httpx.HTTPError, ValueError):
         await client.aclose()
         await release_thermal_capacity(request)
@@ -712,7 +744,8 @@ async def proxy_request(
             forward_stream(
                 response,
                 client,
-                lambda: release_gateway_claims(
+                on_abort=lambda: cancel_worker_inference(selected, request_id),
+                on_complete=lambda: release_gateway_claims(
                     request,
                     request_id if request_claimed else "",
                     selected,
@@ -1219,15 +1252,69 @@ async def release_active_request(request: Request, request_id: str, profile: Mod
             request.app.state.active_request_workers.pop(request_id, None)
 
 
+class WorkerRequestDisconnected(Exception):
+    """The downstream HTTP client left while a worker request was still active."""
+
+
+async def send_with_disconnect_check(
+    request: Request,
+    client: httpx.AsyncClient,
+    upstream: httpx.Request,
+    *,
+    stream: bool,
+) -> httpx.Response:
+    """Poll the downstream connection while waiting for an upstream worker response."""
+
+    send_task = asyncio.create_task(client.send(upstream, stream=stream))
+    try:
+        while not send_task.done():
+            done, _ = await asyncio.wait({send_task}, timeout=0.05)
+            if send_task in done:
+                break
+            if await request.is_disconnected():
+                send_task.cancel()
+                await asyncio.gather(send_task, return_exceptions=True)
+                raise WorkerRequestDisconnected
+        return send_task.result()
+    except asyncio.CancelledError:
+        send_task.cancel()
+        await asyncio.gather(send_task, return_exceptions=True)
+        raise
+
+
+async def cancel_worker_inference(profile: ModelProfile | None, request_id: str) -> None:
+    """Ask a cancellable worker to stop without delaying gateway cleanup indefinitely."""
+
+    if profile is None or not request_id or not profile.capabilities.cancellation:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(1.0, connect=0.25)) as client:
+            await client.post(f"{endpoint(profile)}/cancel", json={"request_id": request_id})
+    except (httpx.HTTPError, ValueError) as error:
+        LOGGER.warning(
+            "Unable to cancel active worker inference worker_id=%s request_id=%s error=%s",
+            profile.id,
+            request_id,
+            type(error).__name__,
+        )
+
+
 async def forward_stream(
     response: httpx.Response,
     client: httpx.AsyncClient,
     on_complete: Callable[[], Awaitable[None] | None] | None = None,
+    on_abort: Callable[[], Awaitable[None] | None] | None = None,
 ) -> AsyncIterator[bytes]:
+    completed = False
     try:
         async for chunk in response.aiter_bytes():
             yield chunk
+        completed = True
     finally:
+        if not completed and on_abort is not None:
+            aborted = on_abort()
+            if aborted is not None:
+                await aborted
         await response.aclose()
         await client.aclose()
         if on_complete is not None:
