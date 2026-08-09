@@ -104,6 +104,14 @@ def test_run_script_loads_dotenv_before_configuration_lock_overrides() -> None:
     assert script.index("Import-ModelDeckEnvironment") < script.index("if ($LockConfiguration)")
 
 
+def test_run_script_keeps_docker_gateway_and_starts_a_loopback_companion() -> None:
+    script = RUN_SCRIPT.read_text(encoding="utf-8")
+
+    assert "$GatewayHost -eq '172.17.0.1'" in script
+    assert "gateway-loopback.pid" in script
+    assert "$Env:MODELDECK_GATEWAY_HOST = '127.0.0.1'" in script
+
+
 def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
     script = STOP_SCRIPT.read_text(encoding="utf-8")
 
@@ -113,6 +121,7 @@ def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
     assert "[4/4] ModelDeck stopped:" in script
     assert "not running (no PID file)" in script
     assert "did not stop gracefully; forcing process" in script
+    assert "gateway-loopback" in script
 
 
 def test_checked_in_env_example_uses_only_supported_names() -> None:

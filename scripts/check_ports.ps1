@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 Import-Module (Join-Path $PSScriptRoot 'environment_helpers.psm1') -Force
 Import-ModelDeckEnvironment -Path (Join-Path (Get-Location) '.env')
-@(
+$Bindings = @(
     [pscustomobject]@{
         Name = 'gateway'
         Host = if ($Env:MODELDECK_GATEWAY_HOST) { $Env:MODELDECK_GATEWAY_HOST } else { '127.0.0.1' }
@@ -13,7 +13,11 @@ Import-ModelDeckEnvironment -Path (Join-Path (Get-Location) '.env')
         Host = if ($Env:MODELDECK_HOST) { $Env:MODELDECK_HOST } else { '127.0.0.1' }
         Port = if ($Env:MODELDECK_MANAGEMENT_PORT) { [int]$Env:MODELDECK_MANAGEMENT_PORT } else { 3600 }
     }
-) | ForEach-Object {
+)
+if ($Bindings[0].Host -eq '172.17.0.1') {
+    $Bindings += [pscustomobject]@{ Name = 'gateway-loopback'; Host = '127.0.0.1'; Port = $Bindings[0].Port }
+}
+$Bindings | ForEach-Object {
     $Address = [System.Net.IPAddress]::None
     if (-not [System.Net.IPAddress]::TryParse($_.Host, [ref]$Address)) {
         throw "Invalid $($_.Name) bind address '$($_.Host)'. Use an IP address literal."

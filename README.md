@@ -74,6 +74,10 @@ the Docker bridge and loopback traffic. ModelDeck deliberately rejects `0.0.0.0`
 addresses; use a separately approved restricted reverse proxy and firewall deployment if
 broader access is ever required.
 
+When the Docker bridge bind is selected, `scripts/run.ps1` also starts a loopback companion
+gateway at `http://127.0.0.1:8600/v1` for local desktop applications such as WayFinder. Both
+listeners expose the same active Routing Profiles and remain local-only.
+
 After launch, verify the listener and SprintBot's fail-closed inference configuration from
 PowerShell:
 
