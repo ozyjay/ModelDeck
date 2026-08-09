@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib.metadata
 import json
+import re
 import threading
 import time
 import uuid
@@ -15,7 +16,7 @@ from typing import Any, Protocol
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 
@@ -30,8 +31,23 @@ class EngineConfig:
 
 
 class ChatMessage(BaseModel):
-    role: str = Field(pattern=r"^(system|user|assistant)$")
-    content: str = Field(min_length=1, max_length=16_000)
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(pattern=r"^(system|user|assistant|tool)$")
+    content: str | None = Field(default=None, max_length=16_000)
+    name: str | None = Field(default=None, max_length=128)
+    tool_call_id: str | None = Field(default=None, max_length=256)
+    tool_calls: list[dict[str, Any]] | None = None
+
+    @model_validator(mode="after")
+    def openai_message_shape(self) -> ChatMessage:
+        if self.role == "tool" and (not self.tool_call_id or self.content is None):
+            raise ValueError("tool messages require tool_call_id and content")
+        if self.role == "assistant" and self.content is None and not self.tool_calls:
+            raise ValueError("assistant messages require content or tool_calls")
+        if self.role in {"system", "user"} and self.content is None:
+            raise ValueError(f"{self.role} messages require content")
+        return self
 
 
 class GenerationRequest(BaseModel):
@@ -39,6 +55,8 @@ class GenerationRequest(BaseModel):
     model: str = "local-worker"
     prompt: str | None = Field(default=None, max_length=16_000)
     messages: list[ChatMessage] | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
     stream: bool = False
     seed: int = 7
     max_tokens: int = Field(default=32, ge=1, le=128)
@@ -138,11 +156,13 @@ class TransformersAutoregressiveEngine:
 
     def build_prompt(self, body: GenerationRequest) -> str:
         if body.messages:
-            messages = [message.model_dump() for message in body.messages]
+            messages = [message.model_dump(exclude_none=True) for message in body.messages]
             return self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
+                tools=body.tools,
+                tool_choice=body.tool_choice,
             )
         return body.prompt or ""
 
@@ -471,8 +491,17 @@ async def _generate_response(
     result = await _trace_response(request, body, engine)
     events = result["events"]
     text = events[-1].get("text_so_far", "") if events else ""
+    tool_calls, content = _openai_tool_calls(text)
     choice = (
-        {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+                **({"tool_calls": tool_calls} if tool_calls else {}),
+            },
+            "finish_reason": "tool_calls" if tool_calls else "stop",
+        }
         if chat
         else {"index": 0, "text": text, "finish_reason": "stop"}
     )
@@ -523,9 +552,37 @@ def _latest_user_prompt(body: GenerationRequest) -> str:
     if not body.messages:
         return body.prompt or ""
     return next(
-        (message.content for message in reversed(body.messages) if message.role == "user"),
+        (message.content or "" for message in reversed(body.messages) if message.role == "user"),
         "",
     )
+
+
+_TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
+def _openai_tool_calls(text: str) -> tuple[list[dict[str, Any]], str | None]:
+    """Translate Qwen's documented tool-call envelope to OpenAI's response shape."""
+
+    calls: list[dict[str, Any]] = []
+    for index, match in enumerate(_TOOL_CALL.finditer(text)):
+        try:
+            call = json.loads(match.group(1))
+            name = str(call["name"])
+            arguments = call.get("arguments", {})
+        except (KeyError, TypeError, ValueError):
+            continue
+        calls.append(
+            {
+                "id": f"call_{index}_{uuid.uuid4().hex[:16]}",
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
+                },
+            }
+        )
+    content = _TOOL_CALL.sub("", text).strip()
+    return calls, content or None
 
 
 def _tokenise_without_special_tokens(tokenizer: Any, text: str) -> list[int]:

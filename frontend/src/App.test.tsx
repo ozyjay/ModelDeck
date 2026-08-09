@@ -39,8 +39,9 @@ function responses(configured = false): Record<string, unknown> {
     "/api/thermal": { enabled: true, state: "normal", temperature_c: 62, sensor_id: "k10temp:Tctl", telemetry_age_seconds: 1, heavy_concurrency_limit: 2, active_heavy_concurrency: 0, model_load_concurrency_limit: 1, background_concurrency_limit: 1, background_paused: false, model_loading_allowed: true, scenechat_degradation: { active: false, minimum_frame_interval_seconds: 0, automatic_capture_allowed: true }, reason_code: "thermal_capacity_available", host_power_policy: { available: true, service_active: true, tuned_profile: "balanced", control: "external_read_only" } },
     "/api/live": configured ? {
       active_profile: { id: profile.definition.id, name: profile.definition.name, revision: 1 },
+      active_profiles: [{ id: profile.definition.id, name: profile.definition.name, revision: 1 }],
       capabilities: [{ ...profile.definition.capabilities[0], workers, effective_worker: null, ready: false }],
-    } : { active_profile: null, capabilities: [] },
+    } : { active_profile: null, active_profiles: [], capabilities: [] },
     "/api/workers": workers,
     "/api/routing-profiles": { profiles: configured ? [profile] : [] },
     "/api/catalogue": { models: [], downloads_started: false },

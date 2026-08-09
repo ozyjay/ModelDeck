@@ -101,28 +101,32 @@ def create_gateway_app(
                 # A historical Worker may use a retired test-only runtime. It remains
                 # in SQLite for migration/evidence purposes but cannot be routed.
                 continue
-        snapshot = store.active_routing_snapshot()
-        if snapshot is None or snapshot.get("format") != "modeldeck-routing-profile":
-            return {}
         routes: dict[str, list[ModelProfile]] = {}
-        for capability in snapshot.get("capabilities", []):
-            if adapter_ids is not None and capability.get("protocol_contract") not in adapter_ids:
+        for snapshot in store.active_routing_snapshots():
+            if snapshot.get("format") != "modeldeck-routing-profile":
                 continue
-            public_name = str(capability.get("public_name", ""))
-            if not public_name:
-                continue
-            routes[public_name] = [
-                profiles[worker_id] for worker_id in capability.get("worker_ids", []) if worker_id in profiles
-            ]
+            for capability in snapshot.get("capabilities", []):
+                if adapter_ids is not None and capability.get("protocol_contract") not in adapter_ids:
+                    continue
+                public_name = str(capability.get("public_name", ""))
+                if not public_name:
+                    continue
+                routes[public_name] = [
+                    profiles[worker_id]
+                    for worker_id in capability.get("worker_ids", [])
+                    if worker_id in profiles
+                ]
         return routes
 
     def active_capability_records(*, native_only: bool = False) -> list[dict[str, Any]]:
         if alias_routes is not None:
             return []
-        snapshot = store.active_routing_snapshot()
-        if snapshot is None or snapshot.get("format") != "modeldeck-routing-profile":
-            return []
-        records = list(snapshot.get("capabilities", []))
+        records = [
+            capability
+            for snapshot in store.active_routing_snapshots()
+            if snapshot.get("format") == "modeldeck-routing-profile"
+            for capability in snapshot.get("capabilities", [])
+        ]
         if native_only:
             records = [
                 record

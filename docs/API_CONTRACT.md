@@ -34,8 +34,10 @@ tools, not an operator feature.
 A Routing Profile contains a name, description, qualification policy and profile-local
 published capabilities. A capability has a display name, public `model` name, one trusted
 protocol contract, and ordered compatible Worker IDs. Index zero is primary. Publishing
-validates a draft, creates an immutable revision, and atomically makes it the one active
-profile; it never starts Workers. Earlier revisions can be made active again. The local
+validates a draft, creates an immutable revision, and atomically activates that profile
+alongside other active profiles; it never starts Workers. Public model IDs must be unique
+across the active set. Earlier revisions can be made active again and an active profile can
+be deactivated with `DELETE /api/routing-profiles/{profile_id}/active`. The local
 configuration lock blocks profile mutation server-side while preserving reads and explicit
 Worker controls.
 
@@ -48,7 +50,7 @@ LAN addresses are rejected during configuration parsing. Uvicorn then binds the 
 address and reports an unavailable address or occupied port at startup.
 
 `/v1` contains standard model APIs. The `model` field must identify a compatible
-capability in the active Routing Profile. `GET /v1/models` lists only capabilities whose
+capability in an active Routing Profile. `GET /v1/models` lists only capabilities whose
 protocol adapter explicitly declares OpenAI-model compatibility; native-only capabilities
 are not presented as OpenAI models.
 

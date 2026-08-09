@@ -37,6 +37,36 @@ def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _ensure_no_active_capability_collisions(
+    database: sqlite3.Connection, profile_id: str, snapshot: Mapping[str, Any]
+) -> None:
+    """Reject ambiguous public model IDs before an activation becomes visible."""
+
+    requested = {
+        str(capability.get("public_name", "")).casefold()
+        for capability in snapshot.get("capabilities", [])
+        if str(capability.get("public_name", ""))
+    }
+    if not requested:
+        return
+    rows = database.execute(
+        "SELECT profile_id, routing_json FROM active_routing_profiles WHERE profile_id != ?",
+        (profile_id,),
+    ).fetchall()
+    conflicts: list[str] = []
+    for _active_profile_id, routing_json in rows:
+        active_names = {
+            str(capability.get("public_name", "")).casefold()
+            for capability in json.loads(routing_json).get("capabilities", [])
+        }
+        conflicts.extend(sorted(requested & active_names))
+    if conflicts:
+        raise ValueError(
+            "Active Routing Profiles must use unique API Model IDs; conflicts: "
+            + ", ".join(sorted(set(conflicts)))
+        )
+
+
 class CompatibilityStore:
     """SQLite persistence for routing profiles and compatibility evidence."""
 
@@ -107,6 +137,13 @@ class CompatibilityStore:
                     routing_json TEXT NOT NULL,
                     published_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS active_routing_profiles (
+                    profile_id TEXT PRIMARY KEY,
+                    revision INTEGER NOT NULL,
+                    routing_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    FOREIGN KEY (profile_id) REFERENCES routing_profiles(id)
+                );
                 CREATE TABLE IF NOT EXISTS gateway_job_assignments (
                     job_id TEXT PRIMARY KEY,
                     worker_id TEXT NOT NULL,
@@ -140,6 +177,15 @@ class CompatibilityStore:
                 "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '3', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 (now,),
+            )
+            # Keep existing v3 installations live while moving from the original
+            # singleton activation model to an explicit set of active profiles.
+            # The old table remains readable for local downgrade diagnostics.
+            database.execute(
+                "INSERT OR IGNORE INTO active_routing_profiles "
+                "(profile_id, revision, routing_json, published_at) "
+                "SELECT profile_id, revision, routing_json, published_at "
+                "FROM active_routing_profile WHERE singleton_id = 1"
             )
 
     def list_workers(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
@@ -225,8 +271,8 @@ class CompatibilityStore:
                 "SELECT profiles.id, profiles.draft_json, profiles.created_at, profiles.updated_at, "
                 "active.profile_id IS NOT NULL, active.revision, "
                 "(SELECT MAX(revision) FROM routing_profile_revisions WHERE profile_id = profiles.id) "
-                "FROM routing_profiles AS profiles LEFT JOIN active_routing_profile AS active "
-                "ON active.singleton_id = 1 AND active.profile_id = profiles.id "
+                "FROM routing_profiles AS profiles LEFT JOIN active_routing_profiles AS active "
+                "ON active.profile_id = profiles.id "
                 "ORDER BY json_extract(profiles.draft_json, '$.name') COLLATE NOCASE"
             ).fetchall()
         return [
@@ -262,7 +308,7 @@ class CompatibilityStore:
     def delete_routing_profile(self, profile_id: str) -> bool:
         with sqlite3.connect(self.path) as database:
             active = database.execute(
-                "SELECT 1 FROM active_routing_profile WHERE singleton_id = 1 AND profile_id = ?",
+                "SELECT 1 FROM active_routing_profiles WHERE profile_id = ?",
                 (profile_id,),
             ).fetchone()
             revision = database.execute(
@@ -281,7 +327,7 @@ class CompatibilityStore:
                 (profile_id,),
             ).fetchall()
             active = database.execute(
-                "SELECT revision FROM active_routing_profile WHERE singleton_id = 1 AND profile_id = ?",
+                "SELECT revision FROM active_routing_profiles WHERE profile_id = ?",
                 (profile_id,),
             ).fetchone()
         active_revision = int(active[0]) if active else None
@@ -343,6 +389,17 @@ class CompatibilityStore:
         published_at: str,
     ) -> None:
         snapshot = {**dict(routing), "revision": revision}
+        _ensure_no_active_capability_collisions(database, profile_id, snapshot)
+        database.execute(
+            "INSERT INTO active_routing_profiles "
+            "(profile_id, revision, routing_json, published_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET "
+            "revision = excluded.revision, routing_json = excluded.routing_json, "
+            "published_at = excluded.published_at",
+            (profile_id, revision, json.dumps(snapshot, sort_keys=True), published_at),
+        )
+        # Retain the latest activation in the legacy singleton table. New code never
+        # reads it for routing, but it makes a rollback to an older build diagnosable.
         database.execute(
             "INSERT INTO active_routing_profile "
             "(singleton_id, profile_id, revision, routing_json, published_at) "
@@ -353,16 +410,28 @@ class CompatibilityStore:
         )
 
     def active_routing_snapshot(self) -> dict[str, Any] | None:
+        """Compatibility accessor for callers that require exactly one active profile."""
+        snapshots = self.active_routing_snapshots()
+        return snapshots[0] if len(snapshots) == 1 else None
+
+    def active_routing_snapshots(self) -> list[dict[str, Any]]:
         if not self.path.exists():
-            return None
+            return []
         try:
             with sqlite3.connect(self.path) as database:
-                row = database.execute(
-                    "SELECT routing_json FROM active_routing_profile WHERE singleton_id = 1"
-                ).fetchone()
+                rows = database.execute(
+                    "SELECT routing_json FROM active_routing_profiles ORDER BY published_at, profile_id"
+                ).fetchall()
         except sqlite3.OperationalError:
-            return None
-        return json.loads(row[0]) if row else None
+            return []
+        return [json.loads(row[0]) for row in rows]
+
+    def deactivate_routing_profile(self, profile_id: str) -> bool:
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute(
+                "DELETE FROM active_routing_profiles WHERE profile_id = ?", (profile_id,)
+            )
+        return cursor.rowcount > 0
 
     def discard_routing_profile_draft(self, profile_id: str) -> dict[str, Any]:
         revisions = self.list_routing_profile_revisions(profile_id)

@@ -220,12 +220,14 @@ async def test_management_and_gateway_use_only_a_published_profile(tmp_path) -> 
         ) as management:
             assert (await management.get("/api/live")).json() == {
                 "active_profile": None,
+                "active_profiles": [],
                 "capabilities": [],
             }
             publish = await management.post(f"/api/routing-profiles/{profile.id}/publish")
             assert publish.status_code == 201
             live = (await management.get("/api/live")).json()
     assert live["active_profile"]["name"] == profile.name
+    assert live["active_profiles"] == [{"id": profile.id, "name": profile.name, "revision": 1}]
     assert live["capabilities"][0]["id"] == profile.capabilities[0].id
     assert live["capabilities"][0]["ready"] is False
 

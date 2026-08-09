@@ -372,6 +372,7 @@ class FakeGatewayClient:
         self.timeout = timeout
         self.response_status = response_status
         self.response_payload = response_payload or {"ok": True}
+        self.last_request: httpx.Request | None = None
 
     async def get(self, _url: str):
         return SimpleNamespace(
@@ -383,6 +384,7 @@ class FakeGatewayClient:
         return httpx.Request(method, url, **kwargs)
 
     async def send(self, request: httpx.Request, *, stream: bool = False):
+        self.last_request = request
         if self.timeout:
             raise httpx.ReadTimeout("benchmark deadline", request=request)
         return httpx.Response(
@@ -393,6 +395,38 @@ class FakeGatewayClient:
 
     async def aclose(self) -> None:
         pass
+
+
+@pytest.mark.asyncio
+async def test_gateway_forwards_openai_tool_fields_without_semantic_routing(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().to_profile()
+    fake = FakeGatewayClient(
+        {"ready": True, "busy": False},
+        response_payload={
+            "choices": [{"message": {"role": "assistant", "tool_calls": []}, "finish_reason": "stop"}]
+        },
+    )
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    payload = {
+        "model": "fast-local",
+        "messages": [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        "stream": False,
+    }
+    response = await proxy_request(
+        gateway_request(payload), {"fast-local": [profile]}, "/v1/chat/completions", None
+    )
+
+    assert response.status_code == 200
+    assert fake.last_request is not None
+    forwarded = json.loads(fake.last_request.content)
+    assert forwarded == {**payload, "model": "fast-local"}
 
 
 class FailingStream(httpx.AsyncByteStream):

@@ -435,9 +435,12 @@ def create_v3_router() -> APIRouter:
             raise HTTPException(
                 409, {"message": "Routing Profile validation failed", "validation": validation}
             )
-        revision = request.app.state.compatibility_store.publish_routing_profile(
-            definition.model_dump(mode="json"), routing_snapshot(definition, 0)
-        )
+        try:
+            revision = request.app.state.compatibility_store.publish_routing_profile(
+                definition.model_dump(mode="json"), routing_snapshot(definition, 0)
+            )
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
         return {"profile_id": profile_id, "revision": revision["revision"], "active": True}
 
     @router.get("/routing-profiles/{profile_id}/revisions")
@@ -448,8 +451,15 @@ def create_v3_router() -> APIRouter:
 
     @router.post("/routing-profiles/{profile_id}/capabilities/{capability_id}/smoke")
     async def smoke_routing_profile_capability(profile_id: str, capability_id: str, request: Request):
-        snapshot = request.app.state.compatibility_store.active_routing_snapshot()
-        if snapshot is None or snapshot.get("profile_id") != profile_id:
+        snapshot = next(
+            (
+                item
+                for item in request.app.state.compatibility_store.active_routing_snapshots()
+                if item.get("profile_id") == profile_id
+            ),
+            None,
+        )
+        if snapshot is None:
             raise HTTPException(409, "Publish this Routing Profile before smoke-testing capabilities")
         capability = next(
             (item for item in snapshot.get("capabilities", []) if item.get("capability_id") == capability_id),
@@ -505,37 +515,55 @@ def create_v3_router() -> APIRouter:
             raise HTTPException(
                 409, {"message": "Routing Profile validation failed", "validation": validation}
             )
-        store.activate_routing_profile_revision(profile_id, revision, routing_snapshot(definition, revision))
+        try:
+            store.activate_routing_profile_revision(
+                profile_id, revision, routing_snapshot(definition, revision)
+            )
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
         return {"profile_id": profile_id, "revision": revision, "active": True}
+
+    @router.delete("/routing-profiles/{profile_id}/active")
+    async def deactivate_routing_profile(profile_id: str, request: Request):
+        _require_mutable(request)
+        if request.app.state.compatibility_store.get_routing_profile(profile_id) is None:
+            raise HTTPException(404, "Unknown Routing Profile")
+        return {
+            "ok": request.app.state.compatibility_store.deactivate_routing_profile(profile_id),
+            "profile_id": profile_id,
+        }
 
     @router.get("/live")
     async def live(request: Request):
-        snapshot = request.app.state.compatibility_store.active_routing_snapshot()
-        if snapshot is None:
-            return {"active_profile": None, "capabilities": []}
+        snapshots = request.app.state.compatibility_store.active_routing_snapshots()
+        if not snapshots:
+            return {"active_profile": None, "active_profiles": [], "capabilities": []}
         workers = {item["id"]: item for item in await list_workers(request)}
         capabilities = []
-        for capability in snapshot.get("capabilities", []):
-            chain = [workers.get(worker_id) for worker_id in capability.get("worker_ids", [])]
-            effective = next(
-                (worker for worker in chain if worker and worker["state"] in {"ready", "busy"}),
-                None,
-            )
-            capabilities.append(
-                {
-                    **capability,
-                    "id": capability["capability_id"],
-                    "workers": [worker for worker in chain if worker],
-                    "effective_worker": effective,
-                    "ready": effective is not None,
-                }
-            )
+        for snapshot in snapshots:
+            for capability in snapshot.get("capabilities", []):
+                chain = [workers.get(worker_id) for worker_id in capability.get("worker_ids", [])]
+                effective = next(
+                    (worker for worker in chain if worker and worker["state"] in {"ready", "busy"}),
+                    None,
+                )
+                capabilities.append(
+                    {
+                        **capability,
+                        "id": capability["capability_id"],
+                        "profile_id": snapshot["profile_id"],
+                        "workers": [worker for worker in chain if worker],
+                        "effective_worker": effective,
+                        "ready": effective is not None,
+                    }
+                )
+        active_profiles = [
+            {"id": snapshot["profile_id"], "name": snapshot["profile_name"], "revision": snapshot["revision"]}
+            for snapshot in snapshots
+        ]
         return {
-            "active_profile": {
-                "id": snapshot["profile_id"],
-                "name": snapshot["profile_name"],
-                "revision": snapshot["revision"],
-            },
+            "active_profile": active_profiles[0] if len(active_profiles) == 1 else None,
+            "active_profiles": active_profiles,
             "capabilities": capabilities,
         }
 

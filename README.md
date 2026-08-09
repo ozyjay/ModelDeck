@@ -179,6 +179,9 @@ ModelDeck workers and services with `pwsh -NoProfile -File scripts/stop.ps1`. Se
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
 and next steps.
 
+For the WayFinder VS Code extension's local Gate 0 configuration, see
+[WayFinder Gate 0](docs/WAYFINDER_GATE0.md).
+
 ## Booth mode
 
 For Open Day, start ModelDeck and a dedicated fullscreen Chromium-family browser with one

@@ -63,7 +63,7 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     assert health.json()["offline_only"] is True
     assert workers.json() == []
     assert profiles.json() == {"profiles": []}
-    assert live.json() == {"active_profile": None, "capabilities": []}
+    assert live.json() == {"active_profile": None, "active_profiles": [], "capabilities": []}
 
 
 @pytest.mark.asyncio
@@ -161,6 +161,43 @@ async def test_profile_publish_rejects_incompatible_worker(tmp_path) -> None:
 
     assert response.status_code == 409
     assert response.json()["detail"]["validation"]["valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_profiles_are_active_together_and_reject_model_id_collisions(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    first_worker = worker_definition(name="Fast", port=8630)
+    second_worker = worker_definition(name="Deep", port=8631)
+    store.save_worker_definition(first_worker.model_dump(mode="json"))
+    store.save_worker_definition(second_worker.model_dump(mode="json"))
+    first = profile_document(first_worker.id, name="Existing")
+    first["capabilities"][0].update({"public_name": "existing-local", "protocol_contract": "openai-chat-v1"})
+    second = profile_document(second_worker.id, name="wayfinder-gate0")
+    second["capabilities"][0].update({"public_name": "fast-local", "protocol_contract": "openai-chat-v1"})
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for profile in (first, second):
+                assert (await client.post("/api/routing-profiles", json=profile)).status_code == 201
+                assert (
+                    await client.post(f"/api/routing-profiles/{profile['id']}/publish")
+                ).status_code == 201
+            live = (await client.get("/api/live")).json()
+            duplicate = {**second, "id": str(uuid4()), "name": "collision"}
+            assert (await client.post("/api/routing-profiles", json=duplicate)).status_code == 201
+            rejected = await client.post(f"/api/routing-profiles/{duplicate['id']}/publish")
+
+    assert {profile["name"] for profile in live["active_profiles"]} == {"Existing", "wayfinder-gate0"}
+    assert {capability["public_name"] for capability in live["capabilities"]} == {
+        "existing-local",
+        "fast-local",
+    }
+    assert rejected.status_code == 409
+    assert "unique API Model IDs" in rejected.json()["detail"]
 
 
 def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path) -> None:

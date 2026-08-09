@@ -16,10 +16,12 @@ from modeldeck.workers.autoregressive_worker import (
 
 
 class FakeEngine:
-    def __init__(self) -> None:
+    def __init__(self, output_tokens: tuple[str, ...] = ("Hello", " world")) -> None:
         self.runtime_details: dict[str, Any] = {}
         self.loaded = False
         self.warmed = False
+        self.output_tokens = output_tokens
+        self.last_body: GenerationRequest | None = None
 
     def load(self) -> None:
         self.loaded = True
@@ -36,8 +38,9 @@ class FakeEngine:
         self.warmed = True
 
     def build_prompt(self, body: GenerationRequest) -> str:
+        self.last_body = body
         if body.messages:
-            return " ".join(message.content for message in body.messages)
+            return " ".join(message.content or "" for message in body.messages)
         return body.prompt or ""
 
     def trace(
@@ -48,7 +51,7 @@ class FakeEngine:
         cancellation: threading.Event,
     ) -> Iterator[dict[str, Any]]:
         text = ""
-        for step, token in enumerate(("Hello", " world")):
+        for step, token in enumerate(self.output_tokens):
             if cancellation.is_set():
                 yield {"step": step, "cancelled": True, "complete": True, "text_so_far": text}
                 return
@@ -67,7 +70,7 @@ class FakeEngine:
                 "elapsed_seconds": 0.01 + step,
                 "hidden_state_summary": None,
                 "cancelled": False,
-                "complete": step == 1,
+                "complete": step == len(self.output_tokens) - 1,
             }
 
 
@@ -146,3 +149,48 @@ def test_worker_rejects_misaligned_trace_token_metadata() -> None:
 
     with pytest.raises(HTTPException, match="one entry for every prompt_token_ids entry"):
         _trace_token_metadata(events)
+
+
+@pytest.mark.asyncio
+async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> None:
+    engine = FakeEngine(('<tool_call>{"name":"weather","arguments":{"city":"Brisbane"}}</tool_call>',))
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=engine,
+    )
+    tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            first = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "fast-local",
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                    "tools": tools,
+                    "tool_choice": "auto",
+                },
+            )
+            call = first.json()["choices"][0]["message"]["tool_calls"][0]
+            follow_up = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "fast-local",
+                    "messages": [
+                        {"role": "user", "content": "Weather?"},
+                        {"role": "assistant", "content": None, "tool_calls": [call]},
+                        {"role": "tool", "tool_call_id": call["id"], "content": "sunny"},
+                    ],
+                    "tools": tools,
+                },
+            )
+    assert first.status_code == 200
+    assert first.json()["choices"][0]["finish_reason"] == "tool_calls"
+    assert call["function"] == {"name": "weather", "arguments": '{"city": "Brisbane"}'}
+    assert engine.last_body is not None
+    assert engine.last_body.messages[-1].role == "tool"
+    assert follow_up.status_code == 200

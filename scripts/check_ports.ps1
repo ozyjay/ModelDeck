@@ -18,7 +18,7 @@ Import-ModelDeckEnvironment -Path (Join-Path (Get-Location) '.env')
     if (-not [System.Net.IPAddress]::TryParse($_.Host, [ref]$Address)) {
         throw "Invalid $($_.Name) bind address '$($_.Host)'. Use an IP address literal."
     }
-    if ($_.Name -eq 'gateway' -and -not ($Address.IsLoopback -or $Address.ToString() -eq '172.17.0.1')) {
+    if ($_.Name -eq 'gateway' -and -not ([System.Net.IPAddress]::IsLoopback($Address) -or $Address.ToString() -eq '172.17.0.1')) {
         throw "Unsafe gateway bind address '$($_.Host)'. Use loopback or Docker's default bridge 172.17.0.1."
     }
     $Listener = [System.Net.Sockets.TcpListener]::new($Address, $_.Port)

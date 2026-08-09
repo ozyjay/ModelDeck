@@ -76,12 +76,14 @@ export interface ProtocolContract {
 
 export interface LiveWorker { id: string; name: string; state: WorkerState }
 export interface LiveCapability extends CapabilityBinding {
+  profile_id?: string;
   workers: Worker[];
   effective_worker: Worker | null;
   ready: boolean;
 }
 export interface LiveState {
   active_profile: { id: string; name: string; revision: number } | null;
+  active_profiles: { id: string; name: string; revision: number }[];
   capabilities: LiveCapability[];
 }
 
