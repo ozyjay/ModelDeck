@@ -16,7 +16,7 @@ from typing import Any, Protocol
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 
@@ -38,6 +38,23 @@ class ChatMessage(BaseModel):
     name: str | None = Field(default=None, max_length=128)
     tool_call_id: str | None = Field(default=None, max_length=256)
     tool_calls: list[dict[str, Any]] | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalise_openai_text_content_parts(cls, value: Any) -> Any:
+        """Accept OpenAI text content parts for the text-only local backends."""
+
+        if not isinstance(value, list):
+            return value
+        text_parts: list[str] = []
+        for index, part in enumerate(value):
+            if not isinstance(part, dict) or part.get("type") != "text":
+                raise ValueError(f"content part {index} must be a text part; this local backend is text-only")
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise ValueError(f"content text part {index} requires a string text value")
+            text_parts.append(text)
+        return "".join(text_parts)
 
     @model_validator(mode="after")
     def openai_message_shape(self) -> ChatMessage:

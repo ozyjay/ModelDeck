@@ -151,6 +151,37 @@ def test_worker_rejects_misaligned_trace_token_metadata() -> None:
         _trace_token_metadata(events)
 
 
+def test_worker_accepts_openai_text_content_parts() -> None:
+    body = GenerationRequest.model_validate(
+        {
+            "model": "fast-local",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reply with the "},
+                        {"type": "text", "text": "backend you selected."},
+                    ],
+                }
+            ],
+            "stream": False,
+        }
+    )
+
+    assert body.messages is not None
+    assert body.messages[0].content == "Reply with the backend you selected."
+
+
+def test_worker_rejects_unsupported_openai_content_parts() -> None:
+    with pytest.raises(ValueError, match="text-only"):
+        GenerationRequest.model_validate(
+            {
+                "model": "fast-local",
+                "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {}}]}],
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> None:
     engine = FakeEngine(('<tool_call>{"name":"weather","arguments":{"city":"Brisbane"}}</tool_call>',))
