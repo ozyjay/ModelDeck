@@ -48,6 +48,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "maximum_input_tokens",
+                    "prefix_cache_enabled",
                 }
             ),
             cache_settings=frozenset({"cache_root"}),

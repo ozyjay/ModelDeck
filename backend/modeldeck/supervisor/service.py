@@ -451,21 +451,21 @@ def _autoregressive_launch(
     python = _rocm_python()
     if cache_root := profile.settings.get("cache_root"):
         environment["HF_HUB_CACHE"] = str(cache_root)
-    return WorkerLaunch(
-        command=[
-            str(python.absolute()),
-            "-m",
-            "modeldeck.workers.autoregressive_worker",
-            *common,
-            "--dtype",
-            profile.dtype,
-            "--context-length",
-            str(profile.settings.get("context_length", 2048)),
-            "--maximum-new-tokens",
-            str(profile.settings.get("maximum_new_tokens", 128)),
-        ],
-        environment=environment,
-    )
+    command = [
+        str(python.absolute()),
+        "-m",
+        "modeldeck.workers.autoregressive_worker",
+        *common,
+        "--dtype",
+        profile.dtype,
+        "--context-length",
+        str(profile.settings.get("context_length", 2048)),
+        "--maximum-new-tokens",
+        str(profile.settings.get("maximum_new_tokens", 128)),
+    ]
+    if profile.settings.get("prefix_cache_enabled") is True:
+        command.append("--prefix-cache-enabled")
+    return WorkerLaunch(command=command, environment=environment)
 
 
 def _embedding_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:

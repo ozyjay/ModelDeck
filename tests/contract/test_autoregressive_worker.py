@@ -11,6 +11,7 @@ from modeldeck.workers.autoregressive_worker import (
     MAX_REQUEST_BYTES,
     EngineConfig,
     GenerationRequest,
+    _AcceleratorOutOfMemory,
     _trace_token_metadata,
     create_app,
 )
@@ -81,6 +82,12 @@ class OverBudgetEngine(FakeEngine):
             "Token budget exceeds worker context: prompt_tokens=32760, requested_output_tokens=32, "
             "context_length=32768."
         )
+
+
+class OutOfMemoryEngine(FakeEngine):
+    def trace(self, **_kwargs: Any) -> Iterator[dict[str, Any]]:
+        raise _AcceleratorOutOfMemory
+        yield  # pragma: no cover - retain the Iterator contract
 
 
 @pytest.mark.asyncio
@@ -159,6 +166,7 @@ async def test_worker_rejects_context_overflow_before_starting_inference() -> No
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
+            assert (await client.post("/warmup")).status_code == 200
             response = await client.post(
                 "/v1/chat/completions",
                 json={"prompt": "do not echo this prompt", "max_tokens": 32},
@@ -177,6 +185,31 @@ async def test_worker_rejects_context_overflow_before_starting_inference() -> No
     assert "do not echo this prompt" not in response.text
     assert engine.last_body is not None
     assert engine.last_body.request_id is not None
+
+
+@pytest.mark.asyncio
+async def test_worker_returns_a_controlled_accelerator_memory_failure() -> None:
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=OutOfMemoryEngine(),
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            response = await client.post("/v1/completions", json={"prompt": "private"})
+
+    assert response.status_code == 503
+    assert response.json()["error"] == {
+        "message": "Local inference stopped because accelerator memory was exhausted.",
+        "type": "server_error",
+        "param": None,
+        "code": "inference_memory_exhausted",
+    }
+    assert "private" not in response.text
 
 
 def test_worker_rejects_misaligned_trace_token_metadata() -> None:
@@ -222,6 +255,52 @@ def test_worker_rejects_unsupported_openai_content_parts() -> None:
                 "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {}}]}],
             }
         )
+
+
+def test_worker_validates_prefix_cache_hint_without_exposing_message_content() -> None:
+    payload = {
+        "messages": [
+            {"role": "user", "content": "private text must not be returned"},
+            {"role": "user", "content": "dynamic"},
+        ],
+        "modeldeck": {
+            "prefix_cache": {
+                "stable_message_count": 1,
+                "profile_version": "wayfinder-agent-v1",
+            }
+        },
+    }
+
+    with pytest.raises(ValueError) as error:
+        GenerationRequest.model_validate(payload)
+
+    assert "leading system messages" in str(error.value)
+    assert "private text must not be returned" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_worker_reports_allowlisted_cache_capability_and_clear_contract() -> None:
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="test-wayfinder-cache",
+        config=EngineConfig(
+            model_id="Qwen/Qwen2.5-0.5B-Instruct",
+            revision="commit",
+            prefix_cache_enabled=True,
+        ),
+        engine=engine,
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            capabilities = (await client.get("/capabilities")).json()
+            cleared = (await client.post("/prefix-cache/clear")).json()
+
+    assert capabilities["prefix_caching"] == "application-managed"
+    assert capabilities["prefix_cache_enabled"] is True
+    assert cleared == {"ok": True, "cleared_entries": 0, "released_bytes": 0}
 
 
 @pytest.mark.asyncio

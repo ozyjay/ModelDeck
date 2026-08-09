@@ -20,6 +20,7 @@ from modeldeck.domain import (
 )
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.hardware import probe_environment
+from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
@@ -45,6 +46,7 @@ class WorkerCreateRequest(BaseModel):
     visual_token_budget: VisualTokenBudget | None = None
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    prefix_cache_enabled: bool = False
 
 
 class WorkerRenameRequest(BaseModel):
@@ -67,6 +69,7 @@ class WorkerReplacementRequest(BaseModel):
     )
     maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
     visual_token_budget: VisualTokenBudget | None = None
+    prefix_cache_enabled: bool | None = None
     rebind_drafts: bool = True
 
 
@@ -96,6 +99,11 @@ def create_v3_router() -> APIRouter:
     @router.post("/workers", status_code=201)
     async def create_worker(payload: WorkerCreateRequest, request: Request):
         _require_mutable(request)
+        if payload.prefix_cache_enabled and not supports_wayfinder_prefix_cache(payload.model_id):
+            raise HTTPException(
+                409,
+                "Prefix caching is allowlisted only for the dedicated WayFinder Qwen2.5 models",
+            )
         clean_name = " ".join(payload.name.split())
         if any(
             record["definition"]["name"].casefold() == clean_name.casefold()
@@ -178,6 +186,7 @@ def create_v3_router() -> APIRouter:
             ),
             artifact_id=payload.artifact_id,
             runtime_template_id=payload.runtime_template_id,
+            prefix_cache_enabled=payload.prefix_cache_enabled,
         )
         cache_root = Path(cached["cache_location"]).parent
         profile = create_local_profile(
@@ -231,6 +240,30 @@ def create_v3_router() -> APIRouter:
         _require_worker(request, worker_id)
         return _worker_usage(worker_id, request)
 
+    @router.post("/workers/{worker_id}/prefix-cache/clear")
+    async def clear_worker_prefix_cache(worker_id: str, request: Request):
+        definition = _require_worker(request, worker_id)
+        if definition.capabilities.get("prefix_caching") != "application-managed":
+            raise HTTPException(409, "This Worker does not support application-managed prefix caching")
+        snapshot = request.app.state.supervisor.get_worker(worker_id)
+        if snapshot["state"] == "busy":
+            raise HTTPException(409, "Wait for active generation before clearing the prefix cache")
+        if snapshot["state"] != "ready":
+            raise HTTPException(409, "Start the Worker before clearing its prefix cache")
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=0.5)) as client:
+                response = await client.post(f"http://127.0.0.1:{definition.port}/prefix-cache/clear")
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise HTTPException(503, "The Worker prefix cache could not be cleared") from error
+        return {
+            "ok": payload.get("ok") is True,
+            "worker_id": worker_id,
+            "cleared_entries": int(payload.get("cleared_entries", 0)),
+            "released_bytes": int(payload.get("released_bytes", 0)),
+        }
+
     @router.post("/workers/{worker_id}/replacement", status_code=201)
     async def replace_worker(worker_id: str, payload: WorkerReplacementRequest, request: Request):
         definition = _require_worker(request, worker_id)
@@ -256,6 +289,11 @@ def create_v3_router() -> APIRouter:
                 or _worker_integer_setting(definition, "visual_token_budget"),
                 artifact_id=artifact_id,
                 runtime_template_id=definition.runtime_template_id,
+                prefix_cache_enabled=(
+                    payload.prefix_cache_enabled
+                    if payload.prefix_cache_enabled is not None
+                    else bool(definition.settings.get("prefix_cache_enabled", False))
+                ),
             ),
             request,
         )

@@ -28,6 +28,13 @@ def worker_definition(*, name: str = "Qwen trace", port: int = 8630) -> WorkerDe
     )
 
 
+def test_allowlisted_wayfinder_worker_normalises_persisted_cache_capability() -> None:
+    worker = worker_definition()
+
+    assert worker.capabilities["prefix_caching"] == "application-managed"
+    assert worker.capabilities["prefix_cache_enabled"] is False
+
+
 def profile_document(worker_id: str, *, name: str = "Local applications") -> dict:
     return {
         "id": str(uuid4()),
@@ -218,6 +225,64 @@ def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path
     assert store.get_routing_profile_revision(profile.id, 1)["definition"]["capabilities"][0][
         "worker_ids"
     ] == [old.id]
+
+
+@pytest.mark.asyncio
+async def test_management_prefix_cache_clear_returns_only_safe_counts(monkeypatch, tmp_path) -> None:
+    import modeldeck.v2_api as v2_api
+
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v3()
+    worker = worker_definition().model_copy(
+        update={
+            "capabilities": {
+                "chat": True,
+                "completions": True,
+                "top_k_trace": True,
+                "prefix_caching": "application-managed",
+                "prefix_cache_enabled": True,
+            },
+            "settings": {"prefix_cache_enabled": True},
+        }
+    )
+    store.save_worker_definition(worker.model_dump(mode="json"))
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url: str):
+            assert url == f"http://127.0.0.1:{worker.port}/prefix-cache/clear"
+            return httpx.Response(
+                200,
+                json={"ok": True, "cleared_entries": 1, "released_bytes": 4096},
+                request=httpx.Request("POST", url),
+            )
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(v2_api.httpx, "AsyncClient", lambda *args, **kwargs: Client())
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        monkeypatch.setattr(
+            app.state.supervisor,
+            "get_worker",
+            lambda _worker_id: {"state": "ready"},
+        )
+        async with real_async_client(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(f"/api/workers/{worker.id}/prefix-cache/clear")
+
+    assert response.json() == {
+        "ok": True,
+        "worker_id": worker.id,
+        "cleared_entries": 1,
+        "released_bytes": 4096,
+    }
 
 
 @pytest.mark.asyncio

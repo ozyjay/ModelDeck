@@ -4,6 +4,7 @@ import socket
 
 import httpx
 import pytest
+from modeldeck.config import Settings
 from modeldeck.gateway import create_gateway_app
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import GenerationFamily
@@ -54,7 +55,7 @@ def mock_embedding_profile(port: int) -> ModelProfile:
 async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallback() -> None:
     profile = mock_embedding_profile(free_port())
     supervisor = WorkerSupervisor([profile], startup_timeout=8, stop_timeout=2)
-    gateway = create_gateway_app({"sprintbot-embedding": [profile]})
+    gateway = create_gateway_app({"sprintbot-embedding": [profile]}, settings=Settings())
     try:
         await supervisor.start(profile.id)
         async with httpx.AsyncClient(
@@ -71,17 +72,25 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
         assert response.json()["model"] == "sprintbot-embedding"
         assert [item["index"] for item in response.json()["data"]] == [0, 1]
         assert all(len(item["embedding"]) == 1024 for item in response.json()["data"])
-        assert models.json()["data"] == [
-            {
-                "id": "sprintbot-embedding",
-                "object": "model",
-                "owned_by": "modeldeck-local",
+        listed = models.json()["data"]
+        assert len(listed) == 1
+        assert listed[0] == {
+            "id": "sprintbot-embedding",
+            "object": "model",
+            "owned_by": "modeldeck-local",
+            "revision": "0123456789abcdef0123456789abcdef01234567",
+            "ready": True,
+            "runtime": "mock",
+            "accelerator": "mock",
+            "modeldeck": {
+                "model_id": "modeldeck/mock-openai-embeddings",
                 "revision": "0123456789abcdef0123456789abcdef01234567",
-                "ready": True,
                 "runtime": "mock",
-                "accelerator": "mock",
-            }
-        ]
+                "configuration_fingerprint": listed[0]["modeldeck"]["configuration_fingerprint"],
+                "prefix_caching": "unsupported",
+                "prefix_cache_enabled": False,
+            },
+        }
     finally:
         await supervisor.stop_all()
 
@@ -89,9 +98,9 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
 @pytest.mark.asyncio
 async def test_gateway_embeddings_reject_invalid_unknown_incompatible_and_unavailable_routes() -> None:
     profile = mock_embedding_profile(free_port())
-    gateway = create_gateway_app({"sprintbot-embedding": [profile]})
+    gateway = create_gateway_app({"sprintbot-embedding": [profile]}, settings=Settings())
     incompatible = mock_profile(free_port())
-    incompatible_gateway = create_gateway_app({"sprintbot-embedding": [incompatible]})
+    incompatible_gateway = create_gateway_app({"sprintbot-embedding": [incompatible]}, settings=Settings())
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
     ) as client:

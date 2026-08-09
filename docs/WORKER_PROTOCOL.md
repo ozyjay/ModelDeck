@@ -63,6 +63,22 @@ cancellation, one active generation, first-token and total latency, tokens per s
 top-k trace events, prompt/generated token IDs, and optional hidden-state summaries.
 It advertises health while loading and becomes ready only after explicit warmup.
 
+Autoregressive generation performs one cached prompt prefill followed by one-token forwards
+using `past_key_values`; it never recomputes the growing full sequence after prefill. Where
+the loaded Qwen forward signature supports `logits_to_keep`, the Worker requests only the
+final-token logits during prefill and decode. Before inference it rejects a request with HTTP
+422 when rendered prompt tokens plus requested output exceed the configured context, whose
+hard ceiling remains 32,768 tokens.
+
+`CapabilitySet.prefix_caching` is `unsupported`, `backend-managed`, or
+`application-managed`, and `prefix_cache_enabled` reports the immutable Worker setting.
+Only the dedicated Qwen2.5 0.5B and 3B WayFinder Workers advertise
+`application-managed`; other autoregressive and embedding Workers report `unsupported`.
+Enabled Workers accept the optional `modeldeck.prefix_cache` request hint described in
+`docs/WAYFINDER_GATE0.md`. The hint is advisory and never replaces prompt content. A direct
+`POST /prefix-cache/clear` is available only while generation is idle and returns the number
+of entries cleared and measured bytes released.
+
 ## Text-diffusion worker
 
 Worker routes are `POST /v1/refine`, `/v1/diffuse`, `GET /v1/jobs/{job_id}`, `POST

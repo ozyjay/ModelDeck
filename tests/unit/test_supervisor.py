@@ -130,6 +130,23 @@ def test_qwen_launches_are_allowlisted_offline_and_cache_pinned(monkeypatch, tmp
     assert launch.environment["HF_HUB_CACHE"] == "/mnt/work/models/huggingface/hub"
 
 
+def test_wayfinder_prefix_cache_launch_flag_is_opt_in(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    disabled = build_worker_launch(profile)
+    enabled_profile = profile.model_copy(
+        update={"settings": {**profile.settings, "prefix_cache_enabled": True}}
+    )
+    enabled = build_worker_launch(enabled_profile)
+
+    assert "--prefix-cache-enabled" not in disabled.command
+    assert "--prefix-cache-enabled" in enabled.command
+
+
 def test_diffusion_rocm_launch_is_allowlisted_and_offline(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "diffusiongemma-rocm")
     runtime_python = tmp_path / "bin/python"

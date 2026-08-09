@@ -64,6 +64,8 @@ class CapabilitySet(BaseModel):
     speech_synthesis: bool = False
     speech_recognition: bool = False
     embeddings: bool = False
+    prefix_caching: Literal["unsupported", "backend-managed", "application-managed"] = "unsupported"
+    prefix_cache_enabled: bool = False
 
 
 class WorkerHealth(BaseModel):

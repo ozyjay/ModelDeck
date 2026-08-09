@@ -101,6 +101,37 @@ def test_local_autoregressive_profile_has_a_fixed_safe_manifest(tmp_path) -> Non
     assert profile.capabilities.top_k_trace is True
 
 
+def test_wayfinder_prefix_cache_is_disabled_by_default_and_allowlisted_per_model(tmp_path) -> None:
+    base = {
+        "revision": "pinned",
+        "alias": "wayfinder-local",
+        "prefix_cache_enabled": True,
+    }
+    profile = create_local_profile(
+        LocalProfileRequest(model_id="Qwen/Qwen2.5-0.5B-Instruct", **base),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="autoregressive-transformers",
+    )
+
+    assert profile.capabilities.prefix_caching == "application-managed"
+    assert profile.capabilities.prefix_cache_enabled is True
+    assert profile.settings["prefix_cache_enabled"] is True
+
+    with pytest.raises(ValueError, match="allowlisted only"):
+        create_local_profile(
+            LocalProfileRequest(
+                model_id="Qwen/Qwen2.5-1.5B-Instruct",
+                revision="pinned",
+                alias="unsupported-cache",
+                prefix_cache_enabled=True,
+            ),
+            cache_root=tmp_path,
+            port=8631,
+            configuration_support="autoregressive-transformers",
+        )
+
+
 def test_local_profile_request_rejects_unsafe_or_unbounded_fields() -> None:
     with pytest.raises(ValidationError):
         LocalAutoregressiveProfileRequest(

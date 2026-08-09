@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 
@@ -51,6 +52,20 @@ class WorkerDefinition(BaseModel):
         if not cleaned:
             raise ValueError("cannot be blank")
         return cleaned
+
+    @model_validator(mode="after")
+    def normalise_prefix_cache_capability(self) -> WorkerDefinition:
+        eligible = (
+            self.generation_family == "autoregressive"
+            and self.runtime == "transformers-rocm"
+            and supports_wayfinder_prefix_cache(self.model_id)
+        )
+        enabled = self.settings.get("prefix_cache_enabled") is True
+        if enabled and not eligible:
+            raise ValueError("prefix caching is not supported by this Worker")
+        self.capabilities["prefix_caching"] = "application-managed" if eligible else "unsupported"
+        self.capabilities["prefix_cache_enabled"] = enabled if eligible else False
+        return self
 
     @classmethod
     def from_profile(cls, profile: ModelProfile, *, name: str) -> WorkerDefinition:

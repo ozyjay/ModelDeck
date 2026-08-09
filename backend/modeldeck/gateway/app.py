@@ -22,6 +22,7 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.gateway.adapters import PROTOCOL_ADAPTERS
+from modeldeck.prefix_cache import stable_model_configuration_fingerprint
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
@@ -1427,16 +1428,40 @@ def model_discovery_record(
     health = state.get("health") if isinstance(state.get("health"), dict) else {}
     runtime = health.get("runtime") if state["ready"] else None
     runtime = runtime if isinstance(runtime, str) and runtime else selected.preferred_runtime
+    revision = selected.artifact_revision or selected.revision
+    configuration_fingerprint = health.get("configuration_fingerprint") if state["ready"] else None
+    if not isinstance(configuration_fingerprint, str) or not configuration_fingerprint:
+        context_length = selected.settings.get("context_length")
+        configuration_fingerprint = stable_model_configuration_fingerprint(
+            model_id=selected.model_id,
+            revision=revision,
+            runtime=runtime,
+            dtype=selected.dtype,
+            context_length=(
+                int(context_length)
+                if isinstance(context_length, int) and not isinstance(context_length, bool)
+                else None
+            ),
+            runtime_template_version=selected.runtime_template_version,
+        )
     return {
         "id": alias,
         "object": "model",
         "owned_by": "modeldeck-local",
         # A derivative artefact is the checkpoint the Worker loads, so its pinned upstream
         # revision is the model's authoritative identity. Otherwise it loads the base snapshot.
-        "revision": selected.artifact_revision or selected.revision,
+        "revision": revision,
         "ready": state["ready"],
         "runtime": runtime,
         "accelerator": accelerator_for_runtime(runtime, health),
+        "modeldeck": {
+            "model_id": selected.model_id,
+            "revision": revision,
+            "runtime": runtime,
+            "configuration_fingerprint": configuration_fingerprint,
+            "prefix_caching": selected.capabilities.prefix_caching,
+            "prefix_cache_enabled": selected.capabilities.prefix_cache_enabled,
+        },
     }
 
 

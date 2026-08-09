@@ -152,6 +152,21 @@ SHA-256 digest for deterministic-run comparison.
 Physical benchmark runs require the target GPU, pinned local snapshots, the relevant
 ROCm environments, substantial memory, and time. They are not part of normal CI.
 
+For application-managed WayFinder prefix-cache qualification, use the separate focused
+runner after enabling an allowlisted replacement Worker:
+
+```powershell
+pwsh -NoProfile -File scripts/qualify_wayfinder_prefix_cache.ps1 `
+    -Workers '<worker-id>' -Repetitions 5 `
+    -Output 'var/benchmarks/wayfinder-prefix-cache.json'
+```
+
+It clears the one-entry cache before each cold case, then runs the identical rendered request
+as a warm hit and as a deliberate no-hint bypass. It enforces deterministic trace and
+documented numeric equivalence, a 20% median warm-hit TTFT improvement, the 8,192-token and
+512 MiB cache limits, prompt cancellation, and non-monotonic memory behaviour. The runner
+uses the active ModelDeck thermal policy and aborts at its configured critical state.
+
 Run the separate sustained GPT-OSS gate after its standard benchmark:
 
 ```powershell

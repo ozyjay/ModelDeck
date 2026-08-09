@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
+from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
 from modeldeck.registry import (
     MAXIMUM_NEW_TOKENS_LIMIT,
     RuntimeTemplateRegistration,
@@ -36,6 +37,7 @@ class LocalProfileRequest(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9-]{1,62}$",
     )
+    prefix_cache_enabled: bool = False
 
 
 def create_local_autoregressive_profile(
@@ -68,6 +70,11 @@ def create_local_profile(
     if registration is None:
         raise ValueError("No allowlisted local worker supports this model architecture")
     template = registration.template
+    if request.prefix_cache_enabled and (
+        template.generation_family.value != "autoregressive"
+        or not supports_wayfinder_prefix_cache(request.model_id)
+    ):
+        raise ValueError("Prefix caching is allowlisted only for the dedicated WayFinder Qwen2.5 models")
     if template.uses_base_model_identity and (
         checkpoint_dir is None or base_model_id is None or base_model_revision is None
     ):
@@ -84,6 +91,7 @@ def create_local_profile(
         settings["maximum_new_tokens"] = request.maximum_new_tokens
     if template.generation_family.value == "autoregressive":
         settings["context_length"] = request.context_length
+        settings["prefix_cache_enabled"] = request.prefix_cache_enabled
     elif template.generation_family.value == "vision-language":
         settings["context_length"] = request.context_length
         settings["visual_token_budget"] = request.visual_token_budget
@@ -110,6 +118,16 @@ def create_local_profile(
     settings[template.cache_setting] = str(selected_path)
     if template.include_cache_root:
         settings["cache_root"] = str(cache_root)
+    capabilities = template.capabilities.model_copy(deep=True)
+    if template.generation_family.value == "autoregressive" and supports_wayfinder_prefix_cache(
+        request.model_id
+    ):
+        capabilities = capabilities.model_copy(
+            update={
+                "prefix_caching": "application-managed",
+                "prefix_cache_enabled": request.prefix_cache_enabled,
+            }
+        )
     return ModelProfile(
         id=f"local-{request.profile_name or request.alias}",
         model_id=base_model_id if template.uses_base_model_identity else request.model_id,
@@ -126,7 +144,7 @@ def create_local_profile(
         local_files_only=True,
         trust_remote_code=False,
         dtype=template.dtype or request.dtype,
-        capabilities=template.capabilities.model_copy(deep=True),
+        capabilities=capabilities,
         settings=settings,
     )
 

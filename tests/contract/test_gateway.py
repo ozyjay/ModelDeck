@@ -130,17 +130,26 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         routes = (await client.get("/v1/routes")).json()["routes"]
         native = (await client.get("/native/v1/capabilities")).json()["capabilities"]
 
-    assert models == [
-        {
-            "id": "visitor-chat",
-            "object": "model",
-            "owned_by": "modeldeck-local",
+    assert len(models) == 1
+    model = models[0]
+    assert model == {
+        "id": "visitor-chat",
+        "object": "model",
+        "owned_by": "modeldeck-local",
+        "revision": "revision-1",
+        "ready": False,
+        "runtime": "mock",
+        "accelerator": "mock",
+        "modeldeck": {
+            "model_id": "example/model",
             "revision": "revision-1",
-            "ready": False,
             "runtime": "mock",
-            "accelerator": "mock",
-        }
-    ]
+            "configuration_fingerprint": model["modeldeck"]["configuration_fingerprint"],
+            "prefix_caching": "unsupported",
+            "prefix_cache_enabled": False,
+        },
+    }
+    assert len(model["modeldeck"]["configuration_fingerprint"]) == 64
     assert routes == [
         {"public_name": "visitor-trace", "ready": False},
         {"public_name": "visitor-chat", "ready": False},
@@ -270,7 +279,11 @@ def test_vision_translation_keeps_internal_model_and_scoped_credential(monkeypat
         .model_copy(
             update={
                 "generation_family": "vision-language",
-                "capabilities": {"image_input": True, "structured_output": True},
+                "capabilities": {
+                    "image_input": True,
+                    "structured_output": True,
+                    "cancellation": False,
+                },
             }
         )
         .to_profile()
@@ -417,6 +430,12 @@ async def test_gateway_forwards_openai_tool_fields_without_semantic_routing(monk
         ],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        "modeldeck": {
+            "prefix_cache": {
+                "stable_message_count": 1,
+                "profile_version": "wayfinder-agent-v1",
+            }
+        },
         "stream": False,
     }
     response = await proxy_request(
@@ -549,7 +568,11 @@ async def test_gateway_reports_its_own_timeout_distinctly(monkeypatch) -> None:
         .model_copy(
             update={
                 "generation_family": "vision-language",
-                "capabilities": {"image_input": True, "structured_output": True},
+                "capabilities": {
+                    "image_input": True,
+                    "structured_output": True,
+                    "cancellation": False,
+                },
             }
         )
         .to_profile()
@@ -625,8 +648,9 @@ async def test_gateway_client_disconnect_cancels_the_active_autoregressive_worke
 async def test_gateway_never_fails_over_after_a_stream_has_started(monkeypatch) -> None:
     import modeldeck.gateway.app as gateway_module
 
-    primary = worker().to_profile()
-    backup = worker().model_copy(update={"id": str(uuid4()), "port": 8631}).to_profile()
+    primary_definition = worker().model_copy(update={"capabilities": {"cancellation": False}})
+    primary = primary_definition.to_profile()
+    backup = primary_definition.model_copy(update={"id": str(uuid4()), "port": 8631}).to_profile()
     fake = StreamingFailureClient()
     monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
     request = gateway_request({"model": "visitor-chat", "prompt": "hello", "stream": True})

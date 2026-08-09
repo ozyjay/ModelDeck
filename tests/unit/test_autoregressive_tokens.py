@@ -212,5 +212,11 @@ def test_cached_decoding_honours_cancellation_before_another_forward() -> None:
     cancelled = next(iterator)
 
     assert first["cancelled"] is False
-    assert cancelled == {"step": 1, "cancelled": True, "complete": True, "text_so_far": "one"}
+    assert {key: cancelled[key] for key in ("step", "cancelled", "complete", "text_so_far")} == {
+        "step": 1,
+        "cancelled": True,
+        "complete": True,
+        "text_so_far": "one",
+    }
+    assert cancelled["prefix_cache"]["status"] == "bypass"
     assert engine.model.calls == 1

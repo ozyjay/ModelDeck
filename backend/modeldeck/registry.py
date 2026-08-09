@@ -65,7 +65,7 @@ class RuntimeTemplate(BaseModel):
         enabled_capabilities = {
             name
             for name, value in self.capabilities.model_dump().items()
-            if value is not False and value is not None
+            if value is not False and value is not None and value != "unsupported"
         }
         unsupported_capabilities = enabled_capabilities - implementation.capabilities
         if unsupported_capabilities:

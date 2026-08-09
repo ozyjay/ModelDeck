@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import importlib.metadata
 import inspect
 import json
@@ -21,6 +22,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modeldeck.prefix_cache import (
+    PREFIX_CACHE_MAX_BYTES,
+    PREFIX_CACHE_MAX_TOKENS,
+    supports_wayfinder_prefix_cache,
+)
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
 
@@ -35,6 +41,45 @@ class EngineConfig:
     dtype: str = "float16"
     context_length: int = 2048
     maximum_new_tokens: int = 128
+    prefix_cache_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.context_length > 32_768:
+            raise ValueError("Autoregressive worker context length cannot exceed 32,768 tokens")
+        if self.prefix_cache_enabled and not supports_wayfinder_prefix_cache(self.model_id):
+            raise ValueError("Prefix caching is allowlisted only for the dedicated WayFinder Qwen2.5 models")
+
+
+@dataclass(frozen=True)
+class PreparedPrompt:
+    text: str
+    input_ids: Any
+    attention_mask: Any | None
+    prompt_ids: list[int]
+    prefix_ids: tuple[int, ...] | None = None
+    prefix_identity: str | None = None
+    prefix_bypass_reason: str = "hint_absent"
+
+
+@dataclass(frozen=True)
+class PrefixCacheEntry:
+    identity: str
+    token_ids: tuple[int, ...]
+    cache: Any
+    bytes: int
+
+
+class PrefixCacheHint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stable_message_count: int = Field(ge=1, le=64)
+    profile_version: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ModelDeckRequestExtensions(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prefix_cache: PrefixCacheHint | None = None
 
 
 class ChatMessage(BaseModel):
@@ -91,6 +136,7 @@ class GenerationRequest(BaseModel):
     repetition_penalty: float = Field(default=1.0, ge=0.1, le=3)
     stop: str | list[str] | None = None
     include_hidden_state_summary: bool = False
+    modeldeck: ModelDeckRequestExtensions | None = None
 
     @model_validator(mode="after")
     def prompt_or_messages(self) -> GenerationRequest:
@@ -98,6 +144,14 @@ class GenerationRequest(BaseModel):
             raise ValueError("prompt or messages is required")
         if self.min_tokens > self.max_tokens:
             raise ValueError("min_tokens cannot exceed max_tokens")
+        hint = self.modeldeck.prefix_cache if self.modeldeck else None
+        if hint is not None:
+            if not self.messages:
+                raise ValueError("prefix caching requires a message-based chat request")
+            if hint.stable_message_count >= len(self.messages):
+                raise ValueError("stable_message_count must leave at least one dynamic message")
+            if any(message.role != "system" for message in self.messages[: hint.stable_message_count]):
+                raise ValueError("prefix caching permits only leading system messages in the stable prefix")
         return self
 
 
@@ -130,6 +184,16 @@ class TransformersAutoregressiveEngine:
         self.model: Any = None
         self.device: Any = None
         self._supports_logits_to_keep = False
+        self._load_epoch = uuid.uuid4().hex
+        self._configuration_fingerprint = ""
+        self._prefix_cache_entry: PrefixCacheEntry | None = None
+        self._prefix_cache_counters = {
+            "hits": 0,
+            "misses": 0,
+            "bypasses": 0,
+            "evictions": 0,
+            "clear_events": 0,
+        }
 
     def load(self) -> None:
         import torch
@@ -172,6 +236,14 @@ class TransformersAutoregressiveEngine:
         self.model = model
         self.device = device
         self._supports_logits_to_keep = "logits_to_keep" in inspect.signature(model.forward).parameters
+        self._load_epoch = uuid.uuid4().hex
+        self._configuration_fingerprint = _configuration_fingerprint(
+            config=self.config,
+            model=model,
+            tokenizer=tokenizer,
+            transformers_version=importlib.metadata.version("transformers"),
+        )
+        self.clear_prefix_cache(count_clear=False)
         self.runtime_details = {
             "torch_version": str(torch.__version__),
             "hip_version": torch.version.hip,
@@ -182,6 +254,14 @@ class TransformersAutoregressiveEngine:
             "dtype": self.config.dtype,
             "model_max_context_tokens": supported_context_length,
             "last_token_logits_only": self._supports_logits_to_keep,
+            "configuration_fingerprint": self._configuration_fingerprint,
+            "load_epoch": self._load_epoch,
+            "prefix_caching": (
+                "application-managed"
+                if supports_wayfinder_prefix_cache(self.config.model_id)
+                else "unsupported"
+            ),
+            "prefix_cache_enabled": self.config.prefix_cache_enabled,
         }
 
     def warmup(self) -> None:
@@ -200,6 +280,64 @@ class TransformersAutoregressiveEngine:
             )
         return body.prompt or ""
 
+    def prepare_prompt(self, body: GenerationRequest) -> PreparedPrompt:
+        prompt = self.build_prompt(body)
+        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+        prompt_ids = [int(token_id) for token_id in encoded["input_ids"][0].tolist()]
+        hint = body.modeldeck.prefix_cache if body.modeldeck else None
+        prefix_ids: tuple[int, ...] | None = None
+        prefix_identity: str | None = None
+        bypass_reason = "hint_absent"
+        if hint is not None and not self.config.prefix_cache_enabled:
+            bypass_reason = "disabled"
+        elif hint is not None and not supports_wayfinder_prefix_cache(self.config.model_id):
+            bypass_reason = "unsupported_model"
+        elif hint is not None and body.messages:
+            stable_messages = [
+                message.model_dump(exclude_none=True)
+                for message in body.messages[: hint.stable_message_count]
+            ]
+            try:
+                stable_prompt = self.tokenizer.apply_chat_template(
+                    stable_messages,
+                    tokenize=False,
+                    add_generation_prompt=False,
+                    tools=body.tools,
+                    tool_choice=body.tool_choice,
+                )
+                stable_encoded = self.tokenizer(
+                    stable_prompt,
+                    return_tensors="pt",
+                    add_special_tokens=True,
+                )
+                candidate = tuple(int(token_id) for token_id in stable_encoded["input_ids"][0].tolist())
+            except Exception as error:
+                LOGGER.warning("Stable prefix rendering bypassed error=%s", type(error).__name__)
+                candidate = ()
+                bypass_reason = "render_error"
+            if bypass_reason != "render_error":
+                if not candidate:
+                    bypass_reason = "empty_prefix"
+                elif len(candidate) > PREFIX_CACHE_MAX_TOKENS:
+                    bypass_reason = "prefix_token_limit"
+                elif tuple(prompt_ids[: len(candidate)]) != candidate:
+                    bypass_reason = "rendered_token_mismatch"
+                elif len(candidate) >= len(prompt_ids):
+                    bypass_reason = "dynamic_suffix_empty"
+                else:
+                    prefix_ids = candidate
+                    prefix_identity = self._prefix_identity(candidate, hint.profile_version, body)
+                    bypass_reason = "eligible"
+        return PreparedPrompt(
+            text=prompt,
+            input_ids=encoded["input_ids"],
+            attention_mask=encoded.get("attention_mask"),
+            prompt_ids=prompt_ids,
+            prefix_ids=prefix_ids,
+            prefix_identity=prefix_identity,
+            prefix_bypass_reason=bypass_reason,
+        )
+
     def memory_metrics(self) -> dict[str, int]:
         if self.torch is None or not self.torch.cuda.is_available():
             return {}
@@ -210,11 +348,57 @@ class TransformersAutoregressiveEngine:
             "peak_memory_reserved_bytes": int(self.torch.cuda.max_memory_reserved(0)),
         }
 
-    def validate_token_budget(self, prompt: str, body: GenerationRequest) -> None:
+    def prefix_cache_metrics(self) -> dict[str, Any]:
+        entry = self._prefix_cache_entry
+        return {
+            "prefix_caching": (
+                "application-managed"
+                if supports_wayfinder_prefix_cache(self.config.model_id)
+                else "unsupported"
+            ),
+            "prefix_cache_enabled": self.config.prefix_cache_enabled,
+            "prefix_cache_entries": 1 if entry else 0,
+            "prefix_cache_bytes": entry.bytes if entry else 0,
+            "prefix_cache_tokens": len(entry.token_ids) if entry else 0,
+            **{f"prefix_cache_{name}": value for name, value in self._prefix_cache_counters.items()},
+        }
+
+    def clear_prefix_cache(self, *, count_clear: bool = True) -> dict[str, int]:
+        entry = self._prefix_cache_entry
+        self._prefix_cache_entry = None
+        if count_clear:
+            self._prefix_cache_counters["clear_events"] += 1
+        return {
+            "cleared_entries": 1 if entry else 0,
+            "released_bytes": entry.bytes if entry else 0,
+        }
+
+    def _prefix_identity(
+        self,
+        token_ids: tuple[int, ...],
+        profile_version: str,
+        body: GenerationRequest,
+    ) -> str:
+        payload = {
+            "configuration_fingerprint": self._configuration_fingerprint,
+            "load_epoch": self._load_epoch,
+            "profile_version": profile_version,
+            "token_ids": token_ids,
+            "tools": body.tools,
+            "tool_choice": body.tool_choice,
+            "adapter": None,
+        }
+        return _sha256_document(payload)
+
+    def validate_token_budget(self, prompt: str | PreparedPrompt, body: GenerationRequest) -> None:
         """Reject requests that cannot fit before allocating inference tensors."""
 
-        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-        prompt_tokens = int(encoded["input_ids"].shape[-1])
+        encoded = (
+            prompt.input_ids
+            if isinstance(prompt, PreparedPrompt)
+            else self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)["input_ids"]
+        )
+        prompt_tokens = int(encoded.shape[-1])
         if prompt_tokens + body.max_tokens > self.config.context_length:
             raise ValueError(
                 "Token budget exceeds worker context: "
@@ -225,20 +409,20 @@ class TransformersAutoregressiveEngine:
     def trace(
         self,
         *,
-        prompt: str,
+        prompt: str | PreparedPrompt,
         body: GenerationRequest,
         cancellation: threading.Event,
     ) -> Iterator[dict[str, Any]]:
         torch = self.torch
-        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-        prompt_ids = encoded["input_ids"][0].tolist()
+        prepared = prompt if isinstance(prompt, PreparedPrompt) else self.prepare_prompt(body)
+        prompt_ids = prepared.prompt_ids
         prompt_tokens = _decode_tokens(self.tokenizer, prompt_ids)
         user_prompt = _latest_user_prompt(body)
         user_prompt_ids = _tokenise_without_special_tokens(self.tokenizer, user_prompt)
         user_prompt_tokens = _decode_tokens(self.tokenizer, user_prompt_ids)
-        self.validate_token_budget(prompt, body)
-        sequence = encoded["input_ids"].to(self.device)
-        attention_mask = encoded.get("attention_mask")
+        self.validate_token_budget(prepared, body)
+        sequence = prepared.input_ids.to(self.device)
+        attention_mask = prepared.attention_mask
         if attention_mask is not None:
             attention_mask = attention_mask.to(self.device)
         generated: list[int] = []
@@ -248,31 +432,59 @@ class TransformersAutoregressiveEngine:
         eos_token_ids = _configured_eos_token_ids(self.tokenizer, self.model)
         last_event: dict[str, Any] | None = None
         started = time.perf_counter()
-
+        if cancellation.is_set():
+            yield {
+                "step": 0,
+                "cancelled": True,
+                "complete": True,
+                "text_so_far": text_so_far,
+                "prefix_cache": _prefix_cache_observation(
+                    status="bypass",
+                    reason="cancelled_before_prefill",
+                    total_tokens=len(prompt_ids),
+                ),
+            }
+            return
+        try:
+            output, past_key_values, cache_observation = self._initial_forward(
+                prepared,
+                body,
+                sequence,
+                attention_mask,
+                cancellation,
+            )
+        except _GenerationCancelled:
+            yield {
+                "step": 0,
+                "cancelled": True,
+                "complete": True,
+                "text_so_far": text_so_far,
+                "prefix_cache": _prefix_cache_observation(
+                    status="bypass",
+                    reason="cancelled_during_prefill",
+                    total_tokens=len(prompt_ids),
+                ),
+            }
+            return
         cached_input_ids: Any | None = None
-        past_key_values: Any | None = None
         for step in range(min(body.max_tokens, self.config.maximum_new_tokens)):
             if cancellation.is_set():
-                yield {"step": step, "cancelled": True, "complete": True, "text_so_far": text_so_far}
+                yield {
+                    "step": step,
+                    "cancelled": True,
+                    "complete": True,
+                    "text_so_far": text_so_far,
+                    "prefix_cache": cache_observation,
+                }
                 return
-            forward_arguments = {
-                "input_ids": sequence if cached_input_ids is None else cached_input_ids,
-                "use_cache": True,
-                "output_hidden_states": body.include_hidden_state_summary,
-            }
-            if attention_mask is not None:
-                forward_arguments["attention_mask"] = attention_mask
-            if past_key_values is not None:
-                forward_arguments["past_key_values"] = past_key_values
-            if self._supports_logits_to_keep:
-                forward_arguments["logits_to_keep"] = 1
-            with torch.inference_mode():
-                output = self.model(**forward_arguments)
-            past_key_values = getattr(output, "past_key_values", None)
-            if past_key_values is None:
-                raise RuntimeError(
-                    "The loaded causal language model did not return past_key_values with use_cache=True"
+            if step > 0:
+                output = self._model_forward(
+                    input_ids=cached_input_ids,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    output_hidden_states=body.include_hidden_state_summary,
                 )
+                past_key_values = _required_past_key_values(output)
             logits = output.logits[0, -1].float()
             if body.repetition_penalty != 1 and generated:
                 for token_id in set(generated):
@@ -345,6 +557,7 @@ class TransformersAutoregressiveEngine:
                 "timestamp": time.time(),
                 "elapsed_seconds": round(time.perf_counter() - started, 6),
                 "hidden_state_summary": hidden_summary,
+                "prefix_cache": cache_observation,
                 "cancelled": False,
                 "complete": complete,
             }
@@ -352,6 +565,205 @@ class TransformersAutoregressiveEngine:
             yield event
             if complete:
                 return
+
+    def _initial_forward(
+        self,
+        prepared: PreparedPrompt,
+        body: GenerationRequest,
+        sequence: Any,
+        attention_mask: Any | None,
+        cancellation: threading.Event,
+    ) -> tuple[Any, Any, dict[str, Any]]:
+        total_tokens = len(prepared.prompt_ids)
+        if prepared.prefix_ids is None or prepared.prefix_identity is None:
+            self._prefix_cache_counters["bypasses"] += 1
+            started = time.perf_counter()
+            output = self._model_forward(
+                input_ids=sequence,
+                attention_mask=attention_mask,
+                output_hidden_states=body.include_hidden_state_summary,
+            )
+            return (
+                output,
+                _required_past_key_values(output),
+                _prefix_cache_observation(
+                    status="bypass",
+                    reason=prepared.prefix_bypass_reason,
+                    total_tokens=total_tokens,
+                    suffix_prefill_seconds=time.perf_counter() - started,
+                ),
+            )
+
+        prefix_tokens = len(prepared.prefix_ids)
+        status = "hit"
+        prefix_prefill_seconds = 0.0
+        entry = self._prefix_cache_entry
+        if (
+            entry is None
+            or entry.identity != prepared.prefix_identity
+            or entry.token_ids != prepared.prefix_ids
+        ):
+            status = "miss"
+            self._prefix_cache_counters["misses"] += 1
+            if entry is not None:
+                self._evict_prefix_cache()
+            if cancellation.is_set():
+                raise _GenerationCancelled
+            prefix_sequence = sequence[:, :prefix_tokens]
+            prefix_attention = attention_mask[:, :prefix_tokens] if attention_mask is not None else None
+            prefix_started = time.perf_counter()
+            try:
+                prefix_output = self._model_forward(
+                    input_ids=prefix_sequence,
+                    attention_mask=prefix_attention,
+                    output_hidden_states=False,
+                )
+                prefix_cache = _required_past_key_values(prefix_output)
+                prefix_bytes = _cache_tensor_bytes(prefix_cache)
+                if prefix_bytes > PREFIX_CACHE_MAX_BYTES:
+                    self._prefix_cache_counters["bypasses"] += 1
+                    return self._full_prefill_fallback(
+                        sequence,
+                        attention_mask,
+                        body,
+                        total_tokens=total_tokens,
+                        prefix_tokens=prefix_tokens,
+                        reason="prefix_byte_limit",
+                    )
+                _validate_qwen_dynamic_cache(prefix_cache, expected_tokens=prefix_tokens)
+                self._prefix_cache_entry = PrefixCacheEntry(
+                    identity=prepared.prefix_identity,
+                    token_ids=prepared.prefix_ids,
+                    cache=prefix_cache,
+                    bytes=prefix_bytes,
+                )
+                entry = self._prefix_cache_entry
+                prefix_prefill_seconds = time.perf_counter() - prefix_started
+            except _AcceleratorOutOfMemory:
+                raise
+            except Exception as error:
+                LOGGER.warning("Prefix cache prefill failed error=%s", type(error).__name__)
+                self.clear_prefix_cache()
+                self._prefix_cache_counters["bypasses"] += 1
+                return self._full_prefill_fallback(
+                    sequence,
+                    attention_mask,
+                    body,
+                    total_tokens=total_tokens,
+                    prefix_tokens=prefix_tokens,
+                    reason="cache_error",
+                )
+        else:
+            self._prefix_cache_counters["hits"] += 1
+
+        if cancellation.is_set():
+            raise _GenerationCancelled
+        try:
+            branch = _clone_qwen_dynamic_cache(entry.cache, expected_tokens=prefix_tokens)
+        except Exception as error:
+            LOGGER.warning("Prefix cache branch failed error=%s", type(error).__name__)
+            self.clear_prefix_cache()
+            self._prefix_cache_counters["bypasses"] += 1
+            return self._full_prefill_fallback(
+                sequence,
+                attention_mask,
+                body,
+                total_tokens=total_tokens,
+                prefix_tokens=prefix_tokens,
+                reason="branch_error",
+            )
+        if cancellation.is_set():
+            del branch
+            raise _GenerationCancelled
+        suffix_started = time.perf_counter()
+        suffix = sequence[:, prefix_tokens:]
+        try:
+            output = self._model_forward(
+                input_ids=suffix,
+                attention_mask=attention_mask,
+                past_key_values=branch,
+                output_hidden_states=body.include_hidden_state_summary,
+            )
+        except _AcceleratorOutOfMemory:
+            del branch
+            raise
+        if cancellation.is_set():
+            del output
+            raise _GenerationCancelled
+        return (
+            output,
+            _required_past_key_values(output),
+            _prefix_cache_observation(
+                status=status,
+                reason="exact_prefix",
+                prefix_tokens=prefix_tokens,
+                total_tokens=total_tokens,
+                prefix_prefill_seconds=prefix_prefill_seconds,
+                suffix_prefill_seconds=time.perf_counter() - suffix_started,
+                cache_bytes=entry.bytes,
+            ),
+        )
+
+    def _full_prefill_fallback(
+        self,
+        sequence: Any,
+        attention_mask: Any | None,
+        body: GenerationRequest,
+        *,
+        total_tokens: int,
+        prefix_tokens: int,
+        reason: str,
+    ) -> tuple[Any, Any, dict[str, Any]]:
+        started = time.perf_counter()
+        output = self._model_forward(
+            input_ids=sequence,
+            attention_mask=attention_mask,
+            output_hidden_states=body.include_hidden_state_summary,
+        )
+        return (
+            output,
+            _required_past_key_values(output),
+            _prefix_cache_observation(
+                status="bypass",
+                reason=reason,
+                prefix_tokens=prefix_tokens,
+                total_tokens=total_tokens,
+                suffix_prefill_seconds=time.perf_counter() - started,
+            ),
+        )
+
+    def _model_forward(
+        self,
+        *,
+        input_ids: Any,
+        attention_mask: Any | None,
+        output_hidden_states: bool,
+        past_key_values: Any | None = None,
+    ) -> Any:
+        arguments = {
+            "input_ids": input_ids,
+            "use_cache": True,
+            "output_hidden_states": output_hidden_states,
+        }
+        if attention_mask is not None:
+            arguments["attention_mask"] = attention_mask
+        if past_key_values is not None:
+            arguments["past_key_values"] = past_key_values
+        if self._supports_logits_to_keep:
+            arguments["logits_to_keep"] = 1
+        try:
+            with self.torch.inference_mode():
+                return self.model(**arguments)
+        except getattr(self.torch, "OutOfMemoryError", MemoryError) as error:
+            self.clear_prefix_cache()
+            if self.torch.cuda.is_available():
+                self.torch.cuda.empty_cache()
+            raise _AcceleratorOutOfMemory from error
+
+    def _evict_prefix_cache(self) -> None:
+        if self._prefix_cache_entry is not None:
+            self._prefix_cache_entry = None
+            self._prefix_cache_counters["evictions"] += 1
 
     def _apply_top_p(self, probabilities: Any, top_p: float) -> Any:
         if top_p >= 1:
@@ -363,6 +775,120 @@ class TransformersAutoregressiveEngine:
         sorted_probabilities[remove] = 0
         filtered = torch.zeros_like(probabilities).scatter(0, sorted_indices, sorted_probabilities)
         return filtered / filtered.sum()
+
+
+class _GenerationCancelled(Exception):
+    pass
+
+
+class _AcceleratorOutOfMemory(Exception):
+    pass
+
+
+def _sha256_document(document: Any) -> str:
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _configuration_fingerprint(
+    *,
+    config: EngineConfig,
+    model: Any,
+    tokenizer: Any,
+    transformers_version: str,
+) -> str:
+    model_config = getattr(model, "config", None)
+    model_document = model_config.to_dict() if hasattr(model_config, "to_dict") else str(model_config)
+    return _sha256_document(
+        {
+            "model_id": config.model_id,
+            "revision": config.revision,
+            "dtype": config.dtype,
+            "context_length": config.context_length,
+            "transformers_version": transformers_version,
+            "model_config": model_document,
+            "tokenizer_class": type(tokenizer).__name__,
+            "tokenizer_init": getattr(tokenizer, "init_kwargs", {}),
+            "special_tokens": getattr(tokenizer, "special_tokens_map", {}),
+            "chat_template": getattr(tokenizer, "chat_template", None),
+            "adapter": None,
+        }
+    )
+
+
+def _required_past_key_values(output: Any) -> Any:
+    past_key_values = getattr(output, "past_key_values", None)
+    if past_key_values is None:
+        raise RuntimeError(
+            "The loaded causal language model did not return past_key_values with use_cache=True"
+        )
+    return past_key_values
+
+
+def _cache_tensor_bytes(cache: Any) -> int:
+    total = 0
+    for layer in getattr(cache, "layers", ()):  # Qwen uses one DynamicLayer per decoder layer.
+        for name in ("keys", "values"):
+            tensor = getattr(layer, name, None)
+            if tensor is not None and hasattr(tensor, "numel") and hasattr(tensor, "element_size"):
+                total += int(tensor.numel()) * int(tensor.element_size())
+    return total
+
+
+def _validate_qwen_dynamic_cache(cache: Any, *, expected_tokens: int) -> None:
+    from transformers.cache_utils import DynamicCache, DynamicLayer
+
+    if not isinstance(cache, DynamicCache) or not cache.layers:
+        raise TypeError("Qwen prefix caching requires a populated Transformers DynamicCache")
+    if any(not isinstance(layer, DynamicLayer) for layer in cache.layers):
+        raise TypeError("Qwen prefix caching supports only full-attention DynamicLayer entries")
+    if int(cache.get_seq_length()) != expected_tokens:
+        raise ValueError("Qwen prefix cache sequence length does not match the rendered prefix")
+    if _cache_tensor_bytes(cache) <= 0:
+        raise ValueError("Qwen prefix cache contains no key/value tensors")
+
+
+def _clone_qwen_dynamic_cache(cache: Any, *, expected_tokens: int) -> Any:
+    from transformers.cache_utils import DynamicCache, DynamicLayer
+
+    _validate_qwen_dynamic_cache(cache, expected_tokens=expected_tokens)
+    branch = DynamicCache()
+    for source in cache.layers:
+        target = DynamicLayer()
+        target.lazy_initialization(source.keys, source.values)
+        target.keys = source.keys.clone()
+        target.values = source.values.clone()
+        if (
+            target.keys.data_ptr() == source.keys.data_ptr()
+            or target.values.data_ptr() == source.values.data_ptr()
+        ):
+            raise RuntimeError("Qwen prefix cache branch shares tensor storage with the immutable base")
+        branch.layers.append(target)
+    _validate_qwen_dynamic_cache(branch, expected_tokens=expected_tokens)
+    if int(cache.get_seq_length()) != expected_tokens:
+        raise RuntimeError("Qwen prefix cache base was mutated while creating a request branch")
+    return branch
+
+
+def _prefix_cache_observation(
+    *,
+    status: str,
+    reason: str,
+    total_tokens: int,
+    prefix_tokens: int = 0,
+    prefix_prefill_seconds: float = 0.0,
+    suffix_prefill_seconds: float = 0.0,
+    cache_bytes: int = 0,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "reason": reason,
+        "prefix_tokens": prefix_tokens,
+        "total_input_tokens": total_tokens,
+        "prefix_prefill_seconds": round(prefix_prefill_seconds, 6),
+        "suffix_prefill_seconds": round(suffix_prefill_seconds, 6),
+        "cache_bytes": cache_bytes,
+    }
 
 
 class _RequestBodyTooLarge(Exception):
@@ -473,6 +999,9 @@ def create_app(
             "rocm_version": details.get("hip_version"),
             "ready": request.app.state.ready,
             "error": request.app.state.load_error,
+            "configuration_fingerprint": details.get("configuration_fingerprint"),
+            "prefix_caching": details.get("prefix_caching", "unsupported"),
+            "prefix_cache_enabled": details.get("prefix_cache_enabled", False),
         }
 
     @app.get("/capabilities")
@@ -486,6 +1015,10 @@ def create_app(
             top_k_trace=True,
             hidden_states="optional",
             seeded_generation=True,
+            prefix_caching=(
+                "application-managed" if supports_wayfinder_prefix_cache(config.model_id) else "unsupported"
+            ),
+            prefix_cache_enabled=config.prefix_cache_enabled,
         )
         return {
             "protocol_version": "1",
@@ -496,9 +1029,11 @@ def create_app(
     @app.get("/metrics")
     async def metrics(request: Request) -> dict[str, Any]:
         memory_metrics = getattr(runtime, "memory_metrics", lambda: {})()
+        prefix_metrics = getattr(runtime, "prefix_cache_metrics", lambda: {})()
         return {
             **runtime.runtime_details,
             **memory_metrics,
+            **prefix_metrics,
             "requests": request.app.state.requests,
             "cancelled_requests": request.app.state.cancelled_requests,
             "busy": request.app.state.generation_lock.locked(),
@@ -549,9 +1084,20 @@ def create_app(
         request.app.state.worker_state = WorkerState.STOPPING
         for cancellation in request.app.state.cancellations.values():
             cancellation.set()
+        clear_prefix_cache = getattr(runtime, "clear_prefix_cache", None)
+        if callable(clear_prefix_cache):
+            clear_prefix_cache()
         if request.app.state.shutdown_callback:
             asyncio.get_running_loop().call_later(0.05, request.app.state.shutdown_callback)
         return {"ok": True}
+
+    @app.post("/prefix-cache/clear")
+    async def clear_prefix_cache(request: Request) -> dict[str, Any]:
+        if request.app.state.generation_lock.locked():
+            raise HTTPException(409, "Wait for active generation before clearing the prefix cache")
+        clear = getattr(runtime, "clear_prefix_cache", None)
+        result = clear() if callable(clear) else {"cleared_entries": 0, "released_bytes": 0}
+        return {"ok": True, **result}
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request, body: GenerationRequest):
@@ -581,7 +1127,8 @@ async def _trace_response(request: Request, body: GenerationRequest, engine: Aut
     _ensure_ready(request)
     request_id = body.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
     body.request_id = request_id
-    prompt = engine.build_prompt(body)
+    prepare_prompt = getattr(engine, "prepare_prompt", None)
+    prompt = prepare_prompt(body) if callable(prepare_prompt) else engine.build_prompt(body)
     validate_token_budget = getattr(engine, "validate_token_budget", None)
     if callable(validate_token_budget):
         try:
@@ -600,10 +1147,18 @@ async def _trace_response(request: Request, body: GenerationRequest, engine: Aut
         request.app.state.worker_state = WorkerState.BUSY
         started = time.perf_counter()
         try:
-            events = await asyncio.to_thread(
-                list,
-                engine.trace(prompt=prompt, body=body, cancellation=cancellation),
-            )
+            try:
+                events = await asyncio.to_thread(
+                    list,
+                    engine.trace(prompt=prompt, body=body, cancellation=cancellation),
+                )
+            except _AcceleratorOutOfMemory:
+                LOGGER.error("Inference failed request_id=%s reason=accelerator_out_of_memory", request_id)
+                return _error_response(
+                    503,
+                    "inference_memory_exhausted",
+                    "Local inference stopped because accelerator memory was exhausted.",
+                )
             token_metadata = _trace_token_metadata(events)
             request.app.state.requests += 1
             return {
@@ -670,7 +1225,22 @@ async def _stream_trace(
         iterator = engine.trace(prompt=prompt, body=body, cancellation=cancellation)
         try:
             while True:
-                event = await asyncio.to_thread(_next_event, iterator)
+                try:
+                    event = await asyncio.to_thread(_next_event, iterator)
+                except _AcceleratorOutOfMemory:
+                    LOGGER.error(
+                        "Inference failed request_id=%s reason=accelerator_out_of_memory",
+                        request_id,
+                    )
+                    payload = {
+                        "request_id": request_id,
+                        "error": {
+                            "code": "inference_memory_exhausted",
+                            "message": "Local inference stopped because accelerator memory was exhausted.",
+                        },
+                    }
+                    yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                    return
                 if event is None:
                     break
                 name = "cancelled" if event.get("cancelled") else "token"
@@ -821,12 +1391,16 @@ def _request_metrics(events: list[dict[str, Any]], started: float) -> dict[str, 
     total = time.perf_counter() - started
     generated = len([event for event in events if event.get("selected")])
     first = events[0].get("elapsed_seconds") if events else None
+    cache_metrics = events[0].get("prefix_cache", {}) if events else {}
     return {
         "first_token_seconds": first,
         "total_seconds": round(total, 6),
+        "decode_seconds": round(max(total - float(first or 0), 0), 6) if first is not None else None,
         "generated_tokens": generated,
         "tokens_per_second": round(generated / total, 4) if total else None,
+        "output_tokens_per_second": round(generated / total, 4) if total else None,
         "cancelled": any(event.get("cancelled") for event in events),
+        "prefix_cache": cache_metrics,
     }
 
 
@@ -858,6 +1432,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", choices=("float16", "bfloat16", "float32"), default="float16")
     parser.add_argument("--context-length", type=int, default=2048)
     parser.add_argument("--maximum-new-tokens", type=int, default=128)
+    parser.add_argument("--prefix-cache-enabled", action="store_true")
     return parser.parse_args()
 
 
@@ -869,6 +1444,7 @@ def main() -> None:
         dtype=args.dtype,
         context_length=args.context_length,
         maximum_new_tokens=args.maximum_new_tokens,
+        prefix_cache_enabled=args.prefix_cache_enabled,
     )
     app = create_app(worker_id=args.worker_id, config=config)
     server = uvicorn.Server(

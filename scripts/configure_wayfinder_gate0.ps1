@@ -2,7 +2,8 @@
 param(
     [string]$ManagementUrl = 'http://127.0.0.1:3600',
     [string]$FastWorkerName = 'WayFinder Qwen2.5 0.5B Instruct',
-    [string]$DeepWorkerName = 'WayFinder Qwen2.5 3B Instruct'
+    [string]$DeepWorkerName = 'WayFinder Qwen2.5 3B Instruct',
+    [switch]$EnablePrefixCache
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,8 +23,8 @@ function Resolve-WayFinderWorker {
 
     $existing = $workers | Where-Object { $_.name -eq $Name -and $_.model_id -eq $ModelId } | Select-Object -First 1
     if ($existing) {
-        if ($existing.settings.context_length -ne 32768 -or $existing.settings.maximum_new_tokens -ne 4096) {
-            throw "Existing WayFinder Worker '$Name' must use context_length=32768 and maximum_new_tokens=4096. Create a replacement rather than changing a shared Worker."
+        if ($existing.settings.context_length -ne 32768 -or $existing.settings.maximum_new_tokens -ne 4096 -or [bool]$existing.settings.prefix_cache_enabled -ne [bool]$EnablePrefixCache) {
+            throw "Existing WayFinder Worker '$Name' does not match the requested context, output, or prefix-cache configuration. Create a replacement rather than changing a shared Worker."
         }
         return $existing
     }
@@ -40,6 +41,7 @@ function Resolve-WayFinderWorker {
         runtime_template_id = 'autoregressive-transformers'
         context_length = 32768
         maximum_new_tokens = 4096
+        prefix_cache_enabled = [bool]$EnablePrefixCache
     } | ConvertTo-Json)
     $script:workers = @($workers) + @($created)
     return $created
