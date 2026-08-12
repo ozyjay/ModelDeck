@@ -41,12 +41,12 @@ New-Item -ItemType Directory -Force -Path $DataPath | Out-Null
 $Python = if (Test-Path '.venv/bin/python') { '.venv/bin/python' } else { '.venv/Scripts/python.exe' }
 if (-not (Test-Path $Python)) { throw 'Run scripts/setup.ps1 before the v2 cut-over.' }
 
-if ($PSCmdlet.ShouldProcess((Join-Path $DataPath 'modeldeck.sqlite3'), 'Initialise the empty v3 database')) {
+if ($PSCmdlet.ShouldProcess((Join-Path $DataPath 'modeldeck.sqlite3'), 'Initialise the empty v4 database')) {
     $PreviousDataDirectory = $Env:MODELDECK_DATA_DIR
     try {
         $Env:MODELDECK_DATA_DIR = $DataPath
-        & $Python -c 'from modeldeck.compatibility import CompatibilityStore; from modeldeck.config import Settings; s=Settings.from_env(); CompatibilityStore(s.data_dir / "modeldeck.sqlite3").initialise_v3()'
-        if ($LASTEXITCODE -ne 0) { throw 'The empty v3 database could not be initialised.' }
+        & $Python -c 'from modeldeck.compatibility import CompatibilityStore; from modeldeck.config import Settings; s=Settings.from_env(); CompatibilityStore(s.data_dir / "modeldeck.sqlite3").initialise_v4()'
+        if ($LASTEXITCODE -ne 0) { throw 'The empty v4 database could not be initialised.' }
     }
     finally {
         if ($null -eq $PreviousDataDirectory) { Remove-Item Env:MODELDECK_DATA_DIR -ErrorAction SilentlyContinue }
@@ -54,5 +54,5 @@ if ($PSCmdlet.ShouldProcess((Join-Path $DataPath 'modeldeck.sqlite3'), 'Initiali
     }
 }
 
-Write-Host "ModelDeck v3 is ready. Legacy database backup: $BackupPath"
+Write-Host "ModelDeck v4 is ready. Legacy database backup: $BackupPath"
 Write-Host 'Model caches, benchmark output, runtime manifests and logs were not changed.'

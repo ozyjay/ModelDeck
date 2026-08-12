@@ -23,6 +23,11 @@ FINGERPRINT_FIELDS = (
     "quantisation",
     "dtype",
     "runtime",
+    "capability_id",
+    "protocol_contract_id",
+    "runtime_template_id",
+    "runtime_template_version",
+    "worker_configuration_fingerprint",
     "environment_overrides",
 )
 
@@ -74,9 +79,13 @@ class CompatibilityStore:
         self.path = path
 
     def initialise(self) -> None:
-        self.initialise_v3()
+        self.initialise_v4()
 
     def initialise_v3(self) -> None:
+        """Compatibility alias for callers creating a new current database."""
+        self.initialise_v4()
+
+    def initialise_v4(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as database:
             tables = {
@@ -97,8 +106,10 @@ class CompatibilityStore:
                     raise LegacyDatabaseError("The ModelDeck database schema has no version")
                 if str(row[0]) == "2":
                     raise LegacyDatabaseError("Run scripts/migrate_v2_to_v3.ps1 before starting ModelDeck.")
-                if str(row[0]) != "3":
-                    raise LegacyDatabaseError("The ModelDeck database schema is not version 3")
+                if str(row[0]) == "3":
+                    raise LegacyDatabaseError("Run scripts/migrate_v3_to_v4.ps1 before starting ModelDeck.")
+                if str(row[0]) != "4":
+                    raise LegacyDatabaseError("The ModelDeck database schema is not version 4")
             database.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -158,6 +169,14 @@ class CompatibilityStore:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (model_id, revision)
                 );
+                CREATE TABLE IF NOT EXISTS model_capability_policy (
+                    model_id TEXT NOT NULL,
+                    revision TEXT NOT NULL,
+                    capability_id TEXT NOT NULL,
+                    allowed INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (model_id, revision, capability_id)
+                );
                 CREATE TABLE IF NOT EXISTS compatibility_tests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     fingerprint TEXT NOT NULL,
@@ -174,12 +193,12 @@ class CompatibilityStore:
             )
             now = _now()
             database.execute(
-                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '3', ?) "
+                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '4', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 (now,),
             )
-            # Keep existing v3 installations live while moving from the original
-            # singleton activation model to an explicit set of active profiles.
+            # Keep installations migrated from the original singleton activation
+            # model live with an explicit set of active profiles.
             # The old table remains readable for local downgrade diagnostics.
             database.execute(
                 "INSERT OR IGNORE INTO active_routing_profiles "
@@ -505,6 +524,35 @@ class CompatibilityStore:
                 "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
                 "allowed = excluded.allowed, updated_at = excluded.updated_at",
                 (model_id, revision, int(allowed), _now()),
+            )
+
+    def list_model_capability_policy(self) -> dict[tuple[str, str, str], bool]:
+        if not self.path.exists():
+            return {}
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT model_id, revision, capability_id, allowed FROM model_capability_policy"
+            ).fetchall()
+        return {(str(row[0]), str(row[1]), str(row[2])): bool(row[3]) for row in rows}
+
+    def model_capability_allowed(self, model_id: str, revision: str, capability_id: str) -> bool:
+        return self.list_model_capability_policy().get((model_id, revision, capability_id), False)
+
+    def set_model_capability_allowed(
+        self,
+        model_id: str,
+        revision: str,
+        capability_id: str,
+        *,
+        allowed: bool,
+    ) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO model_capability_policy "
+                "(model_id, revision, capability_id, allowed, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(model_id, revision, capability_id) "
+                "DO UPDATE SET allowed = excluded.allowed, updated_at = excluded.updated_at",
+                (model_id, revision, capability_id, int(allowed), _now()),
             )
 
     def list_tests(self) -> list[dict[str, Any]]:

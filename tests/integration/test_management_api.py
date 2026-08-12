@@ -3,6 +3,8 @@ from __future__ import annotations
 from uuid import uuid4
 
 import httpx
+import modeldeck.main as main_module
+import modeldeck.v2_api as v2_api_module
 import pytest
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
@@ -53,6 +55,44 @@ def profile_document(worker_id: str, *, name: str = "Local applications") -> dic
     }
 
 
+def discovered_model(*, runtime: str | None = None) -> dict:
+    return {
+        "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+        "revision": "revision-1",
+        "cache_location": "/cache/model",
+        "snapshot_location": "/cache/model/snapshots/revision-1",
+        "physical_size_bytes": 1,
+        "download_state": "installed-untested",
+        "generation_family_hint": "autoregressive",
+        "capability_hints": ["text-generation", "chat"],
+        "configuration_support": runtime,
+        "configuration_support_reason": "Local test candidate",
+        "base_model_id": None,
+        "base_model_revision": None,
+        "runnable": False,
+        "runnable_reason": "Not tested",
+        "artifacts": [],
+        "potential_capabilities": [
+            {
+                "id": "autoregressive-trace",
+                "display_name": "Autoregressive trace",
+                "description": "Native token traces.",
+                "protocol_contract_id": "native-ar-trace-v1",
+                "traits": ["text-input", "text-output", "token-trace"],
+                "evidence": [
+                    {
+                        "kind": "detected",
+                        "confidence": "direct",
+                        "source": "test",
+                        "detail": "Exact local test fixture.",
+                    }
+                ],
+                "runtime_template_ids": [runtime] if runtime else [],
+            }
+        ],
+    }
+
+
 @pytest.mark.asyncio
 async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
@@ -65,7 +105,7 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
             profiles = await client.get("/api/routing-profiles")
             live = await client.get("/api/live")
 
-    assert health.json()["schema_version"] == 3
+    assert health.json()["schema_version"] == 4
     assert health.json()["configuration_locked"] is False
     assert health.json()["offline_only"] is True
     assert workers.json() == []
@@ -89,6 +129,119 @@ async def test_management_has_no_public_event_or_mock_worker_api(tmp_path) -> No
     assert event_api.status_code == 404
     assert templates.status_code == 404
     assert create_mock.status_code in {404, 405}
+
+
+@pytest.mark.asyncio
+async def test_capability_policy_records_missing_runtime_intent_and_master_denial(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [discovered_model()])
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            allowed = await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "revision": "revision-1",
+                    "capability_id": "autoregressive-trace",
+                    "allowed": True,
+                },
+            )
+            await client.post(
+                "/api/catalogue/policy",
+                json={
+                    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "revision": "revision-1",
+                    "allowed": False,
+                },
+            )
+            catalogue = (await client.get("/api/catalogue")).json()["models"][0]
+
+    capability = catalogue["potential_capabilities"][0]
+    assert allowed.status_code == 200
+    assert capability["policy_allowed"] is True
+    assert capability["effective_allowed"] is False
+    assert capability["runtime_status"] == "missing"
+    assert capability["reason"] == "This cached Model is disallowed in ModelDeck."
+
+
+@pytest.mark.asyncio
+async def test_disallowing_capability_reports_current_profile_references(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "discover_huggingface_models",
+        lambda: [discovered_model(runtime="autoregressive-transformers")],
+    )
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise_v4()
+    worker = worker_definition()
+    store.save_worker_definition(worker.model_dump(mode="json"))
+    profile = profile_document(worker.id)
+    store.save_routing_profile_draft(profile)
+    store.set_model_capability_allowed(worker.model_id, worker.revision, "autoregressive-trace", allowed=True)
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": worker.model_id,
+                    "revision": worker.revision,
+                    "capability_id": "autoregressive-trace",
+                    "allowed": False,
+                },
+            )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["references"][0]["kind"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monkeypatch) -> None:
+    cache_root = tmp_path / "cache"
+    snapshot = cache_root / "model" / "snapshots" / "revision-1"
+    snapshot.mkdir(parents=True)
+    model = {
+        **discovered_model(runtime="autoregressive-transformers"),
+        "cache_location": str(cache_root / "model"),
+        "snapshot_location": str(snapshot),
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [model])
+    monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    request = {
+        "name": "Allowed trace Worker",
+        "model_id": model["model_id"],
+        "revision": model["revision"],
+        "runtime_template_id": "autoregressive-transformers",
+        "capability_id": "autoregressive-trace",
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            denied = await client.post("/api/workers", json=request)
+            await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "capability_id": "autoregressive-trace",
+                    "allowed": True,
+                },
+            )
+            created = await client.post("/api/workers", json=request)
+
+    assert denied.status_code == 409
+    assert denied.json()["detail"] == "Allow this capability before creating a Worker"
+    assert created.status_code == 201
+    assert created.json()["capability_policy_version"] == 4
 
 
 @pytest.mark.asyncio

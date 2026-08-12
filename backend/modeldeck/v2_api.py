@@ -10,6 +10,13 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from modeldeck.capabilities import (
+    CAPABILITY_DEFINITIONS,
+    capabilities_for_worker,
+    compatible_runtime_template_ids,
+    worker_cache_identity,
+    worker_configuration_fingerprint,
+)
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.config import gateway_base_url
 from modeldeck.domain import (
@@ -47,6 +54,7 @@ class WorkerCreateRequest(BaseModel):
     artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
     prefix_cache_enabled: bool = False
+    capability_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
 class WorkerRenameRequest(BaseModel):
@@ -127,7 +135,34 @@ def create_v3_router() -> APIRouter:
             raise HTTPException(409, "Allow this cached Model before creating a Worker")
         support = cached.get("configuration_support")
         template_id = payload.runtime_template_id or support
+        candidates = cached.get("potential_capabilities", [])
         registrations = request.app.state.runtime_registrations
+        candidate_templates = {
+            item["id"]: compatible_runtime_template_ids(item["id"], support, registrations)
+            for item in candidates
+        }
+        if payload.capability_id is not None:
+            selected_capability = next(
+                (item for item in candidates if item["id"] == payload.capability_id), None
+            )
+            if selected_capability is None:
+                raise HTTPException(409, "That capability is not recognised for this Model")
+            if not store.model_capability_allowed(payload.model_id, payload.revision, payload.capability_id):
+                raise HTTPException(409, "Allow this capability before creating a Worker")
+            if template_id not in candidate_templates[selected_capability["id"]]:
+                raise HTTPException(409, "Select a trusted runtime listed for the requested capability")
+        else:
+            allowed_candidates = [
+                item
+                for item in candidates
+                if template_id in candidate_templates[item["id"]]
+                and store.model_capability_allowed(payload.model_id, payload.revision, item["id"])
+            ]
+            if not allowed_candidates:
+                raise HTTPException(
+                    409,
+                    "Allow a capability exposed by the selected runtime, or supply capability_id",
+                )
         baseline = registrations.get(support) if support else None
         selected = registrations.get(template_id) if template_id else None
         if baseline is None or selected is None:
@@ -410,6 +445,127 @@ def create_v3_router() -> APIRouter:
         record = request.app.state.compatibility_store.record_test(
             evidence, result=result, failure_class=failure_class
         )
+        return {"ok": result == "tested-working", "worker_id": worker_id, "test": record}
+
+    @router.post("/workers/{worker_id}/capabilities/{capability_id}/qualify")
+    async def qualify_worker_capability(worker_id: str, capability_id: str, request: Request):
+        definition = _require_worker(request, worker_id)
+        model_id, revision = worker_cache_identity(definition.model_dump(mode="json"))
+        cached = next(
+            (
+                model
+                for model in discover_huggingface_models()
+                if model["model_id"] == model_id
+                and model["revision"] == revision
+                and model["download_state"] == "installed-untested"
+            ),
+            None,
+        )
+        if cached is None:
+            raise HTTPException(409, "The Worker's exact cached Model revision is unavailable")
+        candidate = next(
+            (item for item in cached.get("potential_capabilities", []) if item["id"] == capability_id),
+            None,
+        )
+        compatible_templates = (
+            compatible_runtime_template_ids(
+                capability_id,
+                cached.get("configuration_support"),
+                request.app.state.runtime_registrations,
+            )
+            if candidate is not None
+            else []
+        )
+        if candidate is None or definition.runtime_template_id not in compatible_templates:
+            raise HTTPException(409, "This Worker has no trusted adapter for that capability")
+        store = request.app.state.compatibility_store
+        if not store.model_cache_allowed(model_id, revision) or not store.model_capability_allowed(
+            model_id, revision, capability_id
+        ):
+            raise HTTPException(409, "Allow this Model capability before qualifying it")
+        worker = request.app.state.supervisor.get_worker(worker_id)
+        if worker["state"] != "ready":
+            raise HTTPException(409, "Worker must be ready before qualification")
+        capability = CAPABILITY_DEFINITIONS[capability_id]
+        if capability.protocol_contract_id is None:
+            raise HTTPException(409, "This capability has no qualification contract")
+        started = asyncio.get_running_loop().time()
+        health_payload: dict[str, object] = {}
+        model_payload: dict[str, object] = {}
+        metrics_payload: dict[str, object] = {}
+        generation_payload: dict[str, object] = {}
+        try:
+            path, body, headers = _worker_capability_request(definition, capability_id)
+            async with httpx.AsyncClient(
+                timeout=_capability_smoke_timeout(capability.protocol_contract_id, request)
+            ) as client:
+                health_response, model_response, metrics_response = await asyncio.gather(
+                    client.get(f"{worker['endpoint']}/health"),
+                    client.get(f"{worker['endpoint']}/model"),
+                    client.get(f"{worker['endpoint']}/metrics"),
+                )
+                generation_response = await client.post(
+                    f"{worker['endpoint']}{path}", json=body, headers=headers
+                )
+                for response in (
+                    health_response,
+                    model_response,
+                    metrics_response,
+                    generation_response,
+                ):
+                    response.raise_for_status()
+                health_payload = health_response.json()
+                model_payload = model_response.json()
+                metrics_payload = metrics_response.json()
+                generation_payload = generation_response.json()
+                if health_payload.get("ready") is not True:
+                    raise RuntimeError("Worker health did not report ready")
+                if not _has_smoke_evidence(definition, generation_payload):
+                    raise RuntimeError("Qualification response contained no valid Worker evidence")
+            result = "tested-working"
+            failure_class = None
+            error_summary = None
+        except (httpx.HTTPError, ValueError, RuntimeError) as error:
+            result = "transient-failure"
+            failure_class = "capability-qualification-failure"
+            error_summary = f"{type(error).__name__}: {error}"
+        probe = await asyncio.to_thread(probe_environment)
+        detected = probe["detected"]
+        evidence = {
+            "worker_id": definition.id,
+            "capability_id": capability_id,
+            "protocol_contract_id": capability.protocol_contract_id,
+            "runtime_template_id": definition.runtime_template_id,
+            "runtime_template_version": definition.runtime_template_version,
+            "worker_configuration_fingerprint": worker_configuration_fingerprint(
+                definition.model_dump(mode="json")
+            ),
+            "hardware_profile": probe["configured"]["profile_id"],
+            "fedora_version": detected.get("fedora_release"),
+            "kernel": detected.get("kernel"),
+            "gpu": health_payload.get("device_name"),
+            "gpu_architecture": probe["configured"].get("gpu_architecture"),
+            "rocm_version": health_payload.get("rocm_version"),
+            "torch_version": metrics_payload.get("torch_version"),
+            "transformers_version": metrics_payload.get("transformers_version"),
+            "vllm_version": metrics_payload.get("vllm_version"),
+            "model_id": model_id,
+            "model_revision": revision,
+            "reported_model_id": model_payload.get("model_id", definition.model_id),
+            "reported_model_revision": model_payload.get("revision", definition.revision),
+            "quantisation": model_payload.get("quantization", "none"),
+            "dtype": model_payload.get("dtype", definition.dtype),
+            "runtime": definition.runtime,
+            "environment_overrides": {
+                key: os.environ.get(key) for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "LD_PRELOAD")
+            },
+            "load_result": "success" if health_payload.get("ready") else "not-confirmed",
+            "warmup_result": "success" if health_payload.get("ready") else "not-confirmed",
+            "smoke_result": "success" if result == "tested-working" else "failed",
+            "test_duration_seconds": round(asyncio.get_running_loop().time() - started, 4),
+            "error_summary": error_summary,
+        }
+        record = store.record_test(evidence, result=result, failure_class=failure_class)
         return {"ok": result == "tested-working", "worker_id": worker_id, "test": record}
 
     @router.get("/routing-profiles")
@@ -737,7 +893,29 @@ def _routing_profile_definition(profile_id: str, request: Request) -> RoutingPro
 
 def _validate(definition: RoutingProfile, request: Request):
     workers = list(request.app.state.worker_definitions.values())
-    return validate_routing_profile(definition, workers, request.app.state.compatibility_store.list_tests())
+    store = request.app.state.compatibility_store
+    model_policy = store.list_model_cache_policy()
+    stored_policy = store.list_model_capability_policy()
+    effective_policy = {
+        key: value and model_policy.get((key[0], key[1]), True) for key, value in stored_policy.items()
+    }
+    # A pre-v4 Worker is grandfathered only when its model-level master policy
+    # remains allowed. The v3→v4 migration persists the same grants explicitly;
+    # this branch also preserves trusted legacy fixtures and recovery imports.
+    for worker in workers:
+        if worker.capability_policy_version is not None:
+            continue
+        model_id, revision = worker_cache_identity(worker.model_dump(mode="json"))
+        if not model_policy.get((model_id, revision), True):
+            continue
+        for capability_id in capabilities_for_worker(worker.model_dump(mode="json")):
+            effective_policy.setdefault((model_id, revision, capability_id), True)
+    return validate_routing_profile(
+        definition,
+        workers,
+        store.list_tests(),
+        effective_policy,
+    )
 
 
 def _require_mutable(request: Request) -> None:
@@ -832,6 +1010,77 @@ def _capability_smoke_timeout(contract: str, request: Request) -> float:
     if contract.startswith("translation-"):
         return settings.translation_timeout_seconds
     return max(60.0, settings.scenechat_timeout_seconds)
+
+
+def _worker_capability_request(
+    definition: WorkerDefinition, capability_id: str
+) -> tuple[str, dict[str, object] | None, dict[str, str] | None]:
+    model = definition.to_profile().alias
+    if capability_id == "general-chat":
+        return (
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with the word ready."}],
+                "max_tokens": 4,
+                "temperature": 0,
+                "stream": False,
+            },
+            None,
+        )
+    if capability_id == "text-completion":
+        return (
+            "/v1/completions",
+            {
+                "model": model,
+                "prompt": "Reply with the word ready.",
+                "max_tokens": 4,
+                "temperature": 0,
+                "stream": False,
+            },
+            None,
+        )
+    if capability_id == "autoregressive-trace":
+        return (
+            "/native/autoregressive/trace",
+            {
+                "model": model,
+                "prompt": "Reply with the word ready.",
+                "max_tokens": 4,
+                "temperature": 0,
+                "top_k": 3,
+                "seed": 7,
+            },
+            None,
+        )
+    if capability_id == "embeddings":
+        return "/v1/embeddings", {"model": model, "input": ["The local Worker is ready."]}, None
+    if capability_id == "scene-analysis":
+        return (
+            "/native/vision-language/smoke",
+            None,
+            {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")},
+        )
+    if capability_id == "text-refinement":
+        return (
+            "/v1/refine",
+            {
+                "model": model,
+                "prompt": "A local Worker is ready.",
+                "denoising_steps": 4,
+                "seed": 7,
+            },
+            None,
+        )
+    if capability_id == "speech-conversation":
+        return "/smoke", None, None
+    if capability_id in {"translation-en-fr", "translation-en-de"}:
+        return "/native/text-translation/smoke", None, None
+    if capability_id == "speech-synthesis":
+        return "/native/speech-synthesis/smoke", None, None
+    if capability_id == "speech-recognition":
+        return "/native/speech-recognition/smoke", None, None
+    raise HTTPException(409, "This capability has no bounded qualification adapter")
 
 
 def _worker_smoke_request(definition: WorkerDefinition):

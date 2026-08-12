@@ -21,6 +21,7 @@ export interface Worker {
   dtype: string;
   capabilities: Capabilities;
   settings: Record<string, string | number | boolean>;
+  capability_policy_version?: number | null;
   endpoint: string | null;
   pid: number | null;
   started_at: string | null;
@@ -106,6 +107,32 @@ export interface RuntimeTemplate {
 }
 
 export interface ModelArtifact { artifact_id: string; kind: "gguf"; format: string; filenames: string[] }
+export interface CapabilityEvidence {
+  kind: "detected" | "asserted";
+  confidence: "direct" | "inferred";
+  source: string;
+  detail: string;
+  reference?: string;
+  reviewed_at?: string;
+}
+export interface PotentialCapability {
+  id: string;
+  display_name: string;
+  description: string;
+  protocol_contract_id: string | null;
+  traits: string[];
+  evidence: CapabilityEvidence[];
+  runtime_template_ids: string[];
+  available_runtime_template_ids: string[];
+  policy_allowed: boolean;
+  effective_allowed: boolean;
+  runtime_status: "available" | "missing";
+  qualification_status: "not-tested" | "qualified" | "failed" | "stale" | "legacy";
+  qualifying_workers: Array<{ worker_id: string; worker_name: string; evidence_id: number | null; status: string }>;
+  published: boolean;
+  creatable: boolean;
+  reason: string;
+}
 export interface ModelEntry {
   model_id: string;
   revision: string | null;
@@ -123,6 +150,7 @@ export interface ModelEntry {
   runnable: boolean;
   runnable_reason: string;
   worker_count: number;
+  potential_capabilities: PotentialCapability[];
   artifacts?: ModelArtifact[];
 }
 

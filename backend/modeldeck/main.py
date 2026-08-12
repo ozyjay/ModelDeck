@@ -14,6 +14,11 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from modeldeck.capabilities import (
+    capability_evidence_status,
+    compatible_runtime_template_ids,
+    worker_cache_identity,
+)
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
 from modeldeck.config import Settings, gateway_base_url
@@ -39,6 +44,10 @@ class ModelCachePolicyRequest(BaseModel):
     allowed: bool
 
 
+class ModelCapabilityPolicyRequest(ModelCachePolicyRequest):
+    capability_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
+
+
 class LifecycleEvidence(BaseModel):
     shutdown_result: Literal["success", "failed"]
     memory_recovery_result: Literal[
@@ -55,7 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-    store.initialise_v3()
+    store.initialise_v4()
     definitions: dict[str, WorkerDefinition] = {}
     worker_profiles = []
     for record in store.list_workers():
@@ -89,7 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="ModelDeck management API",
-        version="0.3.0",
+        version="0.4.0",
         description="Local-only management for Routing Profiles, capabilities and isolated model Workers.",
         lifespan=lifespan,
     )
@@ -132,7 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "service": "modeldeck-management",
-            "schema_version": 3,
+            "schema_version": 4,
             "configuration_locked": configured.configuration_locked,
             "offline_only": True,
             "gateway_url": gateway_base_url(configured.gateway_host, configured.gateway_port),
@@ -170,31 +179,161 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def catalogue(request: Request):
         models = await asyncio.to_thread(discover_huggingface_models)
         policy = request.app.state.compatibility_store.list_model_cache_policy()
+        capability_policy = request.app.state.compatibility_store.list_model_capability_policy()
+        tests = request.app.state.compatibility_store.list_tests()
+        active_snapshots = request.app.state.compatibility_store.active_routing_snapshots()
 
         def response(model):
             allowed = policy.get((model["model_id"], model["revision"]), True)
-            supported = bool(model.get("configuration_support"))
-            return {
-                **model,
-                "modeldeck_allowed": allowed,
-                "runnable": allowed and supported,
-                "runnable_reason": (
+            model_workers = [
+                definition
+                for definition in request.app.state.worker_definitions.values()
+                if worker_cache_identity(definition.model_dump(mode="json"))
+                == (model["model_id"], model["revision"])
+            ]
+            potential_capabilities = []
+            for candidate in model.get("potential_capabilities", []):
+                stored_allowed = capability_policy.get(
+                    (model["model_id"], model["revision"], candidate["id"]), False
+                )
+                effective_allowed = allowed and stored_allowed
+                available_templates = compatible_runtime_template_ids(
+                    candidate["id"],
+                    model.get("configuration_support"),
+                    request.app.state.runtime_registrations,
+                )
+                qualifying_workers = []
+                statuses = []
+                for worker in model_workers:
+                    if worker.runtime_template_id not in available_templates:
+                        continue
+                    status, evidence_id = capability_evidence_status(
+                        worker.model_dump(mode="json"), candidate["id"], tests
+                    )
+                    statuses.append(status)
+                    qualifying_workers.append(
+                        {
+                            "worker_id": worker.id,
+                            "worker_name": worker.name,
+                            "evidence_id": evidence_id,
+                            "status": status,
+                        }
+                    )
+                qualification_status = next(
+                    (status for status in ("qualified", "legacy", "failed", "stale") if status in statuses),
+                    "not-tested",
+                )
+                published = any(
+                    route.get("protocol_contract") == candidate.get("protocol_contract_id")
+                    and any(worker.id in route.get("worker_ids", []) for worker in model_workers)
+                    for snapshot in active_snapshots
+                    for route in snapshot.get("capabilities", [])
+                )
+                creatable = bool(
+                    model["download_state"] == "installed-untested"
+                    and effective_allowed
+                    and available_templates
+                )
+                reason = (
                     "Ready to create a Worker with an installed trusted runtime."
-                    if allowed and supported
+                    if creatable
                     else "This cached Model is disallowed in ModelDeck."
                     if not allowed
+                    else "Allow this capability before creating a Worker or publishing a route."
+                    if not stored_allowed
+                    else "Allowed; a trusted runtime is required."
+                    if not available_templates
+                    else "Finish the local snapshot before creating a Worker."
+                )
+                potential_capabilities.append(
+                    {
+                        **candidate,
+                        "runtime_template_ids": available_templates,
+                        "policy_allowed": stored_allowed,
+                        "effective_allowed": effective_allowed,
+                        "available_runtime_template_ids": available_templates,
+                        "runtime_status": "available" if available_templates else "missing",
+                        "qualification_status": qualification_status,
+                        "qualifying_workers": qualifying_workers,
+                        "published": published,
+                        "creatable": creatable,
+                        "reason": reason,
+                    }
+                )
+            runnable = any(item["creatable"] for item in potential_capabilities)
+            return {
+                **model,
+                "potential_capabilities": potential_capabilities,
+                "modeldeck_allowed": allowed,
+                "runnable": runnable,
+                "runnable_reason": (
+                    "Ready to create a Worker with an installed trusted runtime."
+                    if runnable
+                    else "This cached Model is disallowed in ModelDeck."
+                    if not allowed
+                    else "Allow at least one runnable capability before creating a Worker."
+                    if any(item["runtime_status"] == "available" for item in potential_capabilities)
                     else model.get("configuration_support_reason")
                     or "No installed trusted runtime recognises this Model."
                 ),
-                "worker_count": sum(
-                    definition.model_id == model["model_id"] and definition.revision == model["revision"]
-                    for definition in request.app.state.worker_definitions.values()
-                ),
+                "worker_count": len(model_workers),
             }
 
         return {
             "models": [response(model) for model in models],
             "downloads_started": False,
+        }
+
+    @app.post("/api/catalogue/capabilities/policy")
+    async def set_catalogue_capability_policy(payload: ModelCapabilityPolicyRequest, request: Request):
+        _require_mutable(request)
+        cached = next(
+            (
+                model
+                for model in discover_huggingface_models()
+                if model["model_id"] == payload.model_id
+                and model["revision"] == payload.revision
+                and model["download_state"] == "installed-untested"
+            ),
+            None,
+        )
+        if cached is None:
+            raise HTTPException(404, "The exact complete cached Model revision was not discovered")
+        candidate = next(
+            (
+                item
+                for item in cached.get("potential_capabilities", [])
+                if item["id"] == payload.capability_id
+            ),
+            None,
+        )
+        if candidate is None:
+            raise HTTPException(409, "That capability is not a recognised candidate for this Model")
+        references = (
+            _capability_policy_references(request, payload.model_id, payload.revision, candidate)
+            if not payload.allowed
+            else []
+        )
+        if references:
+            raise HTTPException(
+                409,
+                {
+                    "message": "Remove this capability from current Routing Profiles before disallowing it",
+                    "references": references,
+                },
+            )
+        request.app.state.compatibility_store.set_model_capability_allowed(
+            payload.model_id,
+            payload.revision,
+            payload.capability_id,
+            allowed=payload.allowed,
+        )
+        return {
+            "ok": True,
+            "model_id": payload.model_id,
+            "revision": payload.revision,
+            "capability_id": payload.capability_id,
+            "allowed": payload.allowed,
         }
 
     @app.post("/api/catalogue/policy")
@@ -336,6 +475,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _require_mutable(request: Request) -> None:
     if request.app.state.settings.configuration_locked:
         raise HTTPException(423, "Configuration is locked by the local deployment policy")
+
+
+def _capability_policy_references(
+    request: Request,
+    model_id: str,
+    revision: str,
+    candidate: dict[str, object],
+) -> list[dict[str, object]]:
+    contract = candidate.get("protocol_contract_id")
+    if not isinstance(contract, str):
+        return []
+    matching_worker_ids = {
+        worker.id
+        for worker in request.app.state.worker_definitions.values()
+        if worker_cache_identity(worker.model_dump(mode="json")) == (model_id, revision)
+    }
+    references: list[dict[str, object]] = []
+    store = request.app.state.compatibility_store
+    for profile in store.list_routing_profiles():
+        definition = profile["definition"]
+        for binding in definition.get("capabilities", []):
+            if binding.get("protocol_contract") == contract and matching_worker_ids.intersection(
+                binding.get("worker_ids", [])
+            ):
+                references.append(
+                    {
+                        "profile_id": definition["id"],
+                        "profile_name": definition["name"],
+                        "capability_id": binding["id"],
+                        "capability_name": binding["display_name"],
+                        "kind": "draft",
+                    }
+                )
+        if not profile["active"] or profile["active_revision"] is None:
+            continue
+        active = store.get_routing_profile_revision(definition["id"], profile["active_revision"])
+        if active is None:
+            continue
+        for binding in active["definition"].get("capabilities", []):
+            if binding.get("protocol_contract") == contract and matching_worker_ids.intersection(
+                binding.get("worker_ids", [])
+            ):
+                references.append(
+                    {
+                        "profile_id": definition["id"],
+                        "profile_name": definition["name"],
+                        "capability_id": binding["id"],
+                        "capability_name": binding["display_name"],
+                        "kind": "active",
+                        "revision": profile["active_revision"],
+                    }
+                )
+    unique = {
+        (reference["profile_id"], reference["capability_id"], reference["kind"]): reference
+        for reference in references
+    }
+    return list(unique.values())
 
 
 def _frontend_index() -> FileResponse | HTMLResponse:

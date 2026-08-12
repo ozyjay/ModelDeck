@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from modeldeck.capabilities import capability_candidates
 from modeldeck.hardware.probe import cache_candidates
 from modeldeck.q4_release import Q4ReleaseError, inspect_modeldeck_q4_release
 from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS, validate_speechshift_snapshot
@@ -117,13 +118,23 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
         return "text-diffusion"
     if (
         "multimodal" in architectures
-        or model_type in {"gemma4", "gemma4_unified"}
+        or model_type in {"gemma4", "gemma4_unified", "qwen3_5"}
         or (config.get("vision_config") and config.get("text_config"))
     ):
         return "vision-language"
     if "causallm" in architectures or config.get("is_decoder"):
         return "autoregressive"
     return None
+
+
+def _transformers_config(snapshot: Path | None) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    try:
+        value = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _capability_hints(generation_family: str | None) -> list[str]:
@@ -259,6 +270,17 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             except Q4ReleaseError:
                 q4_release = None
             generation_family = _generation_family(chosen, repo_id) if chosen else None
+            config = _transformers_config(chosen)
+            potential_capabilities = (
+                capability_candidates(
+                    model_id=repo_id,
+                    generation_family=generation_family,
+                    configuration_support=support,
+                    config=config,
+                )
+                if chosen and complete
+                else []
+            )
             models.append(
                 {
                     "model_id": repo_id,
@@ -269,6 +291,7 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                     "download_state": state,
                     "generation_family_hint": generation_family,
                     "capability_hints": _capability_hints(generation_family),
+                    "potential_capabilities": potential_capabilities,
                     "configuration_support": support,
                     "configuration_support_reason": support_reason,
                     "base_model_id": q4_release.get("base_model_id") if q4_release else None,

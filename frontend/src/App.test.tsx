@@ -32,7 +32,7 @@ const profile: RoutingProfileRecord = {
 function responses(configured = false): Record<string, unknown> {
   const workers = configured ? [worker] : [];
   return {
-    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 3, configuration_locked: false, offline_only: true, gateway_url: "http://127.0.0.1:8600" },
+    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 4, configuration_locked: false, offline_only: true, gateway_url: "http://127.0.0.1:8600" },
     "/api/gateway/status": { available: true, health: { status: "ok", ready_workers: 0 }, models: { data: [] }, routes: { routes: [] }, error: null },
     "/api/hardware": { configured: { profile_id: "framework", os: "Fedora", gpu: "Radeon", gpu_architecture: "gfx1151", rocm_family: "7.2", work_mount: "/mnt/work" }, detected: { fedora_release: "44", kernel: "6.0", python: "3.13", rocm_packages: [], gpu_device_nodes: {}, memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] }, diagnostic_note: "" },
     "/api/telemetry": { memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] },
@@ -99,5 +99,37 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.queryByText(/^Demos$/)).not.toBeInTheDocument();
     expect(screen.getByText("API model ID")).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/routing-profiles")).toBe(true);
+  });
+
+  it("shows potential capability policy, provenance and missing-runtime state", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { downloads_started: false, models: [{
+      model_id: "Qwen/Qwen3.5-4B", revision: "revision-1", cache_location: "/cache/model",
+      snapshot_location: "/cache/model/snapshots/revision-1", physical_size_bytes: 1,
+      download_state: "installed-untested", generation_family_hint: "vision-language",
+      capability_hints: ["image-input", "video-input"], configuration_support: "scenechat-qwen35",
+      configuration_support_reason: "SceneChat available", modeldeck_allowed: true,
+      base_model_id: null, base_model_revision: null, runnable: false,
+      runnable_reason: "No runnable allowed capability", worker_count: 0, artifacts: [],
+      potential_capabilities: [{
+        id: "video-understanding", display_name: "Video understanding",
+        description: "Conversation or analysis grounded in video input.", protocol_contract_id: null,
+        traits: ["video-input", "text-output"], evidence: [{ kind: "asserted", confidence: "direct",
+          source: "reviewed-model-knowledge", detail: "The official family accepts video input.",
+          reference: "https://huggingface.co/Qwen/Qwen3.5-0.8B", reviewed_at: "2026-08-12" }],
+        runtime_template_ids: [], available_runtime_template_ids: [], policy_allowed: true,
+        effective_allowed: true, runtime_status: "missing", qualification_status: "not-tested",
+        qualifying_workers: [], published: false, creatable: false,
+        reason: "Allowed; a trusted runtime is required.",
+      }],
+    }] };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+
+    expect(await screen.findByText("Video understanding")).toBeInTheDocument();
+    expect(screen.getByText("Allowed; a trusted runtime is required.")).toBeInTheDocument();
+    expect(screen.getByText("Evidence and provenance")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disallow" })).toBeInTheDocument();
   });
 });

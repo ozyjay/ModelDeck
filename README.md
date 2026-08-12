@@ -100,23 +100,30 @@ require merely protocol-compatible Workers or matching tested-working evidence. 
 smoke test records successful or failed generation evidence against the detected hardware,
 runtime, library and pinned Model fingerprint.
 
-Existing v1 databases can be backed up and replaced with an empty v3 configuration using:
+Existing legacy databases can be backed up and replaced with an empty v4 configuration using:
 
 ```powershell
 pwsh -NoProfile -File scripts/cutover_v2.ps1
 ```
 
 The cut-over script stops ModelDeck, moves the exact SQLite database files under
-`var/backups/`, and creates an empty v3 database. To preserve a v2 configuration, use:
+`var/backups/`, and creates an empty v4 database. To preserve a v2 configuration, first use:
 
 ```powershell
 pwsh -NoProfile -File scripts/migrate_v2_to_v3.ps1
 ```
 
 It backs up the SQLite database, converts Event revisions to Routing Profile revisions,
-preserves active routing and Workers, and omits Demo membership. Startup refuses an
-unmigrated v2 database. Model caches, logs, benchmark reports and trusted runtime manifests
-are preserved. Use `-WhatIf` to inspect the file operations.
+preserves active routing and Workers, and omits Demo membership. Then migrate the resulting
+v3 database, or any existing v3 installation, with:
+
+```powershell
+pwsh -NoProfile -File scripts/migrate_v3_to_v4.ps1
+```
+
+The v4 migration adds capability policy and grandfathers current Worker and routing use.
+Startup refuses an unmigrated database. Model caches, logs, benchmark reports and trusted
+runtime manifests are preserved. Use `-WhatIf` to inspect either migration.
 
 For lightweight development or CI on a machine without the target GPU, run
 `pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
@@ -130,8 +137,10 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3600/api/workers/<worker-uu
     -TimeoutSec 360
 ```
 
-The Model library turns a recognised, complete Hugging Face snapshot into a local Worker
-when its architecture matches an installed trusted runtime. Supported
+The Model library lists potential capabilities for each complete Hugging Face snapshot,
+keeps local detections separate from reviewed assertions, and requires the operator to
+allow a capability before creating a Worker or publishing a route. Allowing a capability without
+an installed trusted runtime records intent without making it runnable. Supported runtime
 paths are causal-language-model Transformers, SceneChat Gemma 4 and the official Qwen3.5
 0.8B, 2B, 4B and 9B checkpoints, DiffusionGemma block diffusion, and self-contained
 ModelDeck DiffusionGemma Q4 format 2 releases. SpeechShift additionally recognises the

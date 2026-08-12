@@ -254,6 +254,22 @@ def test_identifies_allowlisted_qwen35_scenechat_models(tmp_path: Path, model_na
 
     assert model["generation_family_hint"] == "vision-language"
     assert model["configuration_support"] == "scenechat-qwen35"
+    capabilities = {item["id"]: item for item in model["potential_capabilities"]}
+    assert set(capabilities) == {
+        "general-chat",
+        "text-completion",
+        "general-image-chat",
+        "video-understanding",
+        "scene-analysis",
+    }
+    assert capabilities["scene-analysis"]["runtime_template_ids"] == ["scenechat-qwen35"]
+    assert capabilities["general-chat"]["runtime_template_ids"] == []
+    assert all(
+        evidence["kind"] in {"detected", "asserted"} and evidence["confidence"] in {"direct", "inferred"}
+        for capability in capabilities.values()
+        for evidence in capability["evidence"]
+    )
+    assert not any("audio" in trait for item in capabilities.values() for trait in item["traits"])
 
 
 def test_does_not_allowlist_qwen35_forks_by_architecture_alone(tmp_path: Path) -> None:
@@ -275,6 +291,9 @@ def test_does_not_allowlist_qwen35_forks_by_architecture_alone(tmp_path: Path) -
     model = discover_huggingface_models([tmp_path])[0]
 
     assert model["configuration_support"] is None
+    capabilities = {item["id"]: item for item in model["potential_capabilities"]}
+    assert set(capabilities) == {"general-image-chat"}
+    assert all(evidence["kind"] == "detected" for evidence in capabilities["general-image-chat"]["evidence"])
 
 
 def test_gpt_oss_source_points_to_companion_and_complete_gguf_is_configurable(tmp_path: Path) -> None:

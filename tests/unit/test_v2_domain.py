@@ -4,12 +4,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from modeldeck.capabilities import worker_configuration_fingerprint
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
 from modeldeck.config import Settings
 from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot, validate_routing_profile
 from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
+from modeldeck.migrate_v3_to_v4 import migrate as migrate_v3_to_v4
 from modeldeck.v2_api import _has_smoke_evidence, _worker_smoke_request
 
 
@@ -140,6 +142,37 @@ def test_tested_working_profile_requires_matching_evidence() -> None:
         },
     }
     assert validate_routing_profile(profile, [worker], [evidence])["valid"] is True
+
+
+def test_v4_profile_requires_capability_permission_and_exact_evidence() -> None:
+    worker = worker_definition().model_copy(update={"capability_policy_version": 4})
+    profile = routing_profile(worker.id, qualification="tested-working")
+    identity = (worker.model_id, worker.revision, "autoregressive-trace")
+    evidence = {
+        "id": 7,
+        "result": "tested-working",
+        "evidence": {
+            "worker_id": worker.id,
+            "capability_id": "autoregressive-trace",
+            "model_id": worker.model_id,
+            "model_revision": worker.revision,
+            "runtime": worker.runtime,
+            "worker_configuration_fingerprint": worker_configuration_fingerprint(
+                worker.model_dump(mode="json")
+            ),
+        },
+    }
+
+    denied = validate_routing_profile(profile, [worker], [evidence], {})
+    allowed = validate_routing_profile(profile, [worker], [evidence], {identity: True})
+    changed_worker = worker.model_copy(update={"dtype": "bfloat16"})
+    stale = validate_routing_profile(profile, [changed_worker], [evidence], {identity: True})
+
+    assert denied["valid"] is False
+    assert "Allow the autoregressive-trace capability" in denied["errors"][0]["message"]
+    assert allowed["valid"] is True
+    assert stale["valid"] is False
+    assert any("tested-working evidence" in error["message"] for error in stale["errors"])
 
 
 def test_worker_smoke_requests_use_worker_protocols() -> None:
@@ -298,8 +331,9 @@ def test_migration_converts_event_revisions_and_drops_demo_membership(tmp_path) 
         database.execute("INSERT INTO active_event VALUES (1, ?, 1, '{}', 'now')", (event_id,))
 
     migrate(path)
+    migrate_v3_to_v4(path)
     store = CompatibilityStore(path)
-    store.initialise_v3()
+    store.initialise_v4()
     profile = store.get_routing_profile(event_id)
 
     assert profile is not None

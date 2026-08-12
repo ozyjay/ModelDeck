@@ -92,7 +92,7 @@ def create_gateway_app(
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     persistence_enabled = alias_routes is None
     if persistence_enabled:
-        store.initialise_v3()
+        store.initialise_v4()
 
     def active_route_records(
         adapter_ids: set[str] | None = None,

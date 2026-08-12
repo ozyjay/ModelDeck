@@ -300,6 +300,19 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .model-stage { margin: 0.65rem 0; color: #c5d0df; font-size: 0.82rem; line-height: 1.45; }
 .model-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.9rem; }
 .model-actions span { color: var(--muted); font-size: 0.77rem; }
+.model-policy, .potential-capability-heading, .worker-capability-list > div { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.model-policy { margin-top: 0.8rem; padding: 0.7rem; border: 1px solid var(--line-soft); border-radius: 0.6rem; background: #0b121b; }
+.model-policy strong, .model-policy small, .potential-capability-heading strong, .potential-capability-heading small, .worker-capability-list strong, .worker-capability-list small { display: block; }
+.model-policy small, .potential-capability-heading small, .worker-capability-list small { margin-top: 0.18rem; color: var(--muted); font-size: 0.72rem; }
+.potential-capability-list { display: grid; gap: 0.55rem; margin-top: 0.75rem; }
+.potential-capability { padding: 0.75rem; border: 1px solid var(--line-soft); border-radius: 0.65rem; background: #0b121b; }
+.potential-capability.allowed { border-color: #315744; background: #101e1a; }
+.potential-capability-heading > span { min-width: 0; }
+.potential-capability-heading > div { display: flex; align-items: center; gap: 0.5rem; }
+.capability-reason { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.78rem; }
+.potential-capability a { color: var(--accent); }
+.worker-capability-list { display: grid; gap: 0.45rem; margin-top: 0.75rem; padding: 0.7rem; border: 1px solid var(--line-soft); border-radius: 0.6rem; background: #0b121b; }
+.worker-capability-list > div { padding-top: 0.45rem; border-top: 1px solid var(--line-soft); }
 .configured-runtime-list { display: grid; gap: 0.5rem; margin-top: 0.8rem; }
 .configured-runtime-list > div { padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.55rem; background: #121c29; }
 .configured-runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }

@@ -53,7 +53,7 @@ fallback, chooses a backup only before a request or job begins, and persists
 text-diffusion job ownership for restart-safe polling/cancellation. Test fixtures are not
 operator-visible and cannot be represented as a public fallback.
 
-## v2 to v3 migration
+## Database migrations
 
 SQLite schema v3 stores Workers, Routing Profile drafts and revisions, one active routing
 snapshot, model cache policy, compatibility evidence and gateway job assignments. A v2
@@ -61,3 +61,8 @@ database is refused at startup. Run `scripts/migrate_v2_to_v3.ps1`: it backs up 
 database/WAL/SHM files, converts every Event revision into a profile revision, preserves
 routes as capabilities and the active routing selection, drops Demo membership, and leaves
 Workers, model caches and evidence untouched.
+
+SQLite schema v4 adds revision-scoped capability policy. Run
+`scripts/migrate_v3_to_v4.ps1` to create a timestamped database/WAL/SHM backup and
+grandfather capabilities represented by non-archived Workers and current draft or active
+Routing Profile bindings. Historical revisions remain unchanged and do not grant policy.

@@ -6,6 +6,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modeldeck.capabilities import (
+    capability_evidence_status,
+    capability_id_for_contract,
+    worker_cache_identity,
+)
 from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
@@ -41,6 +46,7 @@ class WorkerDefinition(BaseModel):
     dtype: str
     capabilities: dict[str, bool | str]
     settings: dict[str, int | float | str | bool] = Field(default_factory=dict)
+    capability_policy_version: int | None = None
     archived: bool = False
 
     _valid_id = field_validator("id")(_uuid)
@@ -85,6 +91,7 @@ class WorkerDefinition(BaseModel):
             dtype=profile.dtype,
             capabilities=profile.capabilities.model_dump(mode="json"),
             settings=profile.settings,
+            capability_policy_version=4,
         )
 
     def to_profile(self) -> ModelProfile:
@@ -174,6 +181,7 @@ def validate_routing_profile(
     definition: RoutingProfile,
     workers: Iterable[WorkerDefinition],
     compatibility_tests: Iterable[Mapping[str, Any]],
+    capability_policy: Mapping[tuple[str, str, str], bool] | None = None,
 ) -> dict[str, Any]:
     by_id = {worker.id: worker for worker in workers if not worker.archived}
     tests = list(compatibility_tests)
@@ -184,6 +192,7 @@ def validate_routing_profile(
         warnings.append({"message": "This Routing Profile publishes no capabilities"})
     for capability in definition.capabilities:
         contract = PROTOCOL_CONTRACTS[capability.protocol_contract]
+        model_capability_id = capability_id_for_contract(capability.protocol_contract)
         resolved = []
         for index, worker_id in enumerate(capability.worker_ids):
             worker = by_id.get(worker_id)
@@ -209,7 +218,17 @@ def validate_routing_profile(
                 ]
                 if mismatched_settings:
                     messages.append("Requires Worker settings: " + ", ".join(mismatched_settings))
-                if definition.qualification == "tested-working" and not _has_matching_success(worker, tests):
+                if capability_policy is not None and model_capability_id is not None:
+                    model_id, revision = worker_cache_identity(worker.model_dump(mode="json"))
+                    if not capability_policy.get((model_id, revision, model_capability_id), False):
+                        messages.append(
+                            f"Allow the {model_capability_id} capability for this cached Model revision"
+                        )
+                if (
+                    definition.qualification == "tested-working"
+                    and model_capability_id is not None
+                    and not _has_matching_success(worker, model_capability_id, tests)
+                ):
                     messages.append("No matching tested-working evidence is recorded")
             for message in messages:
                 errors.append({"capability_id": capability.id, "worker_id": worker_id, "message": message})
@@ -246,11 +265,10 @@ def routing_snapshot(definition: RoutingProfile, revision: int) -> dict[str, Any
     }
 
 
-def _has_matching_success(worker: WorkerDefinition, tests: Iterable[Mapping[str, Any]]) -> bool:
-    return any(
-        test.get("result") == "tested-working"
-        and test.get("evidence", {}).get("model_id") == worker.model_id
-        and test.get("evidence", {}).get("model_revision") == worker.revision
-        and test.get("evidence", {}).get("runtime") == worker.runtime
-        for test in tests
-    )
+def _has_matching_success(
+    worker: WorkerDefinition,
+    capability_id: str,
+    tests: Iterable[Mapping[str, Any]],
+) -> bool:
+    status, _evidence_id = capability_evidence_status(worker.model_dump(mode="json"), capability_id, tests)
+    return status in {"qualified", "legacy"}

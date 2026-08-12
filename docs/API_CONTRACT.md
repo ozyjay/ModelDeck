@@ -16,8 +16,26 @@ the bounded lifecycle, logs, smoke, usage, replacement and stop-all subroutes. W
 can be created only from a complete, cached model revision and an installed trusted
 runtime template. Archiving preserves caches and historical references.
 
+`GET /api/catalogue` reports a `potential_capabilities` collection for every complete
+cached revision. Each candidate keeps locally detected evidence separate from reviewed,
+code-owned assertions and reports traits, provenance, permission, trusted-runtime
+availability, qualification and publication state. Discovery is offline and never runs
+remote code or interprets arbitrary model-card prose.
+
+- `POST /api/catalogue/policy` controls the model-level master policy.
+- `POST /api/catalogue/capabilities/policy` records operator permission for one candidate.
+- `POST /api/workers/{worker_id}/capabilities/{capability_id}/qualify` runs the bounded,
+  code-owned qualification adapter against that exact ready Worker.
+
+Capability permissions default to denied. An operator may allow a recognised capability
+before a runtime exists; this records intent but does not make it runnable. Model denial
+makes every child permission ineffective without deleting those choices. New and
+replacement Workers and Routing Profile publication require effective permission.
+Disallowing a capability referenced by a current draft or active revision returns the
+blocking references. Historical revisions remain immutable and do not block the change.
+
 There are no public mock-worker templates, mock-worker creation endpoints, Event, Demo,
-or Event Route management endpoints in v3. Deterministic fixture workers are test-harness
+or Event Route management endpoints. Deterministic fixture workers are test-harness
 tools, not an operator feature.
 
 ### Routing profiles and live routing

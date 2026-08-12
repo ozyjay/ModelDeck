@@ -40,3 +40,15 @@ def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tm
 
     assert store.model_cache_allowed("google/model", "revision-1") is False
     assert store.list_model_cache_policy() == {("google/model", "revision-1"): False}
+
+
+def test_model_capability_policy_defaults_disallowed_and_preserves_intent(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
+    store.initialise()
+
+    assert store.model_capability_allowed("Qwen/model", "revision-1", "general-chat") is False
+    store.set_model_capability_allowed("Qwen/model", "revision-1", "general-chat", allowed=True)
+    store.set_model_cache_allowed("Qwen/model", "revision-1", allowed=False)
+
+    assert store.model_capability_allowed("Qwen/model", "revision-1", "general-chat") is True
+    assert store.model_cache_allowed("Qwen/model", "revision-1") is False
