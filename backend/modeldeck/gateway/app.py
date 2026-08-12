@@ -94,9 +94,25 @@ def create_gateway_app(
     if persistence_enabled:
         store.initialise_v3()
 
-    def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
+    def active_route_records(
+        adapter_ids: set[str] | None = None,
+    ) -> list[tuple[str, list[ModelProfile], dict[str, Any]]]:
+        """Return ordered routes with their immutable publication provenance."""
+
         if alias_routes is not None:
-            return {name: list(candidates) for name, candidates in base_routes.items()}
+            return [
+                (
+                    name,
+                    list(candidates),
+                    {
+                        "public_model_id": name,
+                        "capability_id": None,
+                        "routing_profile_id": None,
+                        "routing_profile_revision": None,
+                    },
+                )
+                for name, candidates in base_routes.items()
+            ]
         profiles: dict[str, ModelProfile] = {}
         for record in store.list_workers():
             try:
@@ -106,7 +122,7 @@ def create_gateway_app(
                 # A historical Worker may use a retired test-only runtime. It remains
                 # in SQLite for migration/evidence purposes but cannot be routed.
                 continue
-        routes: dict[str, list[ModelProfile]] = {}
+        routes: list[tuple[str, list[ModelProfile], dict[str, Any]]] = []
         for snapshot in store.active_routing_snapshots():
             if snapshot.get("format") != "modeldeck-routing-profile":
                 continue
@@ -116,12 +132,31 @@ def create_gateway_app(
                 public_name = str(capability.get("public_name", ""))
                 if not public_name:
                     continue
-                routes[public_name] = [
-                    profiles[worker_id]
-                    for worker_id in capability.get("worker_ids", [])
-                    if worker_id in profiles
-                ]
+                routes.append(
+                    (
+                        public_name,
+                        [
+                            profiles[worker_id]
+                            for worker_id in capability.get("worker_ids", [])
+                            if worker_id in profiles
+                        ],
+                        {
+                            "public_model_id": public_name,
+                            "capability_id": str(capability.get("capability_id") or "") or None,
+                            "routing_profile_id": str(snapshot.get("profile_id") or "") or None,
+                            "routing_profile_revision": (
+                                int(snapshot["revision"])
+                                if isinstance(snapshot.get("revision"), int)
+                                and not isinstance(snapshot["revision"], bool)
+                                else None
+                            ),
+                        },
+                    )
+                )
         return routes
+
+    def active_routes(adapter_ids: set[str] | None = None) -> dict[str, list[ModelProfile]]:
+        return {name: candidates for name, candidates, _metadata in active_route_records(adapter_ids)}
 
     def active_capability_records(*, native_only: bool = False) -> list[dict[str, Any]]:
         if alias_routes is not None:
@@ -183,12 +218,14 @@ def create_gateway_app(
         openai_contracts = {
             adapter.contract_id for adapter in PROTOCOL_ADAPTERS.values() if adapter.openai_model
         }
-        routes = active_routes(openai_contracts)
+        records = active_route_records(openai_contracts)
+        routes = {alias: candidates for alias, candidates, _metadata in records}
         states = {state["id"]: state for state in await worker_states(routes)}
         return {
             "object": "list",
             "data": [
-                model_discovery_record(alias, candidates, states) for alias, candidates in routes.items()
+                model_discovery_record(alias, candidates, states, route=metadata)
+                for alias, candidates, metadata in records
             ],
         }
 
@@ -1415,54 +1452,133 @@ def model_discovery_record(
     alias: str,
     candidates: list[ModelProfile],
     states: dict[str, dict[str, Any]],
+    *,
+    route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Describe the Worker currently selected by normal gateway routing.
+    """Describe configured and current identities without changing routing.
 
-    The first ready Worker is the same candidate a new request would receive. When every
-    Worker is unavailable, retain the primary Worker's configured runtime identity but mark
-    the model not ready, so clients cannot treat the accelerator field as availability proof.
+    Discovery applies the gateway's ordered first-ready rule to its health snapshot. It is
+    diagnostic state only: a later inference can observe a different readiness state.
     """
 
-    selected = next((profile for profile in candidates if states[profile.id]["ready"]), candidates[0])
-    state = states[selected.id]
-    health = state.get("health") if isinstance(state.get("health"), dict) else {}
-    runtime = health.get("runtime") if state["ready"] else None
-    runtime = runtime if isinstance(runtime, str) and runtime else selected.preferred_runtime
-    revision = selected.artifact_revision or selected.revision
-    configuration_fingerprint = health.get("configuration_fingerprint") if state["ready"] else None
-    if not isinstance(configuration_fingerprint, str) or not configuration_fingerprint:
-        context_length = selected.settings.get("context_length")
-        configuration_fingerprint = stable_model_configuration_fingerprint(
-            model_id=selected.model_id,
-            revision=revision,
-            runtime=runtime,
-            dtype=selected.dtype,
-            context_length=(
-                int(context_length)
-                if isinstance(context_length, int) and not isinstance(context_length, bool)
-                else None
-            ),
-            runtime_template_version=selected.runtime_template_version,
-        )
+    primary = candidates[0]
+    selected = next((profile for profile in candidates if states[profile.id]["ready"]), None)
+    selection_reason = (
+        "primary_ready"
+        if selected is primary
+        else "backup_ready"
+        if selected is not None
+        else "no_ready_worker"
+    )
+    primary_identity = worker_discovery_identity(primary, states[primary.id], report_observed_runtime=False)
+    selected_identity = (
+        worker_discovery_identity(selected, states[selected.id]) if selected is not None else None
+    )
+    # Existing fields retain their pre-change selected-Worker behaviour when a Worker is
+    # ready, and retain primary configuration when none is ready.
+    legacy_identity = selected_identity or primary_identity
+    legacy_profile = selected or primary
+    legacy_state = states[legacy_profile.id]
+    route_identity = route or {
+        "public_model_id": alias,
+        "capability_id": None,
+        "routing_profile_id": None,
+        "routing_profile_revision": None,
+    }
     return {
         "id": alias,
         "object": "model",
         "owned_by": "modeldeck-local",
         # A derivative artefact is the checkpoint the Worker loads, so its pinned upstream
         # revision is the model's authoritative identity. Otherwise it loads the base snapshot.
-        "revision": revision,
-        "ready": state["ready"],
-        "runtime": runtime,
-        "accelerator": accelerator_for_runtime(runtime, health),
+        "revision": primary_identity["revision"],
+        "ready": selected is not None,
+        "runtime": legacy_identity["runtime"],
+        "accelerator": legacy_identity["accelerator"],
         "modeldeck": {
-            "model_id": selected.model_id,
-            "revision": revision,
-            "runtime": runtime,
-            "configuration_fingerprint": configuration_fingerprint,
-            "prefix_caching": selected.capabilities.prefix_caching,
-            "prefix_cache_enabled": selected.capabilities.prefix_cache_enabled,
+            "model_id": legacy_profile.model_id,
+            "revision": legacy_identity["revision"],
+            "runtime": legacy_identity["runtime"],
+            "configuration_fingerprint": legacy_configuration_fingerprint(
+                legacy_profile, legacy_state, legacy_identity["runtime"]
+            ),
+            "prefix_caching": (selected or primary).capabilities.prefix_caching,
+            "prefix_cache_enabled": (selected or primary).capabilities.prefix_cache_enabled,
+            "route": route_identity,
+            "primary_worker": primary_identity,
+            "selected_worker": selected_identity,
+            "selection_reason": selection_reason,
         },
     }
+
+
+def worker_discovery_identity(
+    profile: ModelProfile,
+    state: dict[str, Any],
+    *,
+    report_observed_runtime: bool = True,
+) -> dict[str, Any]:
+    """Return configured identity plus optional ready-Worker fingerprint evidence."""
+
+    health = state.get("health") if isinstance(state.get("health"), dict) else {}
+    ready = state["ready"] is True
+    runtime = health.get("runtime") if ready and report_observed_runtime else None
+    runtime = runtime if isinstance(runtime, str) and runtime else profile.preferred_runtime
+    model_id = profile.artifact_model_id or profile.model_id
+    revision = profile.artifact_revision or profile.revision
+    context_length = profile.settings.get("context_length")
+    configured_fingerprint = stable_model_configuration_fingerprint(
+        model_id=model_id,
+        revision=revision,
+        runtime=profile.preferred_runtime,
+        dtype=profile.dtype,
+        context_length=(
+            int(context_length)
+            if isinstance(context_length, int) and not isinstance(context_length, bool)
+            else None
+        ),
+        runtime_template_version=profile.runtime_template_version,
+    )
+    observed_fingerprint = health.get("configuration_fingerprint") if ready else None
+    return {
+        "worker_id": profile.id,
+        "model_id": model_id,
+        "revision": revision,
+        "base_model_id": profile.model_id,
+        "base_model_revision": profile.revision,
+        "artifact_model_id": profile.artifact_model_id,
+        "artifact_revision": profile.artifact_revision,
+        "runtime": runtime,
+        "configured_runtime": profile.preferred_runtime,
+        "accelerator": accelerator_for_runtime(runtime, health if report_observed_runtime else {}),
+        "ready": ready,
+        "configuration_fingerprint": configured_fingerprint,
+        "runtime_configuration_fingerprint": (
+            observed_fingerprint if isinstance(observed_fingerprint, str) and observed_fingerprint else None
+        ),
+    }
+
+
+def legacy_configuration_fingerprint(profile: ModelProfile, state: dict[str, Any], runtime: str) -> str:
+    """Preserve the legacy flat metadata fingerprint calculation."""
+
+    health = state.get("health") if isinstance(state.get("health"), dict) else {}
+    observed = health.get("configuration_fingerprint") if state["ready"] is True else None
+    if isinstance(observed, str) and observed:
+        return observed
+    context_length = profile.settings.get("context_length")
+    return stable_model_configuration_fingerprint(
+        model_id=profile.model_id,
+        revision=profile.artifact_revision or profile.revision,
+        runtime=runtime,
+        dtype=profile.dtype,
+        context_length=(
+            int(context_length)
+            if isinstance(context_length, int) and not isinstance(context_length, bool)
+            else None
+        ),
+        runtime_template_version=profile.runtime_template_version,
+    )
 
 
 def accelerator_for_runtime(runtime: str, health: dict[str, Any]) -> str:

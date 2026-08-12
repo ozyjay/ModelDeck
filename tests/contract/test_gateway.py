@@ -132,7 +132,7 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
 
     assert len(models) == 1
     model = models[0]
-    assert model == {
+    assert {key: model[key] for key in model if key != "modeldeck"} == {
         "id": "visitor-chat",
         "object": "model",
         "owned_by": "modeldeck-local",
@@ -140,16 +140,40 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         "ready": False,
         "runtime": "mock",
         "accelerator": "mock",
-        "modeldeck": {
-            "model_id": "example/model",
-            "revision": "revision-1",
-            "runtime": "mock",
-            "configuration_fingerprint": model["modeldeck"]["configuration_fingerprint"],
-            "prefix_caching": "unsupported",
-            "prefix_cache_enabled": False,
-        },
     }
     assert len(model["modeldeck"]["configuration_fingerprint"]) == 64
+    assert model["modeldeck"] == {
+        "model_id": "example/model",
+        "revision": "revision-1",
+        "runtime": "mock",
+        "configuration_fingerprint": model["modeldeck"]["configuration_fingerprint"],
+        "prefix_caching": "unsupported",
+        "prefix_cache_enabled": False,
+        "route": {
+            "public_model_id": "visitor-chat",
+            "capability_id": profile.capabilities[1].id,
+            "routing_profile_id": profile.id,
+            "routing_profile_revision": 1,
+        },
+        "primary_worker": model["modeldeck"]["primary_worker"],
+        "selected_worker": None,
+        "selection_reason": "no_ready_worker",
+    }
+    assert model["modeldeck"]["primary_worker"] == {
+        "worker_id": definition.id,
+        "model_id": "example/model",
+        "revision": "revision-1",
+        "base_model_id": "example/model",
+        "base_model_revision": "revision-1",
+        "artifact_model_id": None,
+        "artifact_revision": None,
+        "runtime": "mock",
+        "configured_runtime": "mock",
+        "accelerator": "mock",
+        "ready": False,
+        "configuration_fingerprint": model["modeldeck"]["configuration_fingerprint"],
+        "runtime_configuration_fingerprint": None,
+    }
     assert routes == [
         {"public_name": "visitor-trace", "ready": False},
         {"public_name": "visitor-chat", "ready": False},
@@ -263,6 +287,114 @@ def test_model_discovery_reports_ready_rocm_worker_accelerator_metadata() -> Non
     assert record["runtime"] == "transformers-rocm"
     assert record["accelerator"] == "rocm"
     assert record["ready"] is True
+
+
+def test_model_discovery_separates_primary_and_selected_worker_identities() -> None:
+    primary = (
+        worker()
+        .model_copy(update={"model_id": "example/primary", "revision": "primary-revision"})
+        .to_profile()
+    )
+    backup = (
+        worker()
+        .model_copy(update={"model_id": "modeldeck/mock-backup", "revision": "fixture-backup"})
+        .to_profile()
+    )
+
+    record = model_discovery_record(
+        "visitor-chat",
+        [primary, backup],
+        {
+            primary.id: {"ready": False, "health": None},
+            backup.id: {"ready": True, "health": {"runtime": "mock", "configuration_fingerprint": "loaded"}},
+        },
+        route={
+            "public_model_id": "visitor-chat",
+            "capability_id": "capability-1",
+            "routing_profile_id": "profile-1",
+            "routing_profile_revision": 4,
+        },
+    )
+
+    assert record["id"] == "visitor-chat"
+    assert record["revision"] == "primary-revision"
+    assert record["ready"] is True
+    assert record["modeldeck"]["route"] == {
+        "public_model_id": "visitor-chat",
+        "capability_id": "capability-1",
+        "routing_profile_id": "profile-1",
+        "routing_profile_revision": 4,
+    }
+    assert record["modeldeck"]["primary_worker"]["worker_id"] == primary.id
+    assert record["modeldeck"]["primary_worker"]["revision"] == "primary-revision"
+    assert record["modeldeck"]["primary_worker"]["ready"] is False
+    assert record["modeldeck"]["selected_worker"]["worker_id"] == backup.id
+    assert record["modeldeck"]["selected_worker"]["model_id"] == "modeldeck/mock-backup"
+    assert record["modeldeck"]["selected_worker"]["revision"] == "fixture-backup"
+    assert record["modeldeck"]["selected_worker"]["runtime_configuration_fingerprint"] == "loaded"
+    assert (
+        record["modeldeck"]["primary_worker"]["configuration_fingerprint"]
+        != record["modeldeck"]["selected_worker"]["configuration_fingerprint"]
+    )
+    assert record["modeldeck"]["selection_reason"] == "backup_ready"
+
+
+def test_model_discovery_has_no_selected_identity_when_every_worker_is_unready() -> None:
+    primary = worker().to_profile()
+    backup = worker().model_copy(update={"revision": "backup-revision"}).to_profile()
+
+    record = model_discovery_record(
+        "visitor-chat",
+        [primary, backup],
+        {primary.id: {"ready": False, "health": None}, backup.id: {"ready": False, "health": None}},
+    )
+
+    assert record["ready"] is False
+    assert record["revision"] == "revision-1"
+    assert record["modeldeck"]["selected_worker"] is None
+    assert record["modeldeck"]["selection_reason"] == "no_ready_worker"
+
+
+def test_model_discovery_prefers_primary_when_multiple_workers_are_ready() -> None:
+    primary = worker().to_profile()
+    backup = worker().model_copy(update={"revision": "backup-revision"}).to_profile()
+
+    record = model_discovery_record(
+        "visitor-chat",
+        [primary, backup],
+        {
+            primary.id: {"ready": True, "health": {"runtime": "mock"}},
+            backup.id: {"ready": True, "health": {"runtime": "mock"}},
+        },
+    )
+
+    assert record["modeldeck"]["selected_worker"]["worker_id"] == primary.id
+    assert record["modeldeck"]["selection_reason"] == "primary_ready"
+
+
+def test_model_discovery_separates_loaded_artifact_from_base_model_identity() -> None:
+    profile = (
+        worker()
+        .model_copy(
+            update={
+                "model_id": "example/base-model",
+                "revision": "base-revision",
+                "artifact_model_id": "example/quantised-model",
+                "artifact_revision": "artifact-revision",
+            }
+        )
+        .to_profile()
+    )
+
+    record = model_discovery_record("visitor-chat", [profile], {profile.id: {"ready": False, "health": None}})
+
+    assert record["revision"] == "artifact-revision"
+    assert record["modeldeck"]["model_id"] == "example/base-model"
+    assert record["modeldeck"]["revision"] == "artifact-revision"
+    assert record["modeldeck"]["primary_worker"]["model_id"] == "example/quantised-model"
+    assert record["modeldeck"]["primary_worker"]["revision"] == "artifact-revision"
+    assert record["modeldeck"]["primary_worker"]["base_model_id"] == "example/base-model"
+    assert record["modeldeck"]["primary_worker"]["base_model_revision"] == "base-revision"
 
 
 def test_invalid_trace_metadata_error_uses_worker_language_without_route_leakage() -> None:

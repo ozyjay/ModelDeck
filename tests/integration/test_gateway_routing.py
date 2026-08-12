@@ -74,7 +74,7 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
         assert all(len(item["embedding"]) == 1024 for item in response.json()["data"])
         listed = models.json()["data"]
         assert len(listed) == 1
-        assert listed[0] == {
+        assert {key: listed[0][key] for key in listed[0] if key != "modeldeck"} == {
             "id": "sprintbot-embedding",
             "object": "model",
             "owned_by": "modeldeck-local",
@@ -82,15 +82,11 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
             "ready": True,
             "runtime": "mock",
             "accelerator": "mock",
-            "modeldeck": {
-                "model_id": "modeldeck/mock-openai-embeddings",
-                "revision": "0123456789abcdef0123456789abcdef01234567",
-                "runtime": "mock",
-                "configuration_fingerprint": listed[0]["modeldeck"]["configuration_fingerprint"],
-                "prefix_caching": "unsupported",
-                "prefix_cache_enabled": False,
-            },
         }
+        assert listed[0]["modeldeck"]["model_id"] == "modeldeck/mock-openai-embeddings"
+        assert listed[0]["modeldeck"]["revision"] == "0123456789abcdef0123456789abcdef01234567"
+        assert listed[0]["modeldeck"]["selected_worker"]["worker_id"] == profile.id
+        assert listed[0]["modeldeck"]["selection_reason"] == "primary_ready"
     finally:
         await supervisor.stop_all()
 

@@ -74,13 +74,44 @@ capability may have a different-revision backup Worker; `revision` identifies th
 primary Worker, while an individual request can use a backup only when the primary is
 unavailable.
 
-Model records also contain `runtime` and `accelerator`, which describe the first ready
-Worker in the capability's ordered routing list—the same Worker that receives a new gateway
-request. `runtime` comes from that Worker's health report when it is ready, otherwise from
-the configured primary Worker. `accelerator` is code-owned metadata derived from the
-verified runtime and health evidence: ready ROCm Workers report `rocm`; Vulkan, CPU, and
-test-harness Workers report `vulkan`, `cpu`, and `mock` respectively. A model with
+Model records also contain `runtime` and `accelerator`, which retain their legacy meaning:
+they describe the first ready Worker in the capability's ordered routing list, or the
+configured primary Worker when none is ready. `accelerator` is code-owned metadata derived
+from the verified runtime and health evidence: ready ROCm Workers report `rocm`; Vulkan,
+CPU, and test-harness Workers report `vulkan`, `cpu`, and `mock` respectively. A model with
 `ready: false` is not accelerator-resident proof, even when its configured runtime is ROCm.
+
+### Discovery identity metadata
+
+Each model record has a namespaced `modeldeck` object. Its existing flat `model_id`,
+`revision`, `runtime`, `configuration_fingerprint`, `prefix_caching`, and
+`prefix_cache_enabled` fields remain for compatibility and retain the legacy selected-Worker
+meaning above. In particular, the flat fingerprint remains the ready Worker's runtime-reported
+value when available, with the existing configured fallback. New consumers should use the
+explicit identity objects:
+
+- `route` identifies the stable published capability: `public_model_id`, `capability_id`,
+  `routing_profile_id`, and `routing_profile_revision`. The final three values are `null`
+  for an embedded gateway supplied with in-memory routes rather than a published profile.
+- `primary_worker` identifies configured worker zero. Its `worker_id`, loaded `model_id` and
+  `revision`, base-model identity, optional artefact identity, configured/runtime-observed
+  runtime, accelerator, readiness, and `configuration_fingerprint` remain inspectable during
+  failover. Its `runtime` and `accelerator` are the configured values, and therefore remain
+  stable while a backup is selected.
+- `selected_worker` has the same shape for the first ready Worker, or is `null` when no
+  Worker is selectable. `selection_reason` is one of `primary_ready`, `backup_ready`, or
+  `no_ready_worker`.
+
+Within a Worker identity, `model_id` and `revision` identify the checkpoint actually loaded:
+they are the artefact pair when an artefact is configured, otherwise the base-model pair.
+`configuration_fingerprint` is the stable configured identity derived from the Worker
+definition. `runtime_configuration_fingerprint` is an optional opaque fingerprint supplied
+by a ready Worker and must not be compared with the configured fingerprint. It is `null` when
+the Worker is not ready or does not report one.
+
+`GET /v1/models` reports a point-in-time readiness snapshot. It indicates the Worker a new
+request would receive under that snapshot, but does not prove which Worker served a completed
+request after a readiness transition.
 
 `POST /v1/embeddings` is an OpenAI-compatible, local-only embeddings surface. It accepts a
 published embedding `model` and a non-empty string or ordered array of strings in `input`.
