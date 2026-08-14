@@ -127,6 +127,7 @@ export default function App() {
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workerOperationErrors, setWorkerOperationErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [collapsePreferences, setCollapsePreferences] = useState<CollapsePreferences>(loadCollapsePreferences);
 
@@ -195,15 +196,29 @@ export default function App() {
   }, []);
 
   const operate = async (worker: Worker, operation: WorkerOperation) => {
+    if (operation === "start" && thermal?.model_loading_allowed === false) return;
     const key = `${worker.id}:${operation}`;
     setPending((current) => new Set(current).add(key)); setError(null);
     try {
       const result = await postJson<{ ok?: boolean; test?: { evidence?: { error_summary?: string } } }>(`/api/workers/${worker.id}/${operation}`);
       await refresh();
+      setWorkerOperationErrors((current) => {
+        const { [worker.id]: _removed, ...remaining } = current;
+        return remaining;
+      });
       if (operation === "smoke" && result.ok === false) {
         throw new Error(result.test?.evidence?.error_summary ?? "Worker generation smoke test failed.");
       }
-    } catch (reason) { setError(messageFrom(reason)); }
+    } catch (reason) {
+      const message = messageFrom(reason);
+      setError(message);
+      if (operation === "start" && reason instanceof ApiError && reason.status === 429) {
+        setWorkerOperationErrors((current) => ({
+          ...current,
+          [worker.id]: `Start blocked (HTTP 429) — ${message}`,
+        }));
+      }
+    }
     finally { setPending((current) => { const next = new Set(current); next.delete(key); return next; }); }
   };
 
@@ -236,9 +251,9 @@ export default function App() {
         </header>
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
         {!health || !hardware || !telemetry || !thermal || !gateway ? <Unavailable retry={refresh} />
-          : view === "live" ? <LiveView live={live} workers={workers} models={models} operate={operate} pending={pending} />
+          : view === "live" ? <LiveView live={live} workers={workers} models={models} thermal={thermal} operate={operate} pending={pending} />
           : view === "profiles" ? <RoutingProfilesView profiles={profiles} workers={workers} contracts={contracts} openDay={health.configuration_locked} refresh={refresh} />
-          : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
+          : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} thermal={thermal} operationErrors={workerOperationErrors} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.configuration_locked} />
           : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
       </main>
@@ -247,8 +262,8 @@ export default function App() {
   );
 }
 
-function LiveView({ live, workers, models, operate, pending }: {
-  live: LiveState; workers: Worker[]; models: ModelEntry[];
+function LiveView({ live, workers, models, thermal, operate, pending }: {
+  live: LiveState; workers: Worker[]; models: ModelEntry[]; thermal: ThermalStatus;
   operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: ReadonlySet<string>;
 }) {
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
@@ -275,7 +290,7 @@ function LiveView({ live, workers, models, operate, pending }: {
     <CollapsiblePanel sectionId="live-capabilities" title="Live capabilities" detail={`${live.capabilities.length} published`} className="table-panel">
       {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
       {live.capabilities.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Published capability</th><th>Capability status</th><th>Protocol</th><th>Worker order</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
-        {live.capabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={capability.id}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => { const order = index === 0 ? "Primary" : `Backup ${index}`; return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><StateBadge state={worker.state} /></div>; })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td>{capability.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, capability.workers[0].id) || capability.workers[0].state === "ready"} onClick={() => void operate(capability.workers[0], "start")}>{pending.has(`${capability.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button></div>}</td></tr>)}
+        {live.capabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={capability.id}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => { const order = index === 0 ? "Primary" : `Backup ${index}`; return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><StateBadge state={worker.state} /></div>; })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td>{capability.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, capability.workers[0].id) || capability.workers[0].state === "ready" || !thermal.model_loading_allowed} title={thermal.model_loading_allowed ? undefined : thermalLoadingNotice(thermal)} onClick={() => void operate(capability.workers[0], "start")}>{pending.has(`${capability.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button></div>}</td></tr>)}
       </tbody></table></div> : <p className="muted">This Routing Profile publishes no capabilities.</p>}
     </CollapsiblePanel>
   </div>;
@@ -512,7 +527,7 @@ function confirmArchiveWorker(worker: Worker) {
   );
 }
 
-function WorkersView({ workers, models, templates, pending, operate, refresh, openDay }: { workers: Worker[]; models: ModelEntry[]; templates: RuntimeTemplate[]; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
+function WorkersView({ workers, models, templates, thermal, operationErrors, pending, operate, refresh, openDay }: { workers: Worker[]; models: ModelEntry[]; templates: RuntimeTemplate[]; thermal: ThermalStatus; operationErrors: Readonly<Record<string, string>>; pending: ReadonlySet<string>; operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; refresh: () => Promise<void>; openDay: boolean }) {
   const collapseControls = useContext(CollapseContext);
   if (!collapseControls) throw new Error("Collapse controls are unavailable");
   const [libraryPreferences, setLibraryPreferences] = useStoredPreferences(WORKER_LIBRARY_STORAGE_KEY, loadWorkerLibraryPreferences);
@@ -522,6 +537,7 @@ function WorkersView({ workers, models, templates, pending, operate, refresh, op
   const [replacementWorkerName, setReplacementWorkerName] = useState("");
   const [replacementParameters, setReplacementParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [rebindDrafts, setRebindDrafts] = useState(true);
+  const thermalLoadNotice = thermal.model_loading_allowed ? null : thermalLoadingNotice(thermal);
   const states = useMemo(() => [...new Set(workers.map((worker) => worker.state))].sort(), [workers]);
   const runtimes = useMemo(() => [...new Set(workers.map((worker) => worker.runtime))].sort(), [workers]);
   const filteredWorkers = useMemo(() => {
@@ -573,9 +589,10 @@ function WorkersView({ workers, models, templates, pending, operate, refresh, op
       const template = templates.find((item) => item.id === worker.runtime_template_id);
       const workerModel = models.find((model) => (worker.artifact_model_id ?? worker.model_id) === model.model_id && (worker.artifact_revision ?? worker.revision) === model.revision);
       const workerCapabilities = workerModel?.potential_capabilities.filter((capability) => capability.effective_allowed && capability.available_runtime_template_ids.includes(worker.runtime_template_id ?? "")) ?? [];
+      const operationError = operationErrors[worker.id];
       const sectionId = `worker-${worker.id}`;
       const collapsed = collapseControls.preferences.sections[sectionId] ?? collapseControls.preferences.allCollapsed;
-      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.runtime === "mock" ? `${worker.generation_family} · mock` : worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => collapseControls.toggleSection(sectionId)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}{worker.runtime === "mock" ? ` · ${humanise(String(worker.settings.mock_contract_id ?? "legacy contract"))} · ${humanise(String(worker.settings.mock_scenario ?? "success"))}` : ""}</p>{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ...(worker.runtime === "mock" ? [["Mock contract", String(worker.settings.mock_contract_id ?? "Legacy family mock")], ["Mock scenario", String(worker.settings.mock_scenario ?? "success")], ["Mock delay", worker.settings.mock_delay_ms ? `${worker.settings.mock_delay_ms} ms` : "None"]] as Array<[string, string]> : []), ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details>{workerCapabilities.length > 0 && <div className="worker-capability-list"><strong>Allowed capabilities</strong>{workerCapabilities.map((capability) => { const ownStatus = capability.qualifying_workers.find((item) => item.worker_id === worker.id)?.status ?? "not-tested"; return <div key={capability.id}><span><b>{capability.display_name}</b><small>{humanise(ownStatus)}</small></span><button className="secondary compact-button" disabled={worker.state !== "ready"} onClick={() => void qualify(worker, capability.id).catch((reason) => setFeedback(messageFrom(reason)))}>Qualify</button></div>; })}</div>}<div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready"} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
+      return <article className={`worker-card state-${worker.state}${collapsed ? " collapsed" : ""}`} key={worker.id}><div className="worker-card-heading"><div><p className="worker-id">{worker.runtime === "mock" ? `${worker.generation_family} · mock` : worker.generation_family}</p><h3>{worker.name}</h3></div><div className="worker-card-heading-actions"><StateBadge state={worker.state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Worker ${worker.name}`} onClick={() => collapseControls.toggleSection(sectionId)}>{collapsed ? "Expand" : "Collapse"}</button></div></div><div className="worker-card-body" hidden={collapsed}><p className="worker-summary">{worker.model_id} · {worker.runtime}{worker.runtime === "mock" ? ` · ${humanise(String(worker.settings.mock_contract_id ?? "legacy contract"))} · ${humanise(String(worker.settings.mock_scenario ?? "success"))}` : ""}</p>{operationError && <div className="worker-operation-error" role="alert"><strong>Start blocked</strong><span>{operationError}</span></div>}{thermalLoadNotice && <div className="thermal-load-notice" role="status"><strong>Model loading paused</strong><span>{thermalLoadNotice}</span></div>}{worker.last_error && <p className="inline-error">{worker.last_error}</p>}<details><summary>Immutable execution details</summary><DefinitionList rows={[["Internal ID", worker.id], ["Revision", worker.revision], ["Runtime", worker.runtime], ["Template", worker.runtime_template_id ?? "Built in"], ...(worker.runtime === "mock" ? [["Mock contract", String(worker.settings.mock_contract_id ?? "Legacy family mock")], ["Mock scenario", String(worker.settings.mock_scenario ?? "success")], ["Mock delay", worker.settings.mock_delay_ms ? `${worker.settings.mock_delay_ms} ms` : "None"]] as Array<[string, string]> : []), ["Port", String(worker.port)], ["Lifecycle", worker.lifecycle], ["Data type", worker.dtype], ["Context length", String(worker.settings.context_length ?? "Not applicable")], ["Maximum output", String(worker.settings.maximum_new_tokens ?? "Not applicable")], ["Visual token budget", String(worker.settings.visual_token_budget ?? "Not applicable")], ["Maximum denoising steps", String(worker.settings.maximum_denoising_steps ?? "Not applicable")]]} /></details>{workerCapabilities.length > 0 && <div className="worker-capability-list"><strong>Allowed capabilities</strong>{workerCapabilities.map((capability) => { const ownStatus = capability.qualifying_workers.find((item) => item.worker_id === worker.id)?.status ?? "not-tested"; return <div key={capability.id}><span><b>{capability.display_name}</b><small>{humanise(ownStatus)}</small></span><button className="secondary compact-button" disabled={worker.state !== "ready"} onClick={() => void qualify(worker, capability.id).catch((reason) => setFeedback(messageFrom(reason)))}>Qualify</button></div>; })}</div>}<div className="button-row"><button className="secondary" disabled={openDay || workerPending} onClick={() => void rename(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Rename</button><button className="secondary" disabled={openDay || workerPending || !template} title={template ? "Create a new Worker with revised parameters" : "The trusted runtime is no longer installed"} onClick={() => template && beginReplacement(worker, template)}>Replace</button><button disabled={workerPending || worker.state === "ready" || !thermal.model_loading_allowed} title={thermalLoadNotice ?? undefined} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button><button className="secondary" disabled={workerPending || worker.state !== "ready"} onClick={() => void operate(worker, "smoke")}>{pending.has(`${worker.id}:smoke`) ? "Smoking…" : "Smoke"}</button><button className="secondary" disabled={workerPending || worker.state === "stopped"} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button><button className="secondary danger" disabled={openDay || workerPending || !["stopped", "failed"].includes(worker.state)} onClick={() => void archive(worker).catch((reason) => setFeedback(messageFrom(reason)))}>Archive</button></div>
         {replacing === worker.id && template && <div className="runtime-form worker-replacement-form"><div className="runtime-form-heading"><strong>Replace this Worker</strong><small>The Model, revision and trusted runtime stay fixed. The original Worker is kept.</small></div><div className="runtime-fields"><label>Replacement name<input value={replacementWorkerName} maxLength={80} onChange={(event) => setReplacementWorkerName(event.target.value)} /></label><label>Model<input value={worker.artifact_model_id ?? worker.model_id} disabled /></label><label>Runtime<input value={template.display_name} disabled /></label></div><WorkerParameterFields template={template} values={replacementParameters} onChange={setReplacementParameters} prefixCacheAvailable={WAYFINDER_PREFIX_CACHE_MODELS.has(worker.model_id)} /><label className="rebind-option"><input type="checkbox" checked={rebindDrafts} onChange={(event) => setRebindDrafts(event.target.checked)} /> Rebind draft Routing Profile capabilities to the replacement</label><p className="manifest-note">Published Routing Profile revisions always keep the original Worker until you explicitly publish an updated draft.</p><div className="runtime-form-actions"><button disabled={!replacementWorkerName.trim() || !parametersAreValid(template, replacementParameters)} onClick={() => void replace(worker, template).catch((reason) => setFeedback(messageFrom(reason)))}>Create replacement</button><button className="secondary" onClick={() => setReplacing(null)}>Cancel</button></div></div>}</div>
       </article>;
     })}</div>}
@@ -732,6 +749,13 @@ function StateBadge({ state }: { state: string }) { return <span className={`sta
 function DefinitionList({ rows }: { rows: Array<[string, string]> }) { return <dl className="definition-list compact">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>; }
 function formatBytes(value: number) { if (!Number.isFinite(value) || value <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`; }
 function humanise(value: string) { return value.replaceAll("_", " ").replaceAll("-", " "); }
+function thermalLoadingNotice(thermal: ThermalStatus) {
+  const temperature = thermal.temperature_c == null ? "" : ` (${thermal.temperature_c.toFixed(1)}°C)`;
+  if (thermal.state === "telemetry_degraded") {
+    return `Fresh thermal telemetry is stabilising${temperature}. Start is disabled until it is current.`;
+  }
+  return `Thermal protection is active${temperature}. Start is disabled until safe loading capacity returns.`;
+}
 function messageFrom(reason: unknown) { return reason instanceof Error ? reason.message : "The operation failed."; }
 
 function workerOperationPending(pending: ReadonlySet<string>, workerId: string) { return [...pending].some((key) => key.startsWith(`${workerId}:`)); }

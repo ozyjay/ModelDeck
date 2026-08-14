@@ -89,6 +89,25 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByText("No ready Worker")).toHaveClass("unavailable");
   });
 
+  it("disables Worker starts while thermal telemetry is stabilising", async () => {
+    const payloads = responses(true);
+    payloads["/api/thermal"] = {
+      ...payloads["/api/thermal"] as object,
+      state: "telemetry_degraded",
+      temperature_c: null,
+      telemetry_age_seconds: 12,
+      model_loading_allowed: false,
+      reason_code: "thermal_telemetry_degraded",
+    };
+    mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+
+    expect(await screen.findByText("Model loading paused")).toBeInTheDocument();
+    expect(screen.getByText(/Fresh thermal telemetry is stabilising/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+  });
+
   it("edits routing profiles without Event or Demo terminology", async () => {
     const fetchMock = mockFetch(responses(true));
     render(<App />);
