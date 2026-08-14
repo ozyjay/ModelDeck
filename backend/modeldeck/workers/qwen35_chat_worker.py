@@ -63,9 +63,10 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
         model.to(device)
         model.eval()
         self.torch = torch
-        # The processor exposes the tokenizer and chat-template APIs consumed by the
-        # shared bounded autoregressive protocol without accepting image content.
-        self.tokenizer = processor
+        # The processor treats its first positional argument as image input. The shared
+        # autoregressive protocol passes text positionally, so use the processor's
+        # underlying tokenizer for the text-only chat Worker.
+        self.tokenizer = processor.tokenizer
         self.model = model
         self.device = device
         self._supports_logits_to_keep = False
@@ -73,7 +74,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
         self._configuration_fingerprint = _configuration_fingerprint(
             config=self.config,
             model=model,
-            tokenizer=processor,
+            tokenizer=self.tokenizer,
             transformers_version=importlib.metadata.version("transformers"),
         )
         self.clear_prefix_cache(count_clear=False)
