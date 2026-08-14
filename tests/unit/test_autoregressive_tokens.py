@@ -12,9 +12,21 @@ from modeldeck.workers.autoregressive_worker import (
     _configured_eos_token_ids,
     _decode_tokens,
     _latest_user_prompt,
+    _model_context_length,
     _suppress_token_logits,
     _tokenise_without_special_tokens,
 )
+
+
+def test_model_context_length_uses_nested_qwen35_text_config() -> None:
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            max_position_embeddings=None,
+            text_config=SimpleNamespace(max_position_embeddings=262_144),
+        )
+    )
+
+    assert _model_context_length(model) == 262_144
 
 
 class FakeTokenizer:

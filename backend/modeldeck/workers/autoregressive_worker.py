@@ -1261,10 +1261,17 @@ def _next_event(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _model_context_length(model: Any) -> int:
-    value = getattr(getattr(model, "config", None), "max_position_embeddings", None)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 256:
-        raise RuntimeError("Loaded model does not declare a safe maximum context length")
-    return value
+    config = getattr(model, "config", None)
+    candidates = (
+        getattr(config, "max_position_embeddings", None),
+        # Qwen3.5 conditional-generation models keep the text context declaration
+        # within their nested text configuration rather than at the top level.
+        getattr(getattr(config, "text_config", None), "max_position_embeddings", None),
+    )
+    for value in candidates:
+        if not isinstance(value, bool) and isinstance(value, int) and value >= 256:
+            return value
+    raise RuntimeError("Loaded model does not declare a safe maximum context length")
 
 
 def _latest_user_prompt(body: GenerationRequest) -> str:
