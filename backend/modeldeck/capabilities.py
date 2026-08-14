@@ -26,7 +26,11 @@ CAPABILITY_DEFINITIONS = {
             "Conversational text generation through the OpenAI-compatible chat contract.",
             "openai-chat-v1",
             ("text-input", "text-output", "chat"),
-            ("autoregressive-transformers", "gpt-oss-llama-vulkan"),
+            (
+                "autoregressive-transformers",
+                "gpt-oss-llama-vulkan",
+                "qwen35-chat-transformers-rocm",
+            ),
         ),
         CapabilityDefinition(
             "text-completion",
@@ -34,7 +38,11 @@ CAPABILITY_DEFINITIONS = {
             "Continuation of a supplied text prompt.",
             "openai-completions-v1",
             ("text-input", "text-output"),
-            ("autoregressive-transformers", "gpt-oss-llama-vulkan"),
+            (
+                "autoregressive-transformers",
+                "gpt-oss-llama-vulkan",
+                "qwen35-chat-transformers-rocm",
+            ),
         ),
         CapabilityDefinition(
             "autoregressive-trace",
@@ -143,6 +151,15 @@ QWEN35_MODEL_IDS = frozenset(
 )
 QWEN35_REVIEWED_AT = "2026-08-12"
 
+# Qwen3.5 is a vision-language architecture, but its official checkpoints also support
+# text-only conversation. These are intentionally narrow exceptions to the usual
+# generation-family matching rule below; the matcher still requires the exact official
+# Qwen3.5 snapshot and dedicated trusted adapter.
+QWEN35_TEXT_CAPABILITY_TEMPLATES = {
+    "general-chat": ("qwen35-chat-transformers-rocm",),
+    "text-completion": ("qwen35-chat-transformers-rocm",),
+}
+
 FAMILY_CAPABILITIES = {
     "autoregressive": ("general-chat", "text-completion", "autoregressive-trace"),
     "embedding": ("embeddings",),
@@ -182,6 +199,9 @@ def compatible_runtime_template_ids(
     definition = CAPABILITY_DEFINITIONS.get(capability_id)
     if definition is None or not definition.runtime_template_ids:
         return []
+    qwen35_templates = QWEN35_TEXT_CAPABILITY_TEMPLATES.get(capability_id, ())
+    if configuration_support == "scenechat-qwen35" and qwen35_templates:
+        return [template_id for template_id in qwen35_templates if template_id in registrations]
     baseline_registration = registrations.get(configuration_support) if configuration_support else None
     if baseline_registration is None:
         return []

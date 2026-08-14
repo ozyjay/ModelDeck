@@ -163,16 +163,12 @@ def create_v3_router() -> APIRouter:
                     409,
                     "Allow a capability exposed by the selected runtime, or supply capability_id",
                 )
-        baseline = registrations.get(support) if support else None
+        # candidate_templates above is the authoritative compatibility gate. It supports
+        # reviewed cross-family adapters such as Qwen3.5's text-only chat path while
+        # retaining exact model matching in the catalogue resolver.
         selected = registrations.get(template_id) if template_id else None
-        if baseline is None or selected is None:
+        if selected is None:
             raise HTTPException(409, "Select an installed trusted runtime")
-        if (
-            selected.template.generation_family != baseline.template.generation_family
-            or selected.template.cache_setting != baseline.template.cache_setting
-            or selected.template.uses_base_model_identity != baseline.template.uses_base_model_identity
-        ):
-            raise HTTPException(409, "The selected trusted runtime is incompatible with this Model")
         checkpoint_dir = (
             Path(cached["snapshot_location"])
             if selected.template.cache_setting == "q4_checkpoint_dir"

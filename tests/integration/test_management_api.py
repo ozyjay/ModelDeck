@@ -93,6 +93,28 @@ def discovered_model(*, runtime: str | None = None) -> dict:
     }
 
 
+def discovered_qwen35_model() -> dict:
+    return {
+        **discovered_model(runtime="scenechat-qwen35"),
+        "model_id": "Qwen/Qwen3.5-0.8B",
+        "generation_family_hint": "vision-language",
+        "capability_hints": ["text-generation", "chat", "image-input"],
+        "potential_capabilities": [
+            {
+                "id": "general-chat",
+                "display_name": "General chat",
+                "description": "Conversational text generation.",
+                "protocol_contract_id": "openai-chat-v1",
+                "traits": ["text-input", "text-output", "chat"],
+                "evidence": [
+                    {"kind": "asserted", "confidence": "direct", "source": "test", "detail": "Test."}
+                ],
+                "runtime_template_ids": [],
+            }
+        ],
+    }
+
+
 @pytest.mark.asyncio
 async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
@@ -166,6 +188,48 @@ async def test_capability_policy_records_missing_runtime_intent_and_master_denia
     assert capability["effective_allowed"] is False
     assert capability["runtime_status"] == "missing"
     assert capability["reason"] == "This cached Model is disallowed in ModelDeck."
+
+
+@pytest.mark.asyncio
+async def test_qwen35_chat_capability_creates_only_its_dedicated_worker(tmp_path, monkeypatch) -> None:
+    model = discovered_qwen35_model()
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [model])
+    monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            allowed = await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "capability_id": "general-chat",
+                    "allowed": True,
+                },
+            )
+            catalogue = (await client.get("/api/catalogue")).json()["models"][0]
+            created = await client.post(
+                "/api/workers",
+                json={
+                    "name": "Qwen chat",
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "capability_id": "general-chat",
+                    "runtime_template_id": "qwen35-chat-transformers-rocm",
+                },
+            )
+
+    assert allowed.status_code == 200
+    assert catalogue["potential_capabilities"][0]["available_runtime_template_ids"] == [
+        "qwen35-chat-transformers-rocm"
+    ]
+    assert created.status_code == 201
+    worker = created.json()
+    assert worker["runtime"] == "qwen35-chat-transformers-rocm"
+    assert worker["generation_family"] == "autoregressive"
+    assert worker["settings"]["hardware_verification_required"] is True
 
 
 @pytest.mark.asyncio

@@ -225,6 +225,37 @@ def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
 
 
+def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="Qwen/Qwen3.5-4B",
+            revision="a" * 40,
+            alias="qwen35-chat-4b",
+            maximum_new_tokens=512,
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="qwen35-chat-transformers-rocm",
+    )
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.qwen35_chat_worker",
+    ]
+    assert launch.command[launch.command.index("--model-id") + 1] == "Qwen/Qwen3.5-4B"
+    assert launch.command[launch.command.index("--maximum-new-tokens") + 1] == "512"
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
+
+
 def test_opus_translation_launch_is_isolated_directional_and_offline(monkeypatch, tmp_path) -> None:
     spec = SPEECHSHIFT_MODEL_SPECS["Helsinki-NLP/opus-mt-en-fr"]
     profile = create_local_profile(

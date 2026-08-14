@@ -152,6 +152,11 @@ capabilities and safe launch argument array. Archiving a Worker never removes th
 Model. Unsupported architectures remain visible with the reason Worker creation is
 unavailable.
 
+Official Qwen3.5 checkpoints have separate SceneChat and text-chat adapters. The text-chat
+adapter serves the OpenAI-compatible chat and completion contracts without accepting image
+content; it is hardware-verification-required until qualification records evidence for its
+exact model revision and configuration.
+
 Reviewed runtime templates can be added as versioned
 [trusted runtime manifests](docs/TRUSTED_RUNTIME_MANIFESTS.md). Installation requires an
 explicit local SHA-256 trust step and cannot be performed from the browser; manifests may

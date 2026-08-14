@@ -24,6 +24,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "embedding-transformers",
         "scenechat-gemma4",
         "scenechat-qwen35",
+        "qwen35-chat-transformers-rocm",
         "diffusiongemma-transformers",
         "diffusiongemma-modeldeck-q4",
         "gpt-oss-llama-vulkan",
@@ -33,7 +34,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
-    assert registrations["scenechat-qwen35"].package.version == "0.2.4"
+    assert registrations["scenechat-qwen35"].package.version == "0.2.5"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 
@@ -117,6 +118,16 @@ def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verificatio
     assert template.settings["context_length"] == 8192
     assert template.settings["maximum_new_tokens"] == 1024
     assert template.settings["visual_token_budget"] == 140
+    assert template.settings["hardware_verification_required"] is True
+
+
+def test_qwen35_chat_runtime_is_dedicated_and_requires_hardware_verification() -> None:
+    template = runtime_templates()["qwen35-chat-transformers-rocm"]
+
+    assert template.runtime == "qwen35-chat-transformers-rocm"
+    assert template.generation_family.value == "autoregressive"
+    assert template.capabilities.chat is True
+    assert template.capabilities.completions is True
     assert template.settings["hardware_verification_required"] is True
 
 

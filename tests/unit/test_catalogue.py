@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
+from modeldeck.capabilities import compatible_runtime_template_ids
 from modeldeck.catalogue import discover_huggingface_models, resolve_cache_paths
+from modeldeck.registry import runtime_template_registrations
 from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
 
 
@@ -264,6 +266,9 @@ def test_identifies_allowlisted_qwen35_scenechat_models(tmp_path: Path, model_na
     }
     assert capabilities["scene-analysis"]["runtime_template_ids"] == ["scenechat-qwen35"]
     assert capabilities["general-chat"]["runtime_template_ids"] == []
+    assert compatible_runtime_template_ids(
+        "general-chat", "scenechat-qwen35", runtime_template_registrations()
+    ) == ["qwen35-chat-transformers-rocm"]
     assert all(
         evidence["kind"] in {"detected", "asserted"} and evidence["confidence"] in {"direct", "inferred"}
         for capability in capabilities.values()
