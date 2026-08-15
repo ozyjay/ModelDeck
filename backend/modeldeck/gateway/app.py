@@ -805,7 +805,17 @@ async def proxy_request(
         )
     try:
         payload = await response.aread()
-        response_payload = json_loads(payload)
+        try:
+            response_payload = json_loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            error_code = "worker_protocol_error"
+            _record_gateway_diagnostic(request, alias, started, "error", error_code)
+            return gateway_error(
+                502,
+                error_code,
+                f"The local Worker for Route '{alias}' returned a non-JSON response.",
+                alias,
+            )
         if (
             path == "/v1/diffuse"
             and response.is_success

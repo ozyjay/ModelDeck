@@ -11,8 +11,11 @@ from modeldeck.workers.autoregressive_worker import (
     MAX_REQUEST_BYTES,
     EngineConfig,
     GenerationRequest,
+    ToolCallProtocolError,
+    TransformersAutoregressiveEngine,
     _AcceleratorOutOfMemory,
     _openai_tool_calls,
+    _qwen_chat_messages,
     _qwen_tool_schemas,
     _trace_token_metadata,
     create_app,
@@ -90,6 +93,16 @@ class OutOfMemoryEngine(FakeEngine):
     def trace(self, **_kwargs: Any) -> Iterator[dict[str, Any]]:
         raise _AcceleratorOutOfMemory
         yield  # pragma: no cover - retain the Iterator contract
+
+
+class StrictQwenTemplateTokenizer:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    def apply_chat_template(self, messages: list[dict[str, Any]], **_kwargs: Any) -> str:
+        self.messages = messages
+        arguments = messages[1]["tool_calls"][0]["function"]["arguments"]
+        return ",".join(f"{name}={value}" for name, value in arguments.items())
 
 
 @pytest.mark.asyncio
@@ -348,6 +361,102 @@ async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> N
     assert engine.last_body is not None
     assert engine.last_body.messages[-1].role == "tool"
     assert follow_up.status_code == 200
+
+
+def test_transformers_worker_converts_openai_tool_history_for_qwen_template() -> None:
+    tokenizer = StrictQwenTemplateTokenizer()
+    engine = TransformersAutoregressiveEngine(EngineConfig(model_id="Qwen/test", revision="commit"))
+    engine.tokenizer = tokenizer
+    body = GenerationRequest.model_validate(
+        {
+            "model": "deep-local",
+            "messages": [
+                {"role": "user", "content": "Read the file."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_workspace_text_file",
+                                "arguments": '{"path":"Readme.md"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
+            ],
+        }
+    )
+
+    assert engine.build_prompt(body) == "path=Readme.md"
+    assert tokenizer.messages[1]["tool_calls"][0]["function"]["arguments"] == {"path": "Readme.md"}
+    assert body.messages is not None
+    assert body.messages[1].tool_calls[0]["function"]["arguments"] == '{"path":"Readme.md"}'
+
+
+@pytest.mark.asyncio
+async def test_worker_returns_structured_error_for_malformed_tool_history() -> None:
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=engine,
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "deep-local",
+                    "messages": [
+                        {"role": "user", "content": "Read the file."},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_workspace_text_file",
+                                        "arguments": "{malformed",
+                                    },
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
+                    ],
+                },
+            )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "malformed_tool_arguments"
+    with pytest.raises(ToolCallProtocolError, match="JSON object"):
+        _qwen_chat_messages(
+            GenerationRequest.model_validate(
+                {
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "broken", "arguments": "[]"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ).messages
+            or []
+        )
 
 
 @pytest.mark.asyncio

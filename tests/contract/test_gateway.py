@@ -554,6 +554,12 @@ class FakeGatewayClient:
         pass
 
 
+class NonJsonGatewayClient(FakeGatewayClient):
+    async def send(self, request: httpx.Request, *, stream: bool = False):
+        self.last_request = request
+        return httpx.Response(500, content=b"Internal Server Error", request=request)
+
+
 @pytest.mark.asyncio
 async def test_gateway_forwards_openai_tool_fields_without_semantic_routing(monkeypatch) -> None:
     import modeldeck.gateway.app as gateway_module
@@ -1041,3 +1047,24 @@ async def test_gateway_propagates_fixture_worker_failure_without_fallback_header
     assert json.loads(response.body)["error"]["code"] == "mock_request_failure"
     assert "x-modeldeck-fallback" not in response.headers
     assert request.app.state.last_request_diagnostics["error_code"] == "mock_request_failure"
+
+
+@pytest.mark.asyncio
+async def test_gateway_converts_non_json_worker_failure_to_protocol_error(monkeypatch) -> None:
+    import modeldeck.gateway.app as gateway_module
+
+    profile = worker().to_profile()
+    fake = NonJsonGatewayClient({"ready": True, "busy": False})
+    monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
+    request = gateway_request({"model": "visitor-chat", "messages": []})
+
+    response = await proxy_request(
+        request,
+        {"visitor-chat": [profile]},
+        "/v1/chat/completions",
+        None,
+    )
+
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"]["code"] == "worker_protocol_error"
+    assert request.app.state.last_request_diagnostics["error_code"] == "worker_protocol_error"

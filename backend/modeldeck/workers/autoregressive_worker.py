@@ -270,7 +270,7 @@ class TransformersAutoregressiveEngine:
 
     def build_prompt(self, body: GenerationRequest) -> str:
         if body.messages:
-            messages = [message.model_dump(exclude_none=True) for message in body.messages]
+            messages = _qwen_chat_messages(body.messages)
             return self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -296,10 +296,7 @@ class TransformersAutoregressiveEngine:
         elif hint is not None and not supports_wayfinder_prefix_cache(self.config.model_id):
             bypass_reason = "unsupported_model"
         elif hint is not None and body.messages:
-            stable_messages = [
-                message.model_dump(exclude_none=True)
-                for message in body.messages[: hint.stable_message_count]
-            ]
+            stable_messages = _qwen_chat_messages(body.messages[: hint.stable_message_count])
             try:
                 stable_prompt = self.tokenizer.apply_chat_template(
                     stable_messages,
@@ -1192,10 +1189,13 @@ async def _generate_response(
             "tool_calling_streaming_unsupported",
             "Required tool calling is not available with this Worker's streaming response protocol.",
         )
-    if body.stream:
-        trace_response = await _trace_response(request, body, engine)
-        return trace_response
-    result = await _trace_response(request, body, engine)
+    try:
+        if body.stream:
+            trace_response = await _trace_response(request, body, engine)
+            return trace_response
+        result = await _trace_response(request, body, engine)
+    except ToolCallProtocolError as error:
+        return _error_response(422, error.code, error.message)
     if isinstance(result, JSONResponse):
         return result
     events = result["events"]
@@ -1315,6 +1315,62 @@ class ToolCallProtocolError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _qwen_chat_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    """Convert OpenAI tool-call history to the shape consumed by Qwen templates."""
+
+    rendered_messages: list[dict[str, Any]] = []
+    for message_index, message in enumerate(messages):
+        rendered = message.model_dump(exclude_none=True)
+        tool_calls = rendered.get("tool_calls")
+        if tool_calls is None:
+            rendered_messages.append(rendered)
+            continue
+        native_calls: list[dict[str, Any]] = []
+        for call_index, call in enumerate(tool_calls):
+            if not isinstance(call, dict) or call.get("type") != "function":
+                raise ToolCallProtocolError(
+                    "invalid_tool_history",
+                    f"Assistant message {message_index} tool call {call_index} must be a function call.",
+                )
+            function = call.get("function")
+            if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+                raise ToolCallProtocolError(
+                    "invalid_tool_history",
+                    f"Assistant message {message_index} tool call {call_index} requires a function name.",
+                )
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError as error:
+                    raise ToolCallProtocolError(
+                        "malformed_tool_arguments",
+                        (
+                            f"Assistant message {message_index} tool call {call_index} "
+                            "contains malformed JSON arguments."
+                        ),
+                    ) from error
+            if not isinstance(arguments, dict):
+                raise ToolCallProtocolError(
+                    "malformed_tool_arguments",
+                    (
+                        f"Assistant message {message_index} tool call {call_index} "
+                        "arguments must decode to a JSON object."
+                    ),
+                )
+            native_calls.append(
+                {
+                    **call,
+                    "function": {
+                        **function,
+                        "arguments": arguments,
+                    },
+                }
+            )
+        rendered_messages.append({**rendered, "tool_calls": native_calls})
+    return rendered_messages
 
 
 def _qwen_tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
@@ -1443,6 +1499,8 @@ def _enforce_tool_choice(body: GenerationRequest, calls: list[dict[str, Any]]) -
 def _validate_tool_request(body: GenerationRequest) -> None:
     """Validate the bounded OpenAI tool input before template rendering."""
 
+    if body.messages:
+        _qwen_chat_messages(body.messages)
     if not body.tools:
         if body.tool_choice is not None:
             raise ToolCallProtocolError("invalid_tool_choice", "tool_choice requires at least one tool.")

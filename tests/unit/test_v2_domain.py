@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -12,7 +13,13 @@ from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
 from modeldeck.migrate_v3_to_v4 import migrate as migrate_v3_to_v4
-from modeldeck.v2_api import _has_smoke_evidence, _valid_rehearsal_tool_call, _worker_smoke_request
+from modeldeck.v2_api import (
+    _has_smoke_evidence,
+    _rehearse_route_tool_calling,
+    _valid_rehearsal_final_text,
+    _valid_rehearsal_tool_call,
+    _worker_smoke_request,
+)
 
 
 def worker_definition() -> WorkerDefinition:
@@ -215,6 +222,7 @@ def test_tool_calling_rehearsal_requires_exactly_one_named_json_call() -> None:
                     "message": {
                         "tool_calls": [
                             {
+                                "id": "call_read",
                                 "type": "function",
                                 "function": {
                                     "name": "read_workspace_text_file",
@@ -237,6 +245,129 @@ def test_tool_calling_rehearsal_requires_exactly_one_named_json_call() -> None:
         False,
         "tool_call_protocol_invalid",
     )
+
+
+def test_tool_calling_rehearsal_requires_grounded_final_text() -> None:
+    valid = httpx.Response(
+        200,
+        json={"choices": [{"message": {"content": "MODELDECK_TOOL_REHEARSAL_OK"}}]},
+    )
+    invalid = httpx.Response(200, json={"choices": [{"message": {"content": "guessed"}}]})
+
+    assert _valid_rehearsal_final_text(valid, "MODELDECK_TOOL_REHEARSAL_OK") == (True, "valid")
+    assert _valid_rehearsal_final_text(invalid, "MODELDECK_TOOL_REHEARSAL_OK") == (
+        False,
+        "grounded_final_text_invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_calling_rehearsal_exercises_a_complete_openai_tool_loop(monkeypatch, tmp_path) -> None:
+    import modeldeck.v2_api as v2_module
+
+    class RehearsalClient:
+        def __init__(self) -> None:
+            self.payloads: list[dict] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url: str, *, json: dict):
+            self.payloads.append(json)
+            if len(self.payloads) == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_list",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "list_workspace_entries",
+                                                "arguments": "{}",
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    },
+                )
+            if len(self.payloads) == 2:
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_read",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "read_workspace_text_file",
+                                                "arguments": '{"path":"Readme.md"}',
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "MODELDECK_TOOL_REHEARSAL_OK"}}]},
+            )
+
+    class RehearsalStore:
+        evidence: dict | None = None
+
+        def save_route_tool_calling_rehearsal(self, *_args, **kwargs):
+            self.evidence = kwargs["evidence"]
+            return {
+                "supported": kwargs["supported"],
+                "rehearsed": True,
+                "last_rehearsal": "now",
+                "failure_code": kwargs["failure_code"],
+            }
+
+    client = RehearsalClient()
+    store = RehearsalStore()
+    monkeypatch.setattr(v2_module.httpx, "AsyncClient", lambda *args, **kwargs: client)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=Settings(data_dir=tmp_path),
+                compatibility_store=store,
+            )
+        )
+    )
+
+    result = await _rehearse_route_tool_calling(
+        {"profile_id": "profile-1", "revision": 2},
+        {"capability_id": "deep-chat", "public_name": "deep-local"},
+        request,
+    )
+
+    assert result["ok"] is True
+    assert len(client.payloads) == 3
+    assert [payload["max_tokens"] for payload in client.payloads] == [192, 192, 96]
+    assert client.payloads[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert client.payloads[2]["messages"][3]["tool_calls"][0]["function"]["arguments"] == (
+        '{"path":"Readme.md"}'
+    )
+    assert store.evidence is not None
+    assert store.evidence["probe_count"] == 3
+    assert "MODELDECK_TOOL_REHEARSAL_OK" not in json.dumps(store.evidence)
 
 
 def test_embedding_smoke_requires_ordered_1024_dimension_vectors() -> None:

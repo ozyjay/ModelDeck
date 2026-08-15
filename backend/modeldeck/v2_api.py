@@ -778,41 +778,36 @@ async def _rehearse_route_tool_calling(
     revision = int(snapshot["revision"])
     capability_id = str(capability["capability_id"])
     public_name = str(capability["public_name"])
-    probes = (
-        (
-            "list_workspace_entries",
-            {},
-            "Call list_workspace_entries exactly once. Do not answer with ordinary text.",
-            {
-                "type": "function",
-                "function": {
-                    "name": "list_workspace_entries",
-                    "description": "List allowlisted workspace entries.",
-                    "parameters": {"type": "object", "properties": {}},
-                },
+    list_tool = {
+        "type": "function",
+        "function": {
+            "name": "list_workspace_entries",
+            "description": "List allowlisted workspace entries.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    read_tool = {
+        "type": "function",
+        "function": {
+            "name": "read_workspace_text_file",
+            "description": "Read one allowlisted workspace text file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
             },
-        ),
-        (
-            "read_workspace_text_file",
-            {"path": "Readme.md"},
-            (
-                "Call read_workspace_text_file exactly once with path Readme.md. "
-                "Do not answer with ordinary text."
+        },
+    }
+    messages: list[dict[str, object]] = [
+        {
+            "role": "user",
+            "content": (
+                "Call list_workspace_entries exactly once. After its result, call "
+                "read_workspace_text_file for Readme.md, then report the rehearsal marker "
+                "from that file. Do not guess or answer before using the tools."
             ),
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_workspace_text_file",
-                    "description": "Read one allowlisted workspace text file.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    },
-                },
-            },
-        ),
-    )
+        }
+    ]
     evidence: list[dict[str, object]] = []
     failure_code: str | None = None
     gateway_url = gateway_base_url(
@@ -820,38 +815,108 @@ async def _rehearse_route_tool_calling(
     )
     try:
         async with httpx.AsyncClient(timeout=_capability_smoke_timeout("openai-chat-v1", request)) as client:
-            for expected_name, expected_arguments, instruction, tool in probes:
+            started = time.perf_counter()
+            response = await client.post(
+                f"{gateway_url}/v1/chat/completions",
+                json={
+                    "model": public_name,
+                    "messages": messages,
+                    "tools": [list_tool],
+                    "tool_choice": "required",
+                    "temperature": 0,
+                    "max_tokens": 192,
+                },
+            )
+            call, category = _rehearsal_tool_call(response, "list_workspace_entries", {})
+            evidence.append(
+                {
+                    "tool_call_count": 1 if call else 0,
+                    "result_category": category,
+                    "latency_ms": round((time.perf_counter() - started) * 1000),
+                }
+            )
+            if call is None:
+                failure_code = category
+            else:
+                messages.extend(
+                    (
+                        {"role": "assistant", "content": None, "tool_calls": [call]},
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps({"entries": ["Readme.md"]}),
+                        },
+                    )
+                )
+
+            if failure_code is None:
                 started = time.perf_counter()
                 response = await client.post(
                     f"{gateway_url}/v1/chat/completions",
                     json={
                         "model": public_name,
-                        "messages": [{"role": "user", "content": instruction}],
-                        "tools": [tool],
+                        "messages": messages,
+                        "tools": [read_tool],
                         "tool_choice": "required",
+                        "temperature": 0,
+                        "max_tokens": 192,
+                    },
+                )
+                call, category = _rehearsal_tool_call(
+                    response, "read_workspace_text_file", {"path": "Readme.md"}
+                )
+                evidence.append(
+                    {
+                        "tool_call_count": 1 if call else 0,
+                        "result_category": category,
+                        "latency_ms": round((time.perf_counter() - started) * 1000),
+                    }
+                )
+                if call is None:
+                    failure_code = category
+                else:
+                    messages.extend(
+                        (
+                            {"role": "assistant", "content": None, "tool_calls": [call]},
+                            {
+                                "role": "tool",
+                                "tool_call_id": call["id"],
+                                "content": json.dumps(
+                                    {
+                                        "path": "Readme.md",
+                                        "content": "MODELDECK_TOOL_REHEARSAL_OK",
+                                    }
+                                ),
+                            },
+                        )
+                    )
+
+            if failure_code is None:
+                started = time.perf_counter()
+                response = await client.post(
+                    f"{gateway_url}/v1/chat/completions",
+                    json={
+                        "model": public_name,
+                        "messages": messages,
                         "temperature": 0,
                         "max_tokens": 96,
                     },
                 )
-                elapsed_ms = round((time.perf_counter() - started) * 1000)
-                valid, category = _valid_rehearsal_tool_call(
-                    response, str(expected_name), dict(expected_arguments)
-                )
+                valid, category = _valid_rehearsal_final_text(response, "MODELDECK_TOOL_REHEARSAL_OK")
                 evidence.append(
                     {
-                        "tool_call_count": 1 if valid else 0,
+                        "tool_call_count": 0,
                         "result_category": category,
-                        "latency_ms": elapsed_ms,
+                        "latency_ms": round((time.perf_counter() - started) * 1000),
                     }
                 )
                 if not valid:
                     failure_code = category
-                    break
     except httpx.TimeoutException:
         failure_code = "gateway_timeout"
     except httpx.HTTPError:
         failure_code = "local_route_unavailable"
-    supported = failure_code is None and len(evidence) == len(probes)
+    supported = failure_code is None and len(evidence) == 3
     state = request.app.state.compatibility_store.save_route_tool_calling_rehearsal(
         profile_id,
         revision,
@@ -874,6 +939,45 @@ def _valid_rehearsal_tool_call(
 ) -> tuple[bool, str]:
     """Validate a response shape without recording any response content."""
 
+    call, category = _rehearsal_tool_call(response, expected_name, expected_arguments)
+    return call is not None, category
+
+
+def _rehearsal_tool_call(
+    response: httpx.Response, expected_name: str, expected_arguments: dict[str, object]
+) -> tuple[dict[str, object] | None, str]:
+    """Return one validated OpenAI tool call for bounded rehearsal continuation."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, "invalid_worker_response"
+    if not response.is_success:
+        error = payload.get("error") if isinstance(payload, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        return None, str(code) if isinstance(code, str) else "tool_calling_probe_failed"
+    try:
+        calls = payload["choices"][0]["message"]["tool_calls"]
+        if not isinstance(calls, list) or len(calls) != 1:
+            return None, "tool_call_count_invalid"
+        call = calls[0]
+        if not isinstance(call, dict):
+            return None, "tool_call_protocol_invalid"
+        if not isinstance(call.get("id"), str) or not call["id"]:
+            return None, "tool_call_id_invalid"
+        if call.get("type") != "function" or call["function"]["name"] != expected_name:
+            return None, "tool_call_name_invalid"
+        arguments = call["function"]["arguments"]
+        if not isinstance(arguments, str) or json.loads(arguments) != expected_arguments:
+            return None, "tool_call_arguments_invalid"
+    except (KeyError, TypeError, ValueError):
+        return None, "tool_call_protocol_invalid"
+    return call, "valid"
+
+
+def _valid_rehearsal_final_text(response: httpx.Response, marker: str) -> tuple[bool, str]:
+    """Validate grounded final text without retaining the model response."""
+
     try:
         payload = response.json()
     except ValueError:
@@ -883,16 +987,13 @@ def _valid_rehearsal_tool_call(
         code = error.get("code") if isinstance(error, dict) else None
         return False, str(code) if isinstance(code, str) else "tool_calling_probe_failed"
     try:
-        calls = payload["choices"][0]["message"]["tool_calls"]
-        if not isinstance(calls, list) or len(calls) != 1:
-            return False, "tool_call_count_invalid"
-        call = calls[0]
-        if call.get("type") != "function" or call["function"]["name"] != expected_name:
-            return False, "tool_call_name_invalid"
-        arguments = call["function"]["arguments"]
-        if not isinstance(arguments, str) or json.loads(arguments) != expected_arguments:
-            return False, "tool_call_arguments_invalid"
-    except (KeyError, TypeError, ValueError):
+        message = payload["choices"][0]["message"]
+        if message.get("tool_calls"):
+            return False, "final_tool_call_unexpected"
+        content = message["content"]
+        if not isinstance(content, str) or marker not in content:
+            return False, "grounded_final_text_invalid"
+    except (KeyError, TypeError):
         return False, "tool_call_protocol_invalid"
     return True, "valid"
 
