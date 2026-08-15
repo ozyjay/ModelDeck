@@ -1300,6 +1300,14 @@ def _latest_user_prompt(body: GenerationRequest) -> str:
 
 
 _TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_OPEN_TOOL_CALL = re.compile(r"<tool_call>\s*(.*)", re.DOTALL)
+_QWEN_FUNCTION_CALL = re.compile(
+    r"<tool_call>\s*<function=(?P<name>[^\s>]+)>\s*(?P<body>.*?)\s*</function>\s*</tool_call>",
+    re.DOTALL,
+)
+_QWEN_FUNCTION_PARAMETER = re.compile(
+    r"<parameter=(?P<name>[^\s>]+)>\s*(?P<value>.*?)\s*</parameter>", re.DOTALL
+)
 
 
 class ToolCallProtocolError(ValueError):
@@ -1332,37 +1340,77 @@ def _qwen_tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any
 def _openai_tool_calls(text: str) -> tuple[list[dict[str, Any]], str | None]:
     """Translate Qwen's documented tool-call envelope to OpenAI's response shape."""
 
+    qwen_calls = list(_QWEN_FUNCTION_CALL.finditer(text))
+    if qwen_calls:
+        calls = []
+        for index, match in enumerate(qwen_calls):
+            body = match.group("body")
+            parameters = {
+                parameter.group("name"): parameter.group("value").strip()
+                for parameter in _QWEN_FUNCTION_PARAMETER.finditer(body)
+            }
+            if _QWEN_FUNCTION_PARAMETER.sub("", body).strip():
+                raise ToolCallProtocolError(
+                    "malformed_tool_call", "The local model returned malformed Qwen tool-call parameters."
+                )
+            calls.append(_openai_tool_call({"name": match.group("name"), "arguments": parameters}, index))
+        # Qwen3.5 may emit its reasoning channel before a tool call. It is neither
+        # user-facing completion text nor part of the function protocol.
+        content = _QWEN_FUNCTION_CALL.sub("", text)
+        if "</think>" in content:
+            content = content.split("</think>", 1)[1]
+        return calls, content.strip() or None
+
     calls: list[dict[str, Any]] = []
     matches = list(_TOOL_CALL.finditer(text))
     if "<tool_call" in text and not matches:
-        raise ToolCallProtocolError(
-            "malformed_tool_call", "The local model returned an incomplete tool-call envelope."
-        )
-    for index, match in enumerate(matches):
+        # Qwen templates may terminate generation immediately after the JSON object
+        # rather than emitting a closing XML-like marker. It remains a complete native
+        # tool call when the remaining text is exactly one valid object.
+        open_match = _OPEN_TOOL_CALL.search(text)
+        if open_match is None:
+            raise ToolCallProtocolError(
+                "malformed_tool_call", "The local model returned an incomplete tool-call envelope."
+            )
         try:
-            call = json.loads(match.group(1))
-            if not isinstance(call, dict) or not isinstance(call.get("name"), str):
-                raise ValueError("tool call must contain a function name")
-            name = call["name"]
-            arguments = call.get("arguments", {})
-            arguments_json = arguments if isinstance(arguments, str) else json.dumps(arguments)
-            json.loads(arguments_json)
+            call, end = json.JSONDecoder().raw_decode(open_match.group(1).lstrip())
+            if open_match.group(1).lstrip()[end:].strip():
+                raise ValueError("unexpected text after tool-call JSON")
+            matches = [None]
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise ToolCallProtocolError(
                 "malformed_tool_call", "The local model returned malformed tool-call JSON."
             ) from error
-        calls.append(
-            {
-                "id": f"call_{index}_{uuid.uuid4().hex[:16]}",
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": arguments_json,
-                },
-            }
-        )
+        calls.append(_openai_tool_call(call, 0))
+        return calls, None
+    for index, match in enumerate(matches):
+        try:
+            call = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise ToolCallProtocolError(
+                "malformed_tool_call", "The local model returned malformed tool-call JSON."
+            ) from error
+        calls.append(_openai_tool_call(call, index))
     content = _TOOL_CALL.sub("", text).strip()
     return calls, content or None
+
+
+def _openai_tool_call(call: Any, index: int) -> dict[str, Any]:
+    try:
+        if not isinstance(call, dict) or not isinstance(call.get("name"), str):
+            raise ValueError("tool call must contain a function name")
+        arguments = call.get("arguments", {})
+        arguments_json = arguments if isinstance(arguments, str) else json.dumps(arguments)
+        json.loads(arguments_json)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ToolCallProtocolError(
+            "malformed_tool_call", "The local model returned malformed tool-call JSON."
+        ) from error
+    return {
+        "id": f"call_{index}_{uuid.uuid4().hex[:16]}",
+        "type": "function",
+        "function": {"name": call["name"], "arguments": arguments_json},
+    }
 
 
 def _enforce_tool_choice(body: GenerationRequest, calls: list[dict[str, Any]]) -> None:

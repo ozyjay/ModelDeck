@@ -12,6 +12,7 @@ from modeldeck.workers.autoregressive_worker import (
     EngineConfig,
     GenerationRequest,
     _AcceleratorOutOfMemory,
+    _openai_tool_calls,
     _qwen_tool_schemas,
     _trace_token_metadata,
     create_app,
@@ -426,6 +427,27 @@ async def test_worker_returns_protocol_error_for_malformed_tool_json() -> None:
 def test_worker_renders_openai_tools_as_qwen_native_template_schemas() -> None:
     tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
     assert _qwen_tool_schemas(tools) == [{"name": "weather", "parameters": {"type": "object"}}]
+
+
+def test_worker_parses_complete_qwen_tool_json_without_a_closing_envelope() -> None:
+    calls, content = _openai_tool_calls('<tool_call>{"name":"weather","arguments":{"city":"Brisbane"}}')
+
+    assert content is None
+    assert calls[0]["function"] == {"name": "weather", "arguments": '{"city": "Brisbane"}'}
+
+
+def test_worker_parses_qwen_function_tags_and_hides_its_reasoning_channel() -> None:
+    calls, content = _openai_tool_calls(
+        "I will use the tool.\n</think>\n<tool_call>\n"
+        "<function=read_workspace_text_file>\n<parameter=path>\nReadme.md\n</parameter>\n"
+        "</function>\n</tool_call>"
+    )
+
+    assert content is None
+    assert calls[0]["function"] == {
+        "name": "read_workspace_text_file",
+        "arguments": '{"path": "Readme.md"}',
+    }
 
 
 @pytest.mark.asyncio
