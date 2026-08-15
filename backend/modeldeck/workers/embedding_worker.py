@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 
 EMBEDDING_DIMENSIONS = 1024
@@ -232,7 +233,7 @@ def create_app(
             raise HTTPException(503, request.app.state.load_error)
         request.app.state.worker_state = WorkerState.WARMING
         try:
-            await asyncio.to_thread(runtime.warmup)
+            await run_in_isolated_thread(runtime.warmup)
         except Exception as error:
             request.app.state.worker_state = WorkerState.FAILED
             request.app.state.load_error = f"Warmup failed: {type(error).__name__}: {error}"
@@ -255,7 +256,7 @@ def create_app(
         async with request.app.state.embedding_lock:
             request.app.state.worker_state = WorkerState.BUSY
             try:
-                vectors = await asyncio.to_thread(runtime.embed, body.inputs)
+                vectors = await run_in_isolated_thread(runtime.embed, body.inputs)
                 if len(vectors) != len(body.inputs):
                     raise RuntimeError(
                         "Embedding engine returned a vector count different from the input count"
@@ -277,7 +278,7 @@ def create_app(
 
 async def _load_engine(app: FastAPI, engine: EmbeddingEngine) -> None:
     try:
-        await asyncio.to_thread(engine.load)
+        await run_in_isolated_thread(engine.load)
         app.state.worker_state = WorkerState.WARMING
     except Exception as error:
         app.state.load_error = f"Load failed: {type(error).__name__}: {error}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -144,6 +145,49 @@ async def test_worker_load_warmup_trace_and_stream_contracts() -> None:
     assert "event: token" in stream.text
     assert "data: [DONE]" in stream.text
     assert after["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_worker_engine_operations_do_not_depend_on_the_default_executor(monkeypatch) -> None:
+    async def unavailable_default_executor(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the default executor is unavailable")
+
+    monkeypatch.setattr(asyncio, "to_thread", unavailable_default_executor)
+    engine = FakeEngine()
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=engine,
+    )
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(app.state.load_task, timeout=1)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await asyncio.wait_for(client.post("/warmup"), timeout=1)
+            trace = await asyncio.wait_for(
+                client.post(
+                    "/native/autoregressive/trace",
+                    json={"prompt": "Hi", "max_tokens": 2},
+                ),
+                timeout=1,
+            )
+            stream = await asyncio.wait_for(
+                client.post(
+                    "/native/autoregressive/trace",
+                    json={"prompt": "Hi", "max_tokens": 2, "stream": True},
+                ),
+                timeout=1,
+            )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "ready": True}
+    assert trace.status_code == 200
+    assert trace.json()["events"][-1]["text_so_far"] == "Hello world"
+    assert stream.status_code == 200
+    assert "data: [DONE]" in stream.text
+    assert engine.loaded is True
+    assert engine.warmed is True
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import httpx
 import pytest
 from modeldeck.workers.embedding_worker import EMBEDDING_DIMENSIONS, EmbeddingEngineConfig, create_app
@@ -22,7 +25,13 @@ class FixtureEmbeddingEngine:
 
 
 @pytest.mark.asyncio
-async def test_embedding_worker_returns_1024_dimensions_and_preserves_input_order() -> None:
+async def test_embedding_worker_returns_1024_dimensions_without_the_default_executor(
+    monkeypatch,
+) -> None:
+    async def unavailable_default_executor(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the default executor is unavailable")
+
+    monkeypatch.setattr(asyncio, "to_thread", unavailable_default_executor)
     app = create_app(
         worker_id="embedding-worker",
         config=EmbeddingEngineConfig(model_id="Qwen/Qwen3-Embedding-0.6B", revision="a" * 40),
@@ -32,10 +41,13 @@ async def test_embedding_worker_returns_1024_dimensions_and_preserves_input_orde
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            warmed = await client.post("/warmup")
-            response = await client.post(
-                "/v1/embeddings",
-                json={"model": "sprintbot-embedding", "input": ["first", "second"]},
+            warmed = await asyncio.wait_for(client.post("/warmup"), timeout=1)
+            response = await asyncio.wait_for(
+                client.post(
+                    "/v1/embeddings",
+                    json={"model": "sprintbot-embedding", "input": ["first", "second"]},
+                ),
+                timeout=1,
             )
             chat = await client.post("/v1/chat/completions", json={"model": "sprintbot-embedding"})
 

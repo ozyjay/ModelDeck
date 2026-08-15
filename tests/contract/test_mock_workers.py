@@ -1,16 +1,68 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
+from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 from modeldeck.contracts.scenechat import SceneAnalysis
 from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.speechshift import QWEN_TTS_VOICES
 from modeldeck.workers.mock_worker import create_app
+
+
+class ASGIWebSocketSession:
+    def __init__(self, app: Any, path: str) -> None:
+        self.app = app
+        self.path = path
+        self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.task: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> ASGIWebSocketSession:
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": self.path,
+            "raw_path": self.path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"host", b"test")],
+            "client": ("127.0.0.1", 12345),
+            "server": ("test", 80),
+            "subprotocols": [],
+            "state": {},
+        }
+        self.task = asyncio.create_task(self.app(scope, self.incoming.get, self.outgoing.put))
+        await self.incoming.put({"type": "websocket.connect"})
+        accepted = await asyncio.wait_for(self.outgoing.get(), timeout=1)
+        assert accepted["type"] == "websocket.accept"
+        return self
+
+    async def __aexit__(self, *_args: Any) -> None:
+        assert self.task is not None
+        if not self.task.done():
+            await self.incoming.put({"type": "websocket.disconnect", "code": 1000})
+        await asyncio.wait_for(self.task, timeout=1)
+
+    async def send_json(self, value: dict[str, Any]) -> None:
+        await self.incoming.put({"type": "websocket.receive", "text": json.dumps(value)})
+
+    async def receive_json(self) -> dict[str, Any]:
+        message = await asyncio.wait_for(self.outgoing.get(), timeout=1)
+        assert message["type"] == "websocket.send"
+        return json.loads(message["text"])
+
+    async def receive_bytes(self) -> bytes:
+        message = await asyncio.wait_for(self.outgoing.get(), timeout=1)
+        assert message["type"] == "websocket.send"
+        return message["bytes"]
 
 
 def test_every_trusted_contract_has_a_mock_template() -> None:
@@ -200,7 +252,8 @@ async def test_mock_delay_and_request_failure_do_not_affect_health() -> None:
     assert response.json()["error"]["code"] == "mock_request_failure"
 
 
-def test_speech_mock_emits_deterministic_transcript_and_pcm() -> None:
+@pytest.mark.asyncio
+async def test_speech_mock_emits_deterministic_transcript_and_pcm() -> None:
     app = create_app(
         worker_id="test-speech",
         model_id="modeldeck/mock-speech-conversation",
@@ -209,22 +262,22 @@ def test_speech_mock_emits_deterministic_transcript_and_pcm() -> None:
         contract_id="speech-conversation-v1",
         startup_delay=0,
     )
-    with TestClient(app) as client:
-        with client.websocket_connect("/v1/speech/conversations") as socket:
-            socket.send_json({"model": "speech-mock"})
-            assert socket.receive_json()["type"] == "session.ready"
-            assert socket.receive_json()["type"] == "response.started"
-            assert socket.receive_json() == {
+    async with app.router.lifespan_context(app):
+        async with ASGIWebSocketSession(app, "/v1/speech/conversations") as socket:
+            await socket.send_json({"model": "speech-mock"})
+            assert (await socket.receive_json())["type"] == "session.ready"
+            assert (await socket.receive_json())["type"] == "response.started"
+            assert await socket.receive_json() == {
                 "type": "transcript.delta",
                 "delta": "Mock local speech response.",
             }
-            assert socket.receive_bytes() == bytes(640)
-            assert socket.receive_json()["type"] == "transcript.final"
-            assert socket.receive_json()["type"] == "response.completed"
-            socket.send_json({"type": "session.close"})
+            assert await socket.receive_bytes() == bytes(640)
+            assert (await socket.receive_json())["type"] == "transcript.final"
+            assert (await socket.receive_json())["type"] == "response.completed"
 
 
-def test_speech_mock_request_failure_uses_a_fixed_error_event() -> None:
+@pytest.mark.asyncio
+async def test_speech_mock_request_failure_uses_a_fixed_error_event() -> None:
     app = create_app(
         worker_id="test-speech-error",
         model_id="modeldeck/mock-speech-conversation",
@@ -234,10 +287,10 @@ def test_speech_mock_request_failure_uses_a_fixed_error_event() -> None:
         scenario="request-error",
         startup_delay=0,
     )
-    with TestClient(app) as client:
-        with client.websocket_connect("/v1/speech/conversations") as socket:
-            socket.send_json({"model": "speech-mock"})
-            assert socket.receive_json()["code"] == "mock_request_failure"
+    async with app.router.lifespan_context(app):
+        async with ASGIWebSocketSession(app, "/v1/speech/conversations") as socket:
+            await socket.send_json({"model": "speech-mock"})
+            assert (await socket.receive_json())["code"] == "mock_request_failure"
 
 
 @pytest.mark.asyncio

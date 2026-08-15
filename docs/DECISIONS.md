@@ -1,5 +1,29 @@
 # Architecture decisions
 
+## ADR-011 — Blocking in-process work uses isolated operation threads
+
+On the target Python 3.12.13 control environment, ModelDeck observed reusable asyncio
+executor threads accept work but then fail to wake or terminate reliably. The visible
+symptoms were a Worker contract or capability rehearsal completing its model operation
+and then appearing to stall, followed by Python warning that executor threads had not
+finished joining within 300 seconds. The behaviour affected `asyncio.to_thread` users
+across multiple Worker families; it was not specific to Qwen or tool calling.
+
+ModelDeck therefore runs each coarse blocking in-process operation through
+`modeldeck.async_execution.run_in_isolated_thread`. The helper creates one short-lived
+daemon thread for that load, warm-up, inference, close, discovery, or hardware-probe
+operation. The event loop polls operation completion rather than depending on a
+cross-thread wake notification, which was also observed to stall. Streaming model
+generation polls a thread-safe queue fed by one producer thread per request rather than
+creating one thread per token. Native async subprocess workers keep their existing process
+boundary.
+
+Runtime code must not use `asyncio.to_thread` or a reusable `ThreadPoolExecutor`. A unit
+test scans `backend/modeldeck` for this regression. Isolated thread creation has a small
+per-operation cost, but these operations are coarse and dominated by model or hardware
+work. Cancellation remains cooperative: the owning route sets its cancellation event,
+while the daemon thread is allowed to finish without blocking event-loop shutdown.
+
 ## ADR-010 — Events publish immutable Route snapshots
 
 Open Day requirements are editable Events containing shared Routes and Demos. A Route

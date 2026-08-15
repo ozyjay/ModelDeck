@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modeldeck.async_execution import iterate_in_isolated_thread, run_in_isolated_thread
 from modeldeck.prefix_cache import (
     PREFIX_CACHE_MAX_BYTES,
     PREFIX_CACHE_MAX_TOKENS,
@@ -280,6 +281,7 @@ class TransformersAutoregressiveEngine:
                 # Keep OpenAI at the boundary and render the template's documented
                 # tool shape inside the Worker.
                 tools=_qwen_tool_schemas(body.tools),
+                tool_choice=body.tool_choice,
             )
         return body.prompt or ""
 
@@ -303,6 +305,7 @@ class TransformersAutoregressiveEngine:
                     tokenize=False,
                     add_generation_prompt=False,
                     tools=_qwen_tool_schemas(body.tools),
+                    tool_choice=body.tool_choice,
                 )
                 stable_encoded = self.tokenizer(
                     stable_prompt,
@@ -1060,7 +1063,7 @@ def create_app(
             raise HTTPException(503, request.app.state.load_error)
         request.app.state.worker_state = WorkerState.WARMING
         try:
-            await asyncio.to_thread(runtime.warmup)
+            await run_in_isolated_thread(runtime.warmup)
         except Exception as error:
             request.app.state.worker_state = WorkerState.FAILED
             request.app.state.load_error = f"Warmup failed: {type(error).__name__}: {error}"
@@ -1115,7 +1118,7 @@ def create_app(
 
 async def _load_engine(app: FastAPI, engine: AutoregressiveEngine) -> None:
     try:
-        await asyncio.to_thread(engine.load)
+        await run_in_isolated_thread(engine.load)
         app.state.worker_state = WorkerState.WARMING
     except Exception as error:
         app.state.load_error = f"Load failed: {type(error).__name__}: {error}"
@@ -1147,9 +1150,8 @@ async def _trace_response(request: Request, body: GenerationRequest, engine: Aut
         started = time.perf_counter()
         try:
             try:
-                events = await asyncio.to_thread(
-                    list,
-                    engine.trace(prompt=prompt, body=body, cancellation=cancellation),
+                events = await run_in_isolated_thread(
+                    lambda: list(engine.trace(prompt=prompt, body=body, cancellation=cancellation))
                 )
             except _AcceleratorOutOfMemory:
                 LOGGER.error("Inference failed request_id=%s reason=accelerator_out_of_memory", request_id)
@@ -1238,42 +1240,34 @@ async def _stream_trace(
     request_id = body.request_id or "unknown"
     async with request.app.state.generation_lock:
         request.app.state.worker_state = WorkerState.BUSY
-        iterator = engine.trace(prompt=prompt, body=body, cancellation=cancellation)
         try:
-            while True:
-                try:
-                    event = await asyncio.to_thread(_next_event, iterator)
-                except _AcceleratorOutOfMemory:
-                    LOGGER.error(
-                        "Inference failed request_id=%s reason=accelerator_out_of_memory",
-                        request_id,
-                    )
-                    payload = {
-                        "request_id": request_id,
-                        "error": {
-                            "code": "inference_memory_exhausted",
-                            "message": "Local inference stopped because accelerator memory was exhausted.",
-                        },
-                    }
-                    yield f"event: error\ndata: {json.dumps(payload)}\n\n"
-                    return
-                if event is None:
-                    break
-                name = "cancelled" if event.get("cancelled") else "token"
-                payload = {"request_id": request_id, **event}
-                yield f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+            try:
+                async for event in iterate_in_isolated_thread(
+                    lambda: engine.trace(prompt=prompt, body=body, cancellation=cancellation)
+                ):
+                    name = "cancelled" if event.get("cancelled") else "token"
+                    payload = {"request_id": request_id, **event}
+                    yield f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+            except _AcceleratorOutOfMemory:
+                LOGGER.error(
+                    "Inference failed request_id=%s reason=accelerator_out_of_memory",
+                    request_id,
+                )
+                payload = {
+                    "request_id": request_id,
+                    "error": {
+                        "code": "inference_memory_exhausted",
+                        "message": "Local inference stopped because accelerator memory was exhausted.",
+                    },
+                }
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
             yield "event: complete\ndata: [DONE]\n\n"
             request.app.state.requests += 1
         finally:
+            cancellation.set()
             request.app.state.cancellations.pop(request_id, None)
             request.app.state.worker_state = WorkerState.READY
-
-
-def _next_event(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
-    try:
-        return next(iterator)
-    except StopIteration:
-        return None
 
 
 def _model_context_length(model: Any) -> int:

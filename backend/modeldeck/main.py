@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.capabilities import (
     capability_evidence_status,
     compatible_runtime_template_ids,
@@ -153,11 +154,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/hardware")
     async def hardware():
-        return await asyncio.to_thread(probe_environment)
+        return await run_in_isolated_thread(probe_environment)
 
     @app.get("/api/telemetry")
     async def telemetry():
-        probe = await asyncio.to_thread(probe_environment)
+        probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
         return {
             key: detected[key]
@@ -177,7 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/catalogue")
     async def catalogue(request: Request):
-        models = await asyncio.to_thread(discover_huggingface_models)
+        models = await run_in_isolated_thread(discover_huggingface_models)
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         capability_policy = request.app.state.compatibility_store.list_model_capability_policy()
         tests = request.app.state.compatibility_store.list_tests()

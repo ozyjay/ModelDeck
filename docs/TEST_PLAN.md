@@ -5,6 +5,12 @@ network, model download, container runtime, or cached model. It runs frontend Ty
 checking and Vitest tests, proves the committed production bundle matches `frontend/`,
 then runs Ruff and the GPU-free pytest suite.
 
+The GPU-free suite exercises sequential load, warm-up, inference and shutdown for each
+Worker family. It also runs the embedding and autoregressive contracts with the asyncio
+default executor unavailable, verifies isolated blocking operations use distinct threads,
+and rejects `asyncio.to_thread` anywhere under `backend/modeldeck`. This guards the
+Python 3.12.13 executor shutdown failure recorded in ADR-011.
+
 The end-to-end mock gateway smoke is
 `pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local
 services around both generation-family checks.

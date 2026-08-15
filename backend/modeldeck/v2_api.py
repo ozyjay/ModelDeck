@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.capabilities import (
     CAPABILITY_DEFINITIONS,
     capabilities_for_worker,
@@ -187,7 +188,7 @@ def create_v3_router() -> APIRouter:
             artefact_path = Path(cached["snapshot_location"]) / artefact["filenames"][0]
         if checkpoint_dir is not None:
             try:
-                await asyncio.to_thread(verify_modeldeck_q4_release, checkpoint_dir)
+                await run_in_isolated_thread(verify_modeldeck_q4_release, checkpoint_dir)
             except (OSError, Q4ReleaseError) as error:
                 raise HTTPException(409, f"ModelDeck Q4 release verification failed: {error}") from error
         used_ports = {
@@ -403,7 +404,7 @@ def create_v3_router() -> APIRouter:
             result = "transient-failure"
             failure_class = "smoke-failure"
             error_summary = f"{type(error).__name__}: {error}"
-        probe = await asyncio.to_thread(probe_environment)
+        probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
         evidence = {
             "worker_id": definition.id,
@@ -527,7 +528,7 @@ def create_v3_router() -> APIRouter:
             result = "transient-failure"
             failure_class = "capability-qualification-failure"
             error_summary = f"{type(error).__name__}: {error}"
-        probe = await asyncio.to_thread(probe_environment)
+        probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
         evidence = {
             "worker_id": definition.id,

@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.contracts.scenechat import (
     CONTRACT_VERSION,
     ModelOutputValidationError,
@@ -563,7 +564,7 @@ def create_app(
                 cancellation.set()
             if not app.state.load_task.done():
                 app.state.load_task.cancel()
-            await asyncio.to_thread(runtime.close)
+            await run_in_isolated_thread(runtime.close)
 
     app = FastAPI(
         title=f"ModelDeck {worker_label} worker: {worker_id}",
@@ -679,7 +680,7 @@ def create_app(
             raise SceneChatRequestError(503, "model_unavailable", request.app.state.load_error)
         request.app.state.worker_state = WorkerState.WARMING
         try:
-            await asyncio.to_thread(runtime.warmup)
+            await run_in_isolated_thread(runtime.warmup)
         except Exception as error:
             request.app.state.worker_state = WorkerState.FAILED
             request.app.state.load_error = f"Warm-up failed: {type(error).__name__}: {error}"
@@ -924,7 +925,7 @@ def create_app(
             )
         started = time.perf_counter()
         try:
-            result = await asyncio.to_thread(
+            result = await run_in_isolated_thread(
                 runtime.generate,
                 image=image,
                 question="Describe the scene.",
@@ -980,7 +981,7 @@ def create_app(
 
 async def _load_engine(app: FastAPI, engine: VisionLanguageEngine) -> None:
     try:
-        await asyncio.to_thread(engine.load)
+        await run_in_isolated_thread(engine.load)
         app.state.worker_state = WorkerState.WARMING
     except Exception as error:
         app.state.load_error = f"Load failed: {type(error).__name__}: {error}"
@@ -1179,7 +1180,7 @@ async def _run_generation(
     timeout_seconds: float,
 ) -> GenerationResult:
     task = asyncio.create_task(
-        asyncio.to_thread(
+        run_in_isolated_thread(
             engine.generate,
             image=image,
             question=question,

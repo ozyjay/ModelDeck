@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 from modeldeck.speechshift import (
     QWEN_LANGUAGE_NAMES,
@@ -244,7 +245,7 @@ def create_app(
                 app.state.active_cancellation.set()
             if not app.state.load_task.done():
                 app.state.load_task.cancel()
-            await asyncio.to_thread(runtime.close)
+            await run_in_isolated_thread(runtime.close)
 
     app = FastAPI(title=f"ModelDeck Qwen TTS Worker: {worker_id}", lifespan=lifespan)
     app.state.shutdown_callback = None
@@ -336,7 +337,7 @@ def create_app(
             raise TTSRequestError(503, "model_unavailable", "The pinned model failed to load.")
         _require_thermal_start(request, guard)
         request.app.state.worker_state = WorkerState.WARMING
-        await asyncio.to_thread(runtime.warmup)
+        await run_in_isolated_thread(runtime.warmup)
         request.app.state.ready = True
         request.app.state.worker_state = WorkerState.READY
         return {"ok": True, "ready": True}
@@ -442,7 +443,7 @@ def create_app(
     async def smoke(request: Request) -> dict[str, Any]:
         _ensure_ready(request)
         _require_thermal_start(request, guard)
-        result = await asyncio.to_thread(runtime.synthesise, "Ready.", "ryan", "en", threading.Event())
+        result = await run_in_isolated_thread(runtime.synthesise, "Ready.", "ryan", "en", threading.Event())
         try:
             return {
                 "ok": bool(result.wav_bytes),
@@ -473,7 +474,7 @@ def _encode_wav(samples: Any) -> bytes:
 
 async def _load_engine(app: FastAPI, engine: SpeechSynthesisEngine) -> None:
     try:
-        await asyncio.to_thread(engine.load)
+        await run_in_isolated_thread(engine.load)
         app.state.worker_state = WorkerState.WARMING
     except Exception as error:
         app.state.load_error = f"{type(error).__name__}: {error}"
@@ -503,7 +504,7 @@ async def _run_synthesis(
     guard: ThermalGuard,
     initial_temperature: TemperatureSnapshot,
 ) -> tuple[SpeechResult, str | None, TemperatureSnapshot]:
-    task = asyncio.create_task(asyncio.to_thread(engine.synthesise, text, voice, language, cancellation))
+    task = asyncio.create_task(run_in_isolated_thread(engine.synthesise, text, voice, language, cancellation))
     deadline = time.monotonic() + config.generation_timeout_seconds
     peak = initial_temperature
     thermal_reason: str | None = None

@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerHealth, WorkerState
 
 LOGGER = logging.getLogger("uvicorn.error")
@@ -432,7 +433,7 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
         request.app.state.worker_state = WorkerState.WARMING
         try:
             if request.app.state.run_in_thread:
-                await asyncio.to_thread(runtime.warmup)
+                await run_in_isolated_thread(runtime.warmup)
             else:
                 runtime.warmup()
         except Exception as error:
@@ -462,7 +463,7 @@ def create_app(*, worker_id: str, config: EngineConfig, engine: DiffusionEngine 
             started = time.perf_counter()
             try:
                 if app.state.run_in_thread:
-                    frames = await asyncio.to_thread(runtime.refine, body, cancellation, publish_frame)
+                    frames = await run_in_isolated_thread(runtime.refine, body, cancellation, publish_frame)
                 else:
                     frames = runtime.refine(body, cancellation, publish_frame)
                 await asyncio.sleep(0)
@@ -584,7 +585,7 @@ def _record_job_frame(app: FastAPI, job_id: str, frame: dict[str, Any]) -> None:
 async def _load_engine(app: FastAPI, engine: DiffusionEngine, *, threaded: bool) -> None:
     try:
         if threaded:
-            await asyncio.to_thread(engine.load)
+            await run_in_isolated_thread(engine.load)
         else:
             engine.load()
         app.state.worker_state = WorkerState.WARMING

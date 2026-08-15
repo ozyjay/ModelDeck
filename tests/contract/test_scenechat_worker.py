@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+from modeldeck.async_execution import run_in_isolated_thread
 from modeldeck.contracts.scenechat import (
     CURATED_QUESTIONS,
     IMAGE_CONTENT_INVARIANT,
@@ -838,7 +839,10 @@ async def test_concurrent_request_is_rejected_without_queueing_and_slot_recovers
                     json=request_payload(),
                 )
             )
-            await asyncio.to_thread(engine.started.wait, 1)
+            await asyncio.wait_for(
+                run_in_isolated_thread(engine.started.wait, 1),
+                timeout=2,
+            )
             second = await client.post(
                 "/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},
