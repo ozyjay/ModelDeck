@@ -9,6 +9,7 @@ HELPERS = PROJECT_ROOT / "scripts" / "environment_helpers.psm1"
 MODELDECK_HELPERS = PROJECT_ROOT / "scripts" / "modeldeck_helpers.psm1"
 RUN_SCRIPT = PROJECT_ROOT / "scripts" / "run.ps1"
 STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop.ps1"
+CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts" / "check_ports.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 
@@ -110,6 +111,9 @@ def test_run_script_starts_an_explicit_docker_bridge_companion() -> None:
     assert "MODELDECK_ENABLE_DOCKER_BRIDGE" in script
     assert "gateway-docker-bridge.pid" in script
     assert "$Env:MODELDECK_GATEWAY_HOST = '172.17.0.1'" in script
+    assert "Remove-Item var/run/gateway-loopback.pid" in script
+    assert "-m', 'modeldeck.gateway.app'" in script
+    assert "-m', 'modeldeck'" in script
 
 
 def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
@@ -122,6 +126,23 @@ def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
     assert "not running (no PID file)" in script
     assert "did not stop gracefully; forcing process" in script
     assert "gateway-docker-bridge" in script
+    assert "gateway-loopback" in script
+
+
+def test_stop_script_recovers_project_local_services_without_pid_files() -> None:
+    script = STOP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "Find-ModelDeckProcessIds" in script
+    assert ".venv/bin/modeldeck-gateway" in script
+    assert "recovered untracked" in script
+    assert "modeldeck.gateway.app" in script
+
+
+def test_port_check_preserves_the_binding_details_in_its_error() -> None:
+    script = CHECK_PORTS_SCRIPT.read_text(encoding="utf-8")
+
+    assert "$Binding = $_" in script
+    assert "ModelDeck $($Binding.Name) cannot bind $($Binding.Host):$($Binding.Port)" in script
 
 
 def test_checked_in_env_example_uses_only_supported_names() -> None:

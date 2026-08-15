@@ -12,6 +12,10 @@ applications. It begins with no configured Workers or routing profile.
 3. Run `pwsh -NoProfile -File scripts/verify.ps1`.
 4. Start ModelDeck with `pwsh -NoProfile -File scripts/run.ps1` and open
    <http://127.0.0.1:3600>.
+   `run.ps1` starts a session; it does not replace one already using the configured ports.
+   To restart locally, run `pwsh -NoProfile -File scripts/stop.ps1` first, then run the
+   start command again. The stop script is limited to this checkout's ModelDeck services
+   even when a PID record is stale or missing.
 5. In **Models**, inspect the potential capabilities and their detected or reviewed
    evidence, then explicitly allow the capabilities you intend to use. An allowed
    capability with no trusted runtime records intent but is not runnable.

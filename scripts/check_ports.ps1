@@ -19,21 +19,22 @@ if ($BridgeEnabled) {
     $Bindings += [pscustomobject]@{ Name = 'gateway-docker-bridge'; Host = '172.17.0.1'; Port = $Bindings[0].Port }
 }
 $Bindings | ForEach-Object {
+    $Binding = $_
     $Address = [System.Net.IPAddress]::None
-    if (-not [System.Net.IPAddress]::TryParse($_.Host, [ref]$Address)) {
-        throw "Invalid $($_.Name) bind address '$($_.Host)'. Use an IP address literal."
+    if (-not [System.Net.IPAddress]::TryParse($Binding.Host, [ref]$Address)) {
+        throw "Invalid $($Binding.Name) bind address '$($Binding.Host)'. Use an IP address literal."
     }
-    if ($_.Name -eq 'gateway' -and -not [System.Net.IPAddress]::IsLoopback($Address)) {
-        throw "Unsafe primary gateway bind address '$($_.Host)'. Use a loopback address."
+    if ($Binding.Name -eq 'gateway' -and -not [System.Net.IPAddress]::IsLoopback($Address)) {
+        throw "Unsafe primary gateway bind address '$($Binding.Host)'. Use a loopback address."
     }
-    if ($_.Name -eq 'gateway-docker-bridge' -and $Address.ToString() -ne '172.17.0.1') {
-        throw "Unsafe Docker bridge address '$($_.Host)'."
+    if ($Binding.Name -eq 'gateway-docker-bridge' -and $Address.ToString() -ne '172.17.0.1') {
+        throw "Unsafe Docker bridge address '$($Binding.Host)'."
     }
-    $Listener = [System.Net.Sockets.TcpListener]::new($Address, $_.Port)
+    $Listener = [System.Net.Sockets.TcpListener]::new($Address, $Binding.Port)
     try {
         $Listener.Start()
     } catch {
-        throw "ModelDeck $($_.Name) cannot bind $($_.Host):$($_.Port): $($_.Exception.Message)"
+        throw "ModelDeck $($Binding.Name) cannot bind $($Binding.Host):$($Binding.Port): $($_.Exception.Message)"
     } finally {
         $Listener.Stop()
     }
