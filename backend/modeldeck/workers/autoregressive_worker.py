@@ -275,8 +275,11 @@ class TransformersAutoregressiveEngine:
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                tools=body.tools,
-                tool_choice=body.tool_choice,
+                # Hugging Face Qwen chat templates consume native function schemas,
+                # not OpenAI's {"type": "function", "function": ...} envelopes.
+                # Keep OpenAI at the boundary and render the template's documented
+                # tool shape inside the Worker.
+                tools=_qwen_tool_schemas(body.tools),
             )
         return body.prompt or ""
 
@@ -302,8 +305,7 @@ class TransformersAutoregressiveEngine:
                     stable_messages,
                     tokenize=False,
                     add_generation_prompt=False,
-                    tools=body.tools,
-                    tool_choice=body.tool_choice,
+                    tools=_qwen_tool_schemas(body.tools),
                 )
                 stable_encoded = self.tokenizer(
                     stable_prompt,
@@ -1180,6 +1182,16 @@ async def _generate_response(
     *,
     chat: bool,
 ):
+    try:
+        _validate_tool_request(body)
+    except ToolCallProtocolError as error:
+        return _error_response(422, error.code, error.message)
+    if body.stream and (body.tool_choice == "required" or isinstance(body.tool_choice, dict)):
+        return _error_response(
+            409,
+            "tool_calling_streaming_unsupported",
+            "Required tool calling is not available with this Worker's streaming response protocol.",
+        )
     if body.stream:
         trace_response = await _trace_response(request, body, engine)
         return trace_response
@@ -1188,7 +1200,11 @@ async def _generate_response(
         return result
     events = result["events"]
     text = events[-1].get("text_so_far", "") if events else ""
-    tool_calls, content = _openai_tool_calls(text)
+    try:
+        tool_calls, content = _openai_tool_calls(text)
+        _enforce_tool_choice(body, tool_calls)
+    except ToolCallProtocolError as error:
+        return _error_response(422, error.code, error.message)
     choice = (
         {
             "index": 0,
@@ -1283,32 +1299,121 @@ def _latest_user_prompt(body: GenerationRequest) -> str:
     )
 
 
-_TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+class ToolCallProtocolError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _qwen_tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Convert OpenAI function definitions to Qwen's native template input."""
+
+    if tools is None:
+        return None
+    schemas: list[dict[str, Any]] = []
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            raise ToolCallProtocolError(
+                "invalid_tool_definition", f"Tool {index} must be an OpenAI function definition."
+            )
+        function = tool.get("function")
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            raise ToolCallProtocolError(
+                "invalid_tool_definition", f"Tool {index} must define a function name."
+            )
+        schemas.append(dict(function))
+    return schemas
 
 
 def _openai_tool_calls(text: str) -> tuple[list[dict[str, Any]], str | None]:
     """Translate Qwen's documented tool-call envelope to OpenAI's response shape."""
 
     calls: list[dict[str, Any]] = []
-    for index, match in enumerate(_TOOL_CALL.finditer(text)):
+    matches = list(_TOOL_CALL.finditer(text))
+    if "<tool_call" in text and not matches:
+        raise ToolCallProtocolError(
+            "malformed_tool_call", "The local model returned an incomplete tool-call envelope."
+        )
+    for index, match in enumerate(matches):
         try:
             call = json.loads(match.group(1))
-            name = str(call["name"])
+            if not isinstance(call, dict) or not isinstance(call.get("name"), str):
+                raise ValueError("tool call must contain a function name")
+            name = call["name"]
             arguments = call.get("arguments", {})
-        except (KeyError, TypeError, ValueError):
-            continue
+            arguments_json = arguments if isinstance(arguments, str) else json.dumps(arguments)
+            json.loads(arguments_json)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ToolCallProtocolError(
+                "malformed_tool_call", "The local model returned malformed tool-call JSON."
+            ) from error
         calls.append(
             {
                 "id": f"call_{index}_{uuid.uuid4().hex[:16]}",
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
+                    "arguments": arguments_json,
                 },
             }
         )
     content = _TOOL_CALL.sub("", text).strip()
     return calls, content or None
+
+
+def _enforce_tool_choice(body: GenerationRequest, calls: list[dict[str, Any]]) -> None:
+    """Reject protocol violations before a text result can escape as a tool result."""
+
+    _validate_tool_request(body)
+    if not body.tools:
+        return
+    if body.tool_choice == "required" and not calls:
+        raise ToolCallProtocolError(
+            "tool_choice_not_honoured",
+            "The local model returned text instead of the required tool call.",
+        )
+    if not isinstance(body.tool_choice, dict):
+        return
+    function = body.tool_choice.get("function")
+    required_name = function.get("name") if isinstance(function, dict) else None
+    if not calls:
+        raise ToolCallProtocolError(
+            "tool_choice_not_honoured",
+            "The local model returned text instead of the required named tool call.",
+        )
+    if any(call["function"]["name"] != required_name for call in calls):
+        raise ToolCallProtocolError(
+            "tool_choice_not_honoured",
+            "The local model called a function other than the named required tool.",
+        )
+
+
+def _validate_tool_request(body: GenerationRequest) -> None:
+    """Validate the bounded OpenAI tool input before template rendering."""
+
+    if not body.tools:
+        if body.tool_choice is not None:
+            raise ToolCallProtocolError("invalid_tool_choice", "tool_choice requires at least one tool.")
+        return
+    _qwen_tool_schemas(body.tools)
+    if body.tool_choice is None or body.tool_choice in ("auto", "required", "none"):
+        return
+    if not isinstance(body.tool_choice, dict):
+        raise ToolCallProtocolError(
+            "invalid_tool_choice",
+            "tool_choice must be 'auto', 'required', 'none', or a named function choice.",
+        )
+    function = body.tool_choice.get("function")
+    required_name = function.get("name") if isinstance(function, dict) else None
+    if body.tool_choice.get("type") != "function" or not isinstance(required_name, str):
+        raise ToolCallProtocolError(
+            "invalid_tool_choice",
+            "tool_choice must be 'auto', 'required', 'none', or a named function choice.",
+        )
 
 
 def _tokenise_without_special_tokens(tokenizer: Any, text: str) -> list[int]:

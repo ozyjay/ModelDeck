@@ -162,6 +162,18 @@ class CompatibilityStore:
                     protocol_contract TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS route_tool_calling_rehearsals (
+                    profile_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    capability_id TEXT NOT NULL,
+                    supported INTEGER NOT NULL,
+                    rehearsed INTEGER NOT NULL,
+                    last_rehearsal TEXT,
+                    failure_code TEXT,
+                    evidence_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (profile_id, revision, capability_id)
+                );
                 CREATE TABLE IF NOT EXISTS model_cache_policy (
                     model_id TEXT NOT NULL,
                     revision TEXT NOT NULL,
@@ -451,6 +463,75 @@ class CompatibilityStore:
                 "DELETE FROM active_routing_profiles WHERE profile_id = ?", (profile_id,)
             )
         return cursor.rowcount > 0
+
+    def route_tool_calling_state(
+        self, profile_id: str | None, revision: int | None, capability_id: str | None
+    ) -> dict[str, Any]:
+        """Return only coarse, revision-scoped tool-calling rehearsal state."""
+
+        default = {
+            "supported": False,
+            "rehearsed": False,
+            "last_rehearsal": None,
+            "failure_code": None,
+        }
+        if not profile_id or revision is None or not capability_id or not self.path.exists():
+            return default
+        try:
+            with sqlite3.connect(self.path) as database:
+                row = database.execute(
+                    "SELECT supported, rehearsed, last_rehearsal, failure_code "
+                    "FROM route_tool_calling_rehearsals "
+                    "WHERE profile_id = ? AND revision = ? AND capability_id = ?",
+                    (profile_id, revision, capability_id),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return default
+        return (
+            {
+                "supported": bool(row[0]),
+                "rehearsed": bool(row[1]),
+                "last_rehearsal": row[2],
+                "failure_code": row[3],
+            }
+            if row
+            else default
+        )
+
+    def save_route_tool_calling_rehearsal(
+        self,
+        profile_id: str,
+        revision: int,
+        capability_id: str,
+        *,
+        supported: bool,
+        failure_code: str | None,
+        evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Persist bounded probe facts without retaining prompts or model output."""
+
+        rehearsed_at = _now()
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO route_tool_calling_rehearsals "
+                "(profile_id, revision, capability_id, supported, rehearsed, last_rehearsal, "
+                "failure_code, evidence_json, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?) "
+                "ON CONFLICT(profile_id, revision, capability_id) DO UPDATE SET "
+                "supported = excluded.supported, rehearsed = excluded.rehearsed, "
+                "last_rehearsal = excluded.last_rehearsal, failure_code = excluded.failure_code, "
+                "evidence_json = excluded.evidence_json, updated_at = excluded.updated_at",
+                (
+                    profile_id,
+                    revision,
+                    capability_id,
+                    int(supported),
+                    rehearsed_at,
+                    failure_code,
+                    json.dumps(dict(evidence), sort_keys=True),
+                    rehearsed_at,
+                ),
+            )
+        return self.route_tool_calling_state(profile_id, revision, capability_id)
 
     def discard_routing_profile_draft(self, profile_id: str) -> dict[str, Any]:
         revisions = self.list_routing_profile_revisions(profile_id)

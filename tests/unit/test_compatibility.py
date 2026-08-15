@@ -52,3 +52,29 @@ def test_model_capability_policy_defaults_disallowed_and_preserves_intent(tmp_pa
 
     assert store.model_capability_allowed("Qwen/model", "revision-1", "general-chat") is True
     assert store.model_cache_allowed("Qwen/model", "revision-1") is False
+
+
+def test_route_tool_calling_rehearsal_state_is_revision_scoped_and_coarse(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
+    store.initialise()
+
+    assert store.route_tool_calling_state("profile-1", 1, "capability-1") == {
+        "supported": False,
+        "rehearsed": False,
+        "last_rehearsal": None,
+        "failure_code": None,
+    }
+    stored = store.save_route_tool_calling_rehearsal(
+        "profile-1",
+        1,
+        "capability-1",
+        supported=True,
+        failure_code=None,
+        evidence={"probe_count": 2, "probes": [{"tool_call_count": 1, "result_category": "valid"}]},
+    )
+
+    assert stored["supported"] is True
+    assert stored["rehearsed"] is True
+    assert stored["last_rehearsal"]
+    assert stored["failure_code"] is None
+    assert store.route_tool_calling_state("profile-1", 2, "capability-1")["supported"] is False

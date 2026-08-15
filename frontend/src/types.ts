@@ -76,8 +76,15 @@ export interface ProtocolContract {
 }
 
 export interface LiveWorker { id: string; name: string; state: WorkerState }
+export interface ToolCallingState {
+  supported: boolean;
+  rehearsed: boolean;
+  last_rehearsal: string | null;
+  failure_code: string | null;
+}
 export interface LiveCapability extends CapabilityBinding {
   profile_id?: string;
+  tool_calling?: ToolCallingState;
   workers: Worker[];
   effective_worker: Worker | null;
   ready: boolean;

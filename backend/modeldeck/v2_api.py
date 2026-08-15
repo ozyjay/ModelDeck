@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import time
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -657,6 +659,8 @@ def create_v3_router() -> APIRouter:
         )
         if capability is None:
             raise HTTPException(404, "The capability is not in the live Routing Profile revision")
+        if capability["protocol_contract"] == "openai-chat-v1":
+            return await _rehearse_route_tool_calling(snapshot, capability, request)
         path, body = _capability_smoke_request(capability)
         timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
         try:
@@ -742,6 +746,11 @@ def create_v3_router() -> APIRouter:
                         **capability,
                         "id": capability["capability_id"],
                         "profile_id": snapshot["profile_id"],
+                        "tool_calling": request.app.state.compatibility_store.route_tool_calling_state(
+                            str(snapshot["profile_id"]),
+                            int(snapshot["revision"]),
+                            str(capability["capability_id"]),
+                        ),
                         "workers": [worker for worker in chain if worker],
                         "effective_worker": effective,
                         "ready": effective is not None,
@@ -758,6 +767,134 @@ def create_v3_router() -> APIRouter:
         }
 
     return router
+
+
+async def _rehearse_route_tool_calling(
+    snapshot: dict[str, object], capability: dict[str, object], request: Request
+) -> dict[str, object]:
+    """Exercise the public route without retaining prompts, arguments, or model output."""
+
+    profile_id = str(snapshot["profile_id"])
+    revision = int(snapshot["revision"])
+    capability_id = str(capability["capability_id"])
+    public_name = str(capability["public_name"])
+    probes = (
+        (
+            "list_workspace_entries",
+            {},
+            "Call list_workspace_entries exactly once. Do not answer with ordinary text.",
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_workspace_entries",
+                    "description": "List allowlisted workspace entries.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+        (
+            "read_workspace_text_file",
+            {"path": "Readme.md"},
+            (
+                "Call read_workspace_text_file exactly once with path Readme.md. "
+                "Do not answer with ordinary text."
+            ),
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_workspace_text_file",
+                    "description": "Read one allowlisted workspace text file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+        ),
+    )
+    evidence: list[dict[str, object]] = []
+    failure_code: str | None = None
+    gateway_url = gateway_base_url(
+        request.app.state.settings.gateway_host, request.app.state.settings.gateway_port
+    )
+    try:
+        async with httpx.AsyncClient(timeout=_capability_smoke_timeout("openai-chat-v1", request)) as client:
+            for expected_name, expected_arguments, instruction, tool in probes:
+                started = time.perf_counter()
+                response = await client.post(
+                    f"{gateway_url}/v1/chat/completions",
+                    json={
+                        "model": public_name,
+                        "messages": [{"role": "user", "content": instruction}],
+                        "tools": [tool],
+                        "tool_choice": "required",
+                        "temperature": 0,
+                        "max_tokens": 96,
+                    },
+                )
+                elapsed_ms = round((time.perf_counter() - started) * 1000)
+                valid, category = _valid_rehearsal_tool_call(
+                    response, str(expected_name), dict(expected_arguments)
+                )
+                evidence.append(
+                    {
+                        "tool_call_count": 1 if valid else 0,
+                        "result_category": category,
+                        "latency_ms": elapsed_ms,
+                    }
+                )
+                if not valid:
+                    failure_code = category
+                    break
+    except httpx.TimeoutException:
+        failure_code = "gateway_timeout"
+    except httpx.HTTPError:
+        failure_code = "local_route_unavailable"
+    supported = failure_code is None and len(evidence) == len(probes)
+    state = request.app.state.compatibility_store.save_route_tool_calling_rehearsal(
+        profile_id,
+        revision,
+        capability_id,
+        supported=supported,
+        failure_code=failure_code,
+        evidence={"probe_count": len(evidence), "probes": evidence},
+    )
+    return {
+        "ok": supported,
+        "profile_id": profile_id,
+        "capability_id": capability_id,
+        "public_name": public_name,
+        "tool_calling": state,
+    }
+
+
+def _valid_rehearsal_tool_call(
+    response: httpx.Response, expected_name: str, expected_arguments: dict[str, object]
+) -> tuple[bool, str]:
+    """Validate a response shape without recording any response content."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, "invalid_worker_response"
+    if not response.is_success:
+        error = payload.get("error") if isinstance(payload, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        return False, str(code) if isinstance(code, str) else "tool_calling_probe_failed"
+    try:
+        calls = payload["choices"][0]["message"]["tool_calls"]
+        if not isinstance(calls, list) or len(calls) != 1:
+            return False, "tool_call_count_invalid"
+        call = calls[0]
+        if call.get("type") != "function" or call["function"]["name"] != expected_name:
+            return False, "tool_call_name_invalid"
+        arguments = call["function"]["arguments"]
+        if not isinstance(arguments, str) or json.loads(arguments) != expected_arguments:
+            return False, "tool_call_arguments_invalid"
+    except (KeyError, TypeError, ValueError):
+        return False, "tool_call_protocol_invalid"
+    return True, "valid"
 
 
 def _add_lifecycle_route(router: APIRouter, operation: str) -> None:

@@ -12,7 +12,7 @@ from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
 from modeldeck.migrate_v3_to_v4 import migrate as migrate_v3_to_v4
-from modeldeck.v2_api import _has_smoke_evidence, _worker_smoke_request
+from modeldeck.v2_api import _has_smoke_evidence, _valid_rehearsal_tool_call, _worker_smoke_request
 
 
 def worker_definition() -> WorkerDefinition:
@@ -204,6 +204,39 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert path == "/v1/embeddings"
     assert body["input"] == ["The local Worker is ready."]
     assert headers is None
+
+
+def test_tool_calling_rehearsal_requires_exactly_one_named_json_call() -> None:
+    valid = httpx.Response(
+        200,
+        json={
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "read_workspace_text_file",
+                                    "arguments": '{"path":"Readme.md"}',
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+    invalid = httpx.Response(200, json={"choices": [{"message": {"content": "ordinary text"}}]})
+
+    assert _valid_rehearsal_tool_call(valid, "read_workspace_text_file", {"path": "Readme.md"}) == (
+        True,
+        "valid",
+    )
+    assert _valid_rehearsal_tool_call(invalid, "read_workspace_text_file", {"path": "Readme.md"}) == (
+        False,
+        "tool_call_protocol_invalid",
+    )
 
 
 def test_embedding_smoke_requires_ordered_1024_dimension_vectors() -> None:

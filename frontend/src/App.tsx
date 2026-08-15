@@ -251,7 +251,7 @@ export default function App() {
         </header>
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
         {!health || !hardware || !telemetry || !thermal || !gateway ? <Unavailable retry={refresh} />
-          : view === "live" ? <LiveView live={live} workers={workers} models={models} thermal={thermal} operate={operate} pending={pending} />
+          : view === "live" ? <LiveView live={live} workers={workers} models={models} thermal={thermal} operate={operate} pending={pending} refresh={refresh} />
           : view === "profiles" ? <RoutingProfilesView profiles={profiles} workers={workers} contracts={contracts} openDay={health.configuration_locked} refresh={refresh} />
           : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} thermal={thermal} operationErrors={workerOperationErrors} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.configuration_locked} />
@@ -262,9 +262,9 @@ export default function App() {
   );
 }
 
-function LiveView({ live, workers, models, thermal, operate, pending }: {
+function LiveView({ live, workers, models, thermal, operate, pending, refresh }: {
   live: LiveState; workers: Worker[]; models: ModelEntry[]; thermal: ThermalStatus;
-  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: ReadonlySet<string>;
+  operate: (worker: Worker, operation: WorkerOperation) => Promise<void>; pending: ReadonlySet<string>; refresh: () => Promise<void>;
 }) {
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
   const [smokingRoute, setSmokingRoute] = useState<string | null>(null);
@@ -272,8 +272,9 @@ function LiveView({ live, workers, models, thermal, operate, pending }: {
     if (!capability.profile_id) return;
     setSmokingRoute(capability.id); setRouteFeedback(null);
     try {
-      await postJson(`/api/routing-profiles/${capability.profile_id}/capabilities/${capability.id}/smoke`);
-      setRouteFeedback("The published capability responded through the gateway.");
+      const result = await postJson<{ ok: boolean; tool_calling?: { failure_code: string | null } }>(`/api/routing-profiles/${capability.profile_id}/capabilities/${capability.id}/smoke`);
+      await refresh();
+      setRouteFeedback(result.ok ? "Tool calling passed the bounded public-route rehearsal." : `Tool calling was not verified: ${result.tool_calling?.failure_code ?? "probe failed"}.`);
     } catch (reason) { setRouteFeedback(messageFrom(reason)); }
     finally { setSmokingRoute(null); }
   };
@@ -290,7 +291,7 @@ function LiveView({ live, workers, models, thermal, operate, pending }: {
     <CollapsiblePanel sectionId="live-capabilities" title="Live capabilities" detail={`${live.capabilities.length} published`} className="table-panel">
       {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
       {live.capabilities.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Published capability</th><th>Capability status</th><th>Protocol</th><th>Worker order</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
-        {live.capabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={capability.id}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => { const order = index === 0 ? "Primary" : `Backup ${index}`; return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><StateBadge state={worker.state} /></div>; })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td>{capability.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, capability.workers[0].id) || capability.workers[0].state === "ready" || !thermal.model_loading_allowed} title={thermal.model_loading_allowed ? undefined : thermalLoadingNotice(thermal)} onClick={() => void operate(capability.workers[0], "start")}>{pending.has(`${capability.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button></div>}</td></tr>)}
+        {live.capabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={capability.id}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code><small className="tool-calling-state">Tool calling: {capability.tool_calling?.supported ? "verified" : capability.tool_calling?.rehearsed ? `failed (${capability.tool_calling.failure_code ?? "probe"})` : "not rehearsed"}</small></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => { const order = index === 0 ? "Primary" : `Backup ${index}`; return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><StateBadge state={worker.state} /></div>; })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td>{capability.workers[0] && <div className="button-row"><button disabled={workerOperationPending(pending, capability.workers[0].id) || capability.workers[0].state === "ready" || !thermal.model_loading_allowed} title={thermal.model_loading_allowed ? undefined : thermalLoadingNotice(thermal)} onClick={() => void operate(capability.workers[0], "start")}>{pending.has(`${capability.workers[0].id}:start`) ? "Starting…" : "Start primary"}</button><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button></div>}</td></tr>)}
       </tbody></table></div> : <p className="muted">This Routing Profile publishes no capabilities.</p>}
     </CollapsiblePanel>
   </div>;

@@ -92,6 +92,19 @@ capability may have a different-revision backup Worker; `revision` identifies th
 primary Worker, while an individual request can use a backup only when the primary is
 unavailable.
 
+Chat model records also expose a top-level `capabilities` object. `chat: true` means only
+that the route accepts chat requests. `tool_calling: "verified"` appears only after the
+current published route revision has passed ModelDeck's bounded public-route rehearsal;
+otherwise it is `"unverified"`. Consumers must not infer tool support from
+`openai-chat-v1` alone.
+
+`POST /api/routing-profiles/{profile_id}/capabilities/{capability_id}/smoke` performs that
+rehearsal for an `openai-chat-v1` route. It requires one empty-schema function call and one
+named function call with JSON arguments, both through the public gateway. `/api/live`
+reports the revision-scoped state as `tool_calling.supported`, `rehearsed`,
+`last_rehearsal`, and `failure_code`. It stores only probe counts, result categories,
+latencies, and coarse error codes; no prompt, arguments, or model output is retained.
+
 Model records also contain `runtime` and `accelerator`, which retain their legacy meaning:
 they describe the first ready Worker in the capability's ordered routing list, or the
 configured primary Worker when none is ready. `accelerator` is code-owned metadata derived

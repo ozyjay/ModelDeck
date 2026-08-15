@@ -140,7 +140,19 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         "ready": False,
         "runtime": "mock",
         "accelerator": "mock",
+        "capabilities": {"chat": True, "tool_calling": "unverified"},
     }
+    store.save_route_tool_calling_rehearsal(
+        profile.id,
+        1,
+        profile.capabilities[1].id,
+        supported=True,
+        failure_code=None,
+        evidence={"probe_count": 2, "probes": []},
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        verified = (await client.get("/v1/models")).json()["data"]
+    assert verified[0]["capabilities"] == {"chat": True, "tool_calling": "verified"}
     assert len(model["modeldeck"]["configuration_fingerprint"]) == 64
     assert model["modeldeck"] == {
         "model_id": "example/model",

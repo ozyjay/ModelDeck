@@ -12,6 +12,7 @@ from modeldeck.workers.autoregressive_worker import (
     EngineConfig,
     GenerationRequest,
     _AcceleratorOutOfMemory,
+    _qwen_tool_schemas,
     _trace_token_metadata,
     create_app,
 )
@@ -346,6 +347,112 @@ async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> N
     assert engine.last_body is not None
     assert engine.last_body.messages[-1].role == "tool"
     assert follow_up.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_worker_enforces_required_and_named_tool_choices_without_text_fallback() -> None:
+    tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=FakeEngine(("Ordinary final text",)),
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            required = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                },
+            )
+    assert required.status_code == 422
+    assert required.json()["error"]["code"] == "tool_choice_not_honoured"
+
+    wrong_name_app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=FakeEngine(('<tool_call>{"name":"other","arguments":{}}</tool_call>',)),
+    )
+    async with wrong_name_app.router.lifespan_context(wrong_name_app):
+        await wrong_name_app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=wrong_name_app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            named = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                    "tools": tools,
+                    "tool_choice": {"type": "function", "function": {"name": "weather"}},
+                },
+            )
+    assert named.status_code == 422
+    assert named.json()["error"]["code"] == "tool_choice_not_honoured"
+
+
+@pytest.mark.asyncio
+async def test_worker_returns_protocol_error_for_malformed_tool_json() -> None:
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=FakeEngine(("<tool_call>{not json}</tool_call>",)),
+    )
+    tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                },
+            )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "malformed_tool_call"
+
+
+def test_worker_renders_openai_tools_as_qwen_native_template_schemas() -> None:
+    tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
+    assert _qwen_tool_schemas(tools) == [{"name": "weather", "parameters": {"type": "object"}}]
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_streaming_required_tool_calling_explicitly() -> None:
+    app = create_app(
+        worker_id="test-rocm-ar",
+        config=EngineConfig(model_id="Qwen/test", revision="commit"),
+        engine=FakeEngine(),
+    )
+    tools = [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}]
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            assert (await client.post("/warmup")).status_code == 200
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                    "stream": True,
+                },
+            )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "tool_calling_streaming_unsupported"
 
 
 @pytest.mark.asyncio

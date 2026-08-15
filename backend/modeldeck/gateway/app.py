@@ -150,6 +150,16 @@ def create_gateway_app(
                                 and not isinstance(snapshot["revision"], bool)
                                 else None
                             ),
+                            "tool_calling": store.route_tool_calling_state(
+                                str(snapshot.get("profile_id") or "") or None,
+                                (
+                                    int(snapshot["revision"])
+                                    if isinstance(snapshot.get("revision"), int)
+                                    and not isinstance(snapshot["revision"], bool)
+                                    else None
+                                ),
+                                str(capability.get("capability_id") or "") or None,
+                            ),
                         },
                     )
                 )
@@ -1485,7 +1495,8 @@ def model_discovery_record(
         "routing_profile_id": None,
         "routing_profile_revision": None,
     }
-    return {
+    published_route = {key: value for key, value in route_identity.items() if key != "tool_calling"}
+    record = {
         "id": alias,
         "object": "model",
         "owned_by": "modeldeck-local",
@@ -1504,12 +1515,19 @@ def model_discovery_record(
             ),
             "prefix_caching": (selected or primary).capabilities.prefix_caching,
             "prefix_cache_enabled": (selected or primary).capabilities.prefix_cache_enabled,
-            "route": route_identity,
+            "route": published_route,
             "primary_worker": primary_identity,
             "selected_worker": selected_identity,
             "selection_reason": selection_reason,
         },
     }
+    if legacy_profile.capabilities.chat:
+        tool_calling = route_identity.get("tool_calling", {})
+        record["capabilities"] = {
+            "chat": True,
+            "tool_calling": "verified" if tool_calling.get("supported") is True else "unverified",
+        }
+    return record
 
 
 def worker_discovery_identity(
