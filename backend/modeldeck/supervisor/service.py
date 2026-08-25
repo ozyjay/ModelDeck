@@ -588,6 +588,47 @@ def _qwen35_chat_launch(
     )
 
 
+def _qwen38_fp8_vision_language_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    if profile.model_id != "Qwen/Qwen3.8-27B-FP8":
+        raise ValueError("The native FP8 runtime is allowlisted only for Qwen/Qwen3.8-27B-FP8")
+    launch = _qwen35_vision_language_launch(profile, environment, common)
+    data_dir = Path(environment.get("MODELDECK_DATA_DIR", ".modeldeck"))
+    launch.environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    launch.environment["TRITON_CACHE_AUTOTUNING"] = "1"
+    return WorkerLaunch(
+        command=[*launch.command, "--execution-mode", "native_fp8", "--data-dir", str(data_dir)],
+        environment=launch.environment,
+    )
+
+
+def _qwen38_fp8_chat_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    if profile.model_id != "Qwen/Qwen3.8-27B-FP8":
+        raise ValueError("The native FP8 runtime is allowlisted only for Qwen/Qwen3.8-27B-FP8")
+    launch = _qwen35_chat_launch(profile, environment, common)
+    cache_root = profile.settings.get("cache_root")
+    if not cache_root:
+        raise ValueError("Qwen3.8 native FP8 chat worker requires an allowlisted cache root")
+    data_dir = Path(environment.get("MODELDECK_DATA_DIR", ".modeldeck"))
+    launch.environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    launch.environment["TRITON_CACHE_AUTOTUNING"] = "1"
+    return WorkerLaunch(
+        command=[
+            *launch.command,
+            "--execution-mode",
+            "native_fp8",
+            "--cache-root",
+            str(cache_root),
+            "--data-dir",
+            str(data_dir),
+        ],
+        environment=launch.environment,
+    )
+
+
 def _llama_vulkan_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -812,6 +853,8 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "vision-language-transformers-rocm": _vision_language_launch,
     "qwen35-vision-language-transformers-rocm": _qwen35_vision_language_launch,
     "qwen35-chat-transformers-rocm": _qwen35_chat_launch,
+    "qwen38-fp8-vision-language-transformers-rocm": _qwen38_fp8_vision_language_launch,
+    "qwen38-fp8-chat-transformers-rocm": _qwen38_fp8_chat_launch,
     "text-diffusion-transformers-rocm": _text_diffusion_launch,
     "text-diffusion-gptq-rocm": _text_diffusion_launch,
     "llama-vulkan": _llama_vulkan_launch,

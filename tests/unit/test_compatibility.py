@@ -11,6 +11,24 @@ def test_fingerprint_is_stable_and_version_sensitive() -> None:
     assert evidence_fingerprint(first) != evidence_fingerprint(changed)
 
 
+def test_fingerprint_invalidates_native_fp8_kernel_and_tuning_changes() -> None:
+    baseline = {
+        "model_id": "Qwen/Qwen3.8-27B-FP8",
+        "runtime": "qwen38-fp8-chat-transformers-rocm",
+        "execution_mode": "native_fp8",
+        "kernel_commit": "a" * 40,
+        "kernel_manifest_sha256": "b" * 64,
+        "tuning_profile_sha256": "c" * 64,
+        "triton_version": "3.5.1+rocm7.2.1.gita272dfa8",
+        "kernels_version": "0.15.2",
+    }
+
+    for field in ("kernel_commit", "kernel_manifest_sha256", "tuning_profile_sha256"):
+        assert evidence_fingerprint(baseline) != evidence_fingerprint(
+            {**baseline, field: "d" * len(baseline[field])}
+        )
+
+
 def test_records_compatibility_without_overwriting_negative_history(tmp_path) -> None:
     store = CompatibilityStore(tmp_path / "evidence.sqlite3")
     store.initialise()

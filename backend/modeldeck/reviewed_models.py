@@ -45,6 +45,7 @@ def _qwen_model(
     *,
     reviewed_at: str = "2026-08-12",
     quantization: tuple[tuple[str, str], ...] = (),
+    configuration_support: str = "scenechat-qwen35",
 ) -> ReviewedModelSpec:
     return ReviewedModelSpec(
         model_id=model_id,
@@ -52,7 +53,7 @@ def _qwen_model(
         model_type="qwen3_5",
         architecture="Qwen3_5ForConditionalGeneration",
         processor_class="Qwen3VLProcessor",
-        configuration_support="scenechat-qwen35",
+        configuration_support=configuration_support,
         capability_ids=_QWEN_CAPABILITIES,
         reviewed_at=reviewed_at,
         quantization=quantization,
@@ -73,6 +74,7 @@ REVIEWED_MODEL_SPECS = {
             "Qwen/Qwen3.8-27B-FP8",
             "Qwen3.8 27B FP8",
             reviewed_at="2026-08-25",
+            configuration_support="scenechat-qwen38-fp8",
             quantization=(
                 ("quant_method", "fp8"),
                 ("activation_scheme", "dynamic"),

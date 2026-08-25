@@ -256,6 +256,43 @@ def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("configuration_support", "worker_module"),
+    [
+        ("scenechat-qwen38-fp8", "modeldeck.workers.qwen35_worker"),
+        ("qwen38-fp8-chat-transformers-rocm", "modeldeck.workers.qwen35_chat_worker"),
+    ],
+)
+def test_qwen38_native_fp8_launch_is_exact_offline_and_separate(
+    monkeypatch, tmp_path, configuration_support, worker_module
+) -> None:
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="Qwen/Qwen3.8-27B-FP8",
+            revision="a" * 40,
+            alias="qwen38-native-fp8",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support=configuration_support,
+    )
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+    monkeypatch.setenv("MODELDECK_DATA_DIR", str(tmp_path / "data"))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [str(runtime_python.absolute()), "-m", worker_module]
+    assert launch.command[launch.command.index("--execution-mode") + 1] == "native_fp8"
+    assert launch.command[launch.command.index("--data-dir") + 1] == str(tmp_path / "data")
+    assert launch.environment["HF_HUB_OFFLINE"] == "1"
+    assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert launch.environment["TRITON_CACHE_AUTOTUNING"] == "1"
+    assert launch.environment["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
 def test_opus_translation_launch_is_isolated_directional_and_offline(monkeypatch, tmp_path) -> None:
     spec = SPEECHSHIFT_MODEL_SPECS["Helsinki-NLP/opus-mt-en-fr"]
     profile = create_local_profile(

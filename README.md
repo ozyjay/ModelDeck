@@ -160,10 +160,41 @@ exact model revision and configuration.
 The code-owned reviewed-model registry also includes the exact official
 `Qwen/Qwen3.8-27B-FP8` checkpoint. Its FP8 method, dynamic activation scheme and E4M3
 format must all match the reviewed metadata. The isolated Qwen worker dequantises those
-weights to BF16 during its offline load because the alternative Transformers kernel path
-loads executable code from the Hub at runtime. The profile remains
-hardware-verification-required until its exact local revision and ROCm stack pass
+weights to BF16 during its offline load by default. A separate native-FP8 runtime is
+available only when its reviewed kernel is present and verified. Both profiles remain
+hardware-verification-required until their exact local revision and ROCm stack pass
 qualification. HuggingFacePull remains responsible for acquisition.
+
+### Qwen3.8 native FP8 on gfx1151
+
+Acquire the reviewed executable kernel with HuggingFacePull, then refresh ModelDeck's
+isolated ROCm environment:
+
+```powershell
+$env:HF_HUB_CACHE = "/mnt/work/models/huggingface/hub"
+& /path/to/HuggingFacePull/.venv/bin/hfpull kernels-community/finegrained-fp8 `
+  --repo-type kernel --revision v3 `
+  --expected-commit fcf89a79d85eab78182c62fb986ed01f2cbf7422 `
+  --allow 'build/torch-rocm/*'
+pwsh -NoProfile -File scripts/setup/setup.ps1
+```
+
+ModelDeck verifies the cached `v3` ref, exact commit, ROCm metadata, complete allowlisted
+file set and SHA-256 of every kernel file before import. Native FP8 never silently falls
+back to the independent BF16-dequant Worker.
+
+Create the machine-specific tuning profile before qualifying native FP8 for routing:
+
+```powershell
+pwsh -NoProfile -File scripts/benchmarks/tune_qwen38_fp8.ps1 `
+  -CacheRoot /mnt/work/models/huggingface/hub -DataDir .modeldeck -Stage full
+```
+
+The full stage covers decode, prompt ingestion and image-chat tile buckets across all
+seven Qwen3.8 FP8 weight shapes. Without a valid profile the Worker uses the reviewed
+4-warp, 2-stage fallback but cannot pass promotion. Text promotion requires at least
+3.20 tokens/s, warmed first-token latency no higher than 0.50 seconds, no more than 36 GiB
+steady allocation and no more than 38 GiB peak allocation.
 
 Reviewed runtime templates can be added as versioned
 [trusted runtime manifests](docs/TRUSTED_RUNTIME_MANIFESTS.md). Installation requires an

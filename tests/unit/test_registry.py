@@ -25,6 +25,8 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "scenechat-gemma4",
         "scenechat-qwen35",
         "qwen35-chat-transformers-rocm",
+        "scenechat-qwen38-fp8",
+        "qwen38-fp8-chat-transformers-rocm",
         "diffusiongemma-transformers",
         "diffusiongemma-modeldeck-q4",
         "gpt-oss-llama-vulkan",
@@ -34,7 +36,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
-    assert registrations["scenechat-qwen35"].package.version == "0.2.5"
+    assert registrations["scenechat-qwen35"].package.version == "0.3.0"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 
@@ -129,6 +131,17 @@ def test_qwen35_chat_runtime_is_dedicated_and_requires_hardware_verification() -
     assert template.capabilities.chat is True
     assert template.capabilities.completions is True
     assert template.settings["hardware_verification_required"] is True
+
+
+def test_qwen38_native_fp8_runtimes_are_separate_and_hardware_gated() -> None:
+    scene = runtime_templates()["scenechat-qwen38-fp8"]
+    chat = runtime_templates()["qwen38-fp8-chat-transformers-rocm"]
+
+    assert scene.runtime == "qwen38-fp8-vision-language-transformers-rocm"
+    assert chat.runtime == "qwen38-fp8-chat-transformers-rocm"
+    assert scene.dtype == chat.dtype == "bfloat16"
+    assert scene.settings["hardware_verification_required"] is True
+    assert chat.settings["hardware_verification_required"] is True
 
 
 def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:

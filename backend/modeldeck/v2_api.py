@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from statistics import median
 from typing import Literal
 from uuid import uuid4
 
@@ -36,6 +38,119 @@ from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
 from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
 from modeldeck.thermal import ThermalAdmissionError
+
+NATIVE_FP8_RUNTIME_PREFIX = "qwen38-fp8-"
+NATIVE_FP8_MINIMUM_TOKENS_PER_SECOND = 3.20
+NATIVE_FP8_MAXIMUM_FIRST_TOKEN_SECONDS = 0.50
+NATIVE_FP8_MAXIMUM_STEADY_MEMORY_BYTES = 36 * 1024**3
+NATIVE_FP8_MAXIMUM_PEAK_MEMORY_BYTES = 38 * 1024**3
+NATIVE_FP8_BENCHMARK_REPETITIONS = 5
+
+
+def _default_runtime_template_id(configuration_support: str | None, capability_id: str | None) -> str | None:
+    if configuration_support != "scenechat-qwen38-fp8":
+        return configuration_support
+    # Native FP8 is always an explicit runtime choice until its own Worker has
+    # passed qualification. Keep the independent BF16-dequant path as default.
+    return (
+        "qwen35-chat-transformers-rocm"
+        if capability_id in {"general-chat", "text-completion"}
+        else "scenechat-qwen35"
+    )
+
+
+def _validate_native_fp8_promotion(
+    runtime: str,
+    metrics: Mapping[str, object],
+    generation: Mapping[str, object],
+) -> None:
+    if not runtime.startswith(NATIVE_FP8_RUNTIME_PREFIX):
+        return
+    if metrics.get("tuning_status") != "validated":
+        raise RuntimeError("Native FP8 requires a validated machine-specific tuning profile")
+    for name, maximum in (
+        ("memory_allocated_bytes", NATIVE_FP8_MAXIMUM_STEADY_MEMORY_BYTES),
+        ("peak_memory_allocated_bytes", NATIVE_FP8_MAXIMUM_PEAK_MEMORY_BYTES),
+    ):
+        value = metrics.get(name)
+        if not isinstance(value, (int, float)) or value > maximum:
+            raise RuntimeError(f"Native FP8 promotion gate failed for {name}")
+    if runtime != "qwen38-fp8-chat-transformers-rocm":
+        return
+    raw_generation_metrics = generation.get("metrics", {})
+    generation_metrics = raw_generation_metrics if isinstance(raw_generation_metrics, Mapping) else {}
+    throughput = generation_metrics.get("tokens_per_second")
+    first_token = generation_metrics.get("first_token_seconds")
+    if not isinstance(throughput, (int, float)) or throughput < NATIVE_FP8_MINIMUM_TOKENS_PER_SECOND:
+        raise RuntimeError("Native FP8 steady throughput did not reach 3.20 tokens/s")
+    if not isinstance(first_token, (int, float)) or first_token > NATIVE_FP8_MAXIMUM_FIRST_TOKEN_SECONDS:
+        raise RuntimeError("Native FP8 warmed first-token latency regressed beyond 0.50 seconds")
+
+
+def _native_fp8_text_benchmark_request(definition: WorkerDefinition) -> tuple[str, dict[str, object]]:
+    return (
+        "/native/autoregressive/trace",
+        {
+            "model": definition.to_profile().alias,
+            "prompt": "Summarise the role of local inference in one concise paragraph.",
+            "seed": 7,
+            "max_tokens": 64,
+            "min_tokens": 64,
+            "temperature": 0,
+            "top_k": 1,
+            "stream": False,
+        },
+    )
+
+
+def _aggregate_native_fp8_text_benchmark(
+    payloads: list[dict[str, object]],
+) -> dict[str, object]:
+    if len(payloads) != NATIVE_FP8_BENCHMARK_REPETITIONS:
+        raise RuntimeError("Native FP8 promotion requires five benchmark repeats")
+    metric_documents = [payload.get("metrics") for payload in payloads]
+    if not all(isinstance(metrics, Mapping) for metrics in metric_documents):
+        raise RuntimeError("Native FP8 benchmark response omitted metrics")
+    metrics = [value for value in metric_documents if isinstance(value, Mapping)]
+    throughput = [value.get("tokens_per_second") for value in metrics]
+    first_token = [value.get("first_token_seconds") for value in metrics]
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in throughput):
+        raise RuntimeError("Native FP8 benchmark omitted finite throughput")
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in first_token):
+        raise RuntimeError("Native FP8 benchmark omitted finite first-token latency")
+    return {
+        **payloads[-1],
+        "metrics": {
+            **metrics[-1],
+            "tokens_per_second": median(throughput),
+            "first_token_seconds": median(first_token),
+            "benchmark_repetitions": NATIVE_FP8_BENCHMARK_REPETITIONS,
+        },
+    }
+
+
+def _has_matching_native_fp8_text_promotion(
+    tests: list[Mapping[str, object]],
+    *,
+    model_id: str,
+    revision: str,
+    metrics: Mapping[str, object],
+) -> bool:
+    required_evidence = {
+        "model_id": model_id,
+        "model_revision": revision,
+        "runtime": "qwen38-fp8-chat-transformers-rocm",
+        "execution_mode": "native_fp8",
+        "kernel_commit": metrics.get("kernel_commit"),
+        "kernel_manifest_sha256": metrics.get("kernel_manifest_sha256"),
+        "tuning_profile_sha256": metrics.get("tuning_profile_sha256"),
+    }
+    return any(
+        test.get("result") == "tested-working"
+        and isinstance(test.get("evidence"), Mapping)
+        and all(test["evidence"].get(key) == value for key, value in required_evidence.items())
+        for test in tests
+    )
 
 
 class WorkerCreateRequest(BaseModel):
@@ -137,7 +252,9 @@ def create_v3_router() -> APIRouter:
         if not store.model_cache_allowed(payload.model_id, payload.revision):
             raise HTTPException(409, "Allow this cached Model before creating a Worker")
         support = cached.get("configuration_support")
-        template_id = payload.runtime_template_id or support
+        template_id = payload.runtime_template_id or _default_runtime_template_id(
+            support, payload.capability_id
+        )
         candidates = cached.get("potential_capabilities", [])
         registrations = request.app.state.runtime_registrations
         candidate_templates = {
@@ -416,6 +533,12 @@ def create_v3_router() -> APIRouter:
             "rocm_version": health_payload.get("rocm_version"),
             "torch_version": metrics_payload.get("torch_version"),
             "transformers_version": metrics_payload.get("transformers_version"),
+            "triton_version": metrics_payload.get("triton_version"),
+            "kernels_version": metrics_payload.get("kernels_version"),
+            "kernel_commit": metrics_payload.get("kernel_commit"),
+            "kernel_manifest_sha256": metrics_payload.get("kernel_manifest_sha256"),
+            "tuning_profile_sha256": metrics_payload.get("tuning_profile_sha256"),
+            "execution_mode": metrics_payload.get("execution_mode", "bf16_dequant"),
             "vllm_version": metrics_payload.get("vllm_version"),
             "model_id": model_payload.get("model_id", definition.model_id),
             "model_revision": model_payload.get("revision", definition.revision),
@@ -521,6 +644,46 @@ def create_v3_router() -> APIRouter:
                     raise RuntimeError("Worker health did not report ready")
                 if not _has_smoke_evidence(definition, generation_payload):
                     raise RuntimeError("Qualification response contained no valid Worker evidence")
+                if definition.runtime == "qwen38-fp8-chat-transformers-rocm":
+                    benchmark_path, benchmark_body = _native_fp8_text_benchmark_request(definition)
+                    benchmark_payloads = []
+                    for _ in range(NATIVE_FP8_BENCHMARK_REPETITIONS):
+                        benchmark_response = await client.post(
+                            f"{worker['endpoint']}{benchmark_path}", json=benchmark_body
+                        )
+                        benchmark_response.raise_for_status()
+                        benchmark_payload = benchmark_response.json()
+                        if not _has_smoke_evidence(definition, benchmark_payload):
+                            raise RuntimeError("Native FP8 benchmark response contained no output")
+                        benchmark_payloads.append(benchmark_payload)
+                    generation_payload = _aggregate_native_fp8_text_benchmark(benchmark_payloads)
+                elif definition.runtime == "qwen38-fp8-vision-language-transformers-rocm":
+                    if not _has_matching_native_fp8_text_promotion(
+                        store.list_tests(),
+                        model_id=model_id,
+                        revision=revision,
+                        metrics=metrics_payload,
+                    ):
+                        raise RuntimeError(
+                            "Native FP8 image promotion requires matching successful text promotion evidence"
+                        )
+                    for _ in range(NATIVE_FP8_BENCHMARK_REPETITIONS - 1):
+                        repeated_response = await client.post(
+                            f"{worker['endpoint']}{path}", json=body, headers=headers
+                        )
+                        repeated_response.raise_for_status()
+                        repeated_payload = repeated_response.json()
+                        if not _has_smoke_evidence(definition, repeated_payload):
+                            raise RuntimeError("Native FP8 image benchmark response contained no output")
+                if definition.runtime.startswith(NATIVE_FP8_RUNTIME_PREFIX):
+                    refreshed_metrics = await client.get(f"{worker['endpoint']}/metrics")
+                    refreshed_metrics.raise_for_status()
+                    metrics_payload = refreshed_metrics.json()
+                _validate_native_fp8_promotion(
+                    definition.runtime,
+                    metrics_payload,
+                    generation_payload,
+                )
             result = "tested-working"
             failure_class = None
             error_summary = None
@@ -547,6 +710,12 @@ def create_v3_router() -> APIRouter:
             "rocm_version": health_payload.get("rocm_version"),
             "torch_version": metrics_payload.get("torch_version"),
             "transformers_version": metrics_payload.get("transformers_version"),
+            "triton_version": metrics_payload.get("triton_version"),
+            "kernels_version": metrics_payload.get("kernels_version"),
+            "kernel_commit": metrics_payload.get("kernel_commit"),
+            "kernel_manifest_sha256": metrics_payload.get("kernel_manifest_sha256"),
+            "tuning_profile_sha256": metrics_payload.get("tuning_profile_sha256"),
+            "execution_mode": metrics_payload.get("execution_mode", "bf16_dequant"),
             "vllm_version": metrics_payload.get("vllm_version"),
             "model_id": model_id,
             "model_revision": revision,

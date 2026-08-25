@@ -32,6 +32,7 @@ CAPABILITY_DEFINITIONS = {
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
+                "qwen38-fp8-chat-transformers-rocm",
             ),
         ),
         CapabilityDefinition(
@@ -44,6 +45,7 @@ CAPABILITY_DEFINITIONS = {
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
+                "qwen38-fp8-chat-transformers-rocm",
             ),
         ),
         CapabilityDefinition(
@@ -84,7 +86,7 @@ CAPABILITY_DEFINITIONS = {
             "Bounded structured analysis of a supplied scene image.",
             "scene-analysis-v1",
             ("text-input", "image-input", "structured-output"),
-            ("scenechat-gemma4", "scenechat-qwen35"),
+            ("scenechat-gemma4", "scenechat-qwen35", "scenechat-qwen38-fp8"),
         ),
         CapabilityDefinition(
             "text-refinement",
@@ -147,9 +149,19 @@ CAPABILITY_ID_BY_CONTRACT = {
 # text-only conversation. These are intentionally narrow exceptions to the usual
 # generation-family matching rule below; the matcher still requires the exact official
 # Qwen3.5 snapshot and dedicated trusted adapter.
-QWEN35_TEXT_CAPABILITY_TEMPLATES = {
-    "general-chat": ("qwen35-chat-transformers-rocm",),
-    "text-completion": ("qwen35-chat-transformers-rocm",),
+QWEN_TEXT_CAPABILITY_TEMPLATES = {
+    "scenechat-qwen35": {
+        "general-chat": ("qwen35-chat-transformers-rocm",),
+        "text-completion": ("qwen35-chat-transformers-rocm",),
+        "general-image-chat": ("scenechat-qwen35",),
+        "scene-analysis": ("scenechat-qwen35",),
+    },
+    "scenechat-qwen38-fp8": {
+        "general-chat": ("qwen35-chat-transformers-rocm", "qwen38-fp8-chat-transformers-rocm"),
+        "text-completion": ("qwen35-chat-transformers-rocm", "qwen38-fp8-chat-transformers-rocm"),
+        "general-image-chat": ("scenechat-qwen35", "scenechat-qwen38-fp8"),
+        "scene-analysis": ("scenechat-qwen35", "scenechat-qwen38-fp8"),
+    },
 }
 
 FAMILY_CAPABILITIES = {
@@ -189,11 +201,15 @@ def compatible_runtime_template_ids(
     """Resolve installed trusted templates without weakening the model's exact matcher."""
 
     definition = CAPABILITY_DEFINITIONS.get(capability_id)
-    if definition is None or not definition.runtime_template_ids:
+    if definition is None:
         return []
-    qwen35_templates = QWEN35_TEXT_CAPABILITY_TEMPLATES.get(capability_id, ())
-    if configuration_support == "scenechat-qwen35" and qwen35_templates:
-        return [template_id for template_id in qwen35_templates if template_id in registrations]
+    qwen_templates = QWEN_TEXT_CAPABILITY_TEMPLATES.get(configuration_support or "", {}).get(
+        capability_id, ()
+    )
+    if qwen_templates:
+        return [template_id for template_id in qwen_templates if template_id in registrations]
+    if not definition.runtime_template_ids:
+        return []
     baseline_registration = registrations.get(configuration_support) if configuration_support else None
     if baseline_registration is None:
         return []

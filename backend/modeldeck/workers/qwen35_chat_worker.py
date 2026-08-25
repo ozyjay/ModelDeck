@@ -4,6 +4,7 @@ import argparse
 import importlib.metadata
 import time
 import uuid
+from pathlib import Path
 
 import uvicorn
 
@@ -19,20 +20,50 @@ from modeldeck.workers.qwen35_worker import (
     QWEN35_ARCHITECTURE,
     QWEN35_MODEL_IDS,
     QWEN35_PROCESSOR_CLASS,
+    QWEN38_FP8_MODEL_ID,
+    QWEN_EXECUTION_MODES,
     _qwen_quantization_load_config,
+    _validate_qwen_placement,
 )
-from modeldeck.workers.scenechat_worker import TransformersSceneChatEngine
 
 
 class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
     """Text-only chat adapter for the reviewed Qwen3.5 multimodal checkpoints."""
 
+    def __init__(
+        self,
+        config: EngineConfig,
+        *,
+        execution_mode: str = "bf16_dequant",
+        cache_root: Path | None = None,
+        data_dir: Path = Path(".modeldeck"),
+    ) -> None:
+        super().__init__(config)
+        if execution_mode not in QWEN_EXECUTION_MODES:
+            raise ValueError("Unsupported Qwen execution mode")
+        self.execution_mode = execution_mode
+        self.cache_root = cache_root
+        self.data_dir = data_dir
+
     def load(self) -> None:
         import torch
+
+        kernel_details: dict[str, object] = {}
+        if self.execution_mode == "native_fp8":
+            if self.config.model_id != QWEN38_FP8_MODEL_ID or self.cache_root is None:
+                raise RuntimeError("Native FP8 requires the reviewed Qwen3.8 model and cache root")
+            from modeldeck.fp8_kernel import prepare_native_fp8
+
+            validated_kernel = prepare_native_fp8(
+                cache_root=self.cache_root,
+                data_dir=self.data_dir,
+                torch=torch,
+            )
+            kernel_details = validated_kernel.runtime_details()
         from transformers import AutoConfig, AutoModelForMultimodalLM, AutoProcessor, FineGrainedFP8Config
 
         spec = reviewed_model_spec(self.config.model_id)
-        if spec is None or spec.configuration_support != "scenechat-qwen35":
+        if spec is None or spec.configuration_support not in {"scenechat-qwen35", "scenechat-qwen38-fp8"}:
             raise RuntimeError("The requested model is not an allowlisted Qwen multimodal checkpoint")
         if not torch.cuda.is_available():
             raise RuntimeError("ROCm PyTorch did not expose an available 'cuda' device")
@@ -62,6 +93,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             spec,
             model_config_document,
             FineGrainedFP8Config,
+            self.execution_mode,
         )
         model = AutoModelForMultimodalLM.from_pretrained(
             self.config.model_id,
@@ -87,7 +119,12 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             raise RuntimeError("The detected GPU could not allocate a BF16 tensor") from error
         model.to(device)
         model.eval()
-        placement_details = TransformersSceneChatEngine._validate_placement(model, device, torch.bfloat16)
+        placement_details = _validate_qwen_placement(
+            model,
+            device,
+            torch.bfloat16,
+            self.execution_mode,
+        )
         self.torch = torch
         # The processor treats its first positional argument as image input. The shared
         # autoregressive protocol passes text positionally, so use the processor's
@@ -114,7 +151,12 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
-            "checkpoint_quantization": "fp8-dequantized-to-bfloat16" if spec.quantization else "none",
+            "checkpoint_quantization": (
+                "fp8-native" if self.execution_mode == "native_fp8" else "fp8-dequantized-to-bfloat16"
+            )
+            if spec.quantization
+            else "none",
+            "execution_mode": self.execution_mode,
             "model_max_context_tokens": supported_context_length,
             "configuration_fingerprint": self._configuration_fingerprint,
             "load_epoch": self._load_epoch,
@@ -122,6 +164,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             "prefix_cache_enabled": False,
             **placement_details,
             "load_seconds": round(time.perf_counter() - started, 4),
+            **kernel_details,
         }
 
 
@@ -132,6 +175,9 @@ def main() -> None:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--execution-mode", choices=QWEN_EXECUTION_MODES, default="bf16_dequant")
+    parser.add_argument("--cache-root", type=Path)
+    parser.add_argument("--data-dir", type=Path, default=Path(".modeldeck"))
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=512)
     arguments = parser.parse_args()
@@ -145,7 +191,12 @@ def main() -> None:
     application = create_app(
         worker_id=arguments.worker_id,
         config=config,
-        engine=TransformersQwen35ChatEngine(config),
+        engine=TransformersQwen35ChatEngine(
+            config,
+            execution_mode=arguments.execution_mode,
+            cache_root=arguments.cache_root,
+            data_dir=arguments.data_dir,
+        ),
     )
     server = uvicorn.Server(
         uvicorn.Config(application, host="127.0.0.1", port=arguments.port, access_log=False, log_level="info")

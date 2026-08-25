@@ -251,7 +251,8 @@ class BenchmarkRunner:
                 )
             if len(capabilities) > 1:
                 raise BenchmarkError(
-                    f"Worker {worker['name']} serves several published capabilities; benchmark them separately"
+                    f"Worker {worker['name']} serves several published capabilities; "
+                    "benchmark them separately"
                 )
             worker["gateway_model"] = capabilities[0]["public_name"]
         return resolved, self.get("/api/hardware")
@@ -537,6 +538,12 @@ def build_fingerprint_fields(
         "rocm_version": metrics.get("rocm_version") or metrics.get("hip_version"),
         "torch_version": metrics.get("torch_version"),
         "transformers_version": metrics.get("transformers_version"),
+        "triton_version": metrics.get("triton_version"),
+        "kernels_version": metrics.get("kernels_version"),
+        "kernel_commit": metrics.get("kernel_commit"),
+        "kernel_manifest_sha256": metrics.get("kernel_manifest_sha256"),
+        "tuning_profile_sha256": metrics.get("tuning_profile_sha256"),
+        "execution_mode": metrics.get("execution_mode", "bf16_dequant"),
         "vllm_version": None,
         "model_id": model.get("model_id", profile.get("model_id")),
         "model_revision": model.get("revision", profile.get("revision")),

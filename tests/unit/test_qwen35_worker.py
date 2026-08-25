@@ -52,6 +52,29 @@ def test_qwen3_8_fp8_is_dequantized_for_offline_bf16_execution() -> None:
     }
 
 
+def test_qwen3_8_native_fp8_keeps_checkpoint_quantisation() -> None:
+    class FakeFineGrainedFP8Config:
+        def __init__(self, **settings) -> None:
+            self.settings = settings
+
+    spec = REVIEWED_MODEL_SPECS["Qwen/Qwen3.8-27B-FP8"]
+    result = _qwen_quantization_load_config(
+        spec,
+        {
+            "quantization_config": {
+                "quant_method": "fp8",
+                "activation_scheme": "dynamic",
+                "fmt": "e4m3",
+                "weight_block_size": [128, 128],
+            }
+        },
+        FakeFineGrainedFP8Config,
+        "native_fp8",
+    )
+
+    assert result.settings["dequantize"] is False
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

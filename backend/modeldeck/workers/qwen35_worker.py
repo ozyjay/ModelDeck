@@ -16,6 +16,7 @@ from modeldeck.contracts.scenechat import system_messages
 from modeldeck.gemma4_settings import ALLOWED_VISUAL_TOKEN_BUDGETS, DEFAULT_VISUAL_TOKEN_BUDGET
 from modeldeck.reviewed_models import REVIEWED_MODEL_SPECS, reviewed_model_spec
 from modeldeck.workers.scenechat_worker import (
+    APPROVED_FP32_BUFFER_SUFFIXES,
     EngineConfig,
     GenerationResult,
     TransformersSceneChatEngine,
@@ -30,14 +31,21 @@ QWEN35_PATCH_SIZE = 16
 QWEN35_SPATIAL_MERGE_SIZE = 2
 QWEN35_MINIMUM_PIXELS = 65_536
 QWEN35_DEFAULT_MAXIMUM_NEW_TOKENS = 1024
+QWEN38_FP8_MODEL_ID = "Qwen/Qwen3.8-27B-FP8"
+QWEN_EXECUTION_MODES = ("bf16_dequant", "native_fp8")
 
 
-def _qwen_quantization_load_config(spec: Any, config: dict[str, Any], config_class: Any) -> Any | None:
+def _qwen_quantization_load_config(
+    spec: Any,
+    config: dict[str, Any],
+    config_class: Any,
+    execution_mode: str = "bf16_dequant",
+) -> Any | None:
     if not spec.quantization:
         return None
     settings = dict(config["quantization_config"])
     settings.pop("fmt", None)
-    settings["dequantize"] = True
+    settings["dequantize"] = execution_mode == "bf16_dequant"
     return config_class(**settings)
 
 
@@ -55,8 +63,34 @@ def _is_complete_json_output(value: str) -> bool:
 
 
 class TransformersQwen35Engine(TransformersSceneChatEngine):
+    def __init__(
+        self,
+        config: EngineConfig,
+        *,
+        execution_mode: str = "bf16_dequant",
+        data_dir: Path = Path(".modeldeck"),
+    ) -> None:
+        super().__init__(config)
+        if execution_mode not in QWEN_EXECUTION_MODES:
+            raise ValueError("Unsupported Qwen execution mode")
+        self.execution_mode = execution_mode
+        self.data_dir = data_dir
+
     def load(self) -> None:
         import torch
+
+        kernel_details: dict[str, Any] = {}
+        if self.execution_mode == "native_fp8":
+            if self.config.model_id != QWEN38_FP8_MODEL_ID:
+                raise RuntimeError("Native FP8 is allowlisted only for Qwen/Qwen3.8-27B-FP8")
+            from modeldeck.fp8_kernel import prepare_native_fp8
+
+            validated_kernel = prepare_native_fp8(
+                cache_root=self.config.cache_root,
+                data_dir=self.data_dir,
+                torch=torch,
+            )
+            kernel_details = validated_kernel.runtime_details()
         from transformers import AutoModelForMultimodalLM, AutoProcessor, FineGrainedFP8Config
 
         snapshot = self._validate_snapshot()
@@ -87,7 +121,12 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             self.config.visual_token_budget,
         )
         model_config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
-        quantization_config = _qwen_quantization_load_config(spec, model_config, FineGrainedFP8Config)
+        quantization_config = _qwen_quantization_load_config(
+            spec,
+            model_config,
+            FineGrainedFP8Config,
+            self.execution_mode,
+        )
         model = AutoModelForMultimodalLM.from_pretrained(
             snapshot,
             local_files_only=True,
@@ -100,7 +139,7 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             raise RuntimeError(f"Expected {QWEN35_ARCHITECTURE}, received {type(model).__name__}")
         model.to(device)
         model.eval()
-        placement_details = self._validate_placement(model, device, dtype)
+        placement_details = _validate_qwen_placement(model, device, dtype, self.execution_mode)
         self.torch = torch
         self.processor = processor
         self.model = model
@@ -116,18 +155,24 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
-            "checkpoint_quantization": "fp8-dequantized-to-bfloat16" if spec.quantization else "none",
+            "checkpoint_quantization": (
+                "fp8-native" if self.execution_mode == "native_fp8" else "fp8-dequantized-to-bfloat16"
+            )
+            if spec.quantization
+            else "none",
+            "execution_mode": self.execution_mode,
             "visual_token_budget": self.config.visual_token_budget,
             "image_patch_size": QWEN35_PATCH_SIZE,
             "image_spatial_merge_size": QWEN35_SPATIAL_MERGE_SIZE,
             **placement_details,
             "load_seconds": round(time.perf_counter() - started, 4),
             "snapshot_path": str(snapshot),
+            **kernel_details,
         }
 
     def _validate_snapshot(self) -> Path:
         spec = reviewed_model_spec(self.config.model_id)
-        if spec is None or spec.configuration_support != "scenechat-qwen35":
+        if spec is None or spec.configuration_support not in {"scenechat-qwen35", "scenechat-qwen38-fp8"}:
             raise RuntimeError("The requested model is not an allowlisted Qwen multimodal checkpoint")
         snapshot = self.snapshot_path
         if not snapshot.is_dir():
@@ -262,6 +307,46 @@ def _qwen35_visual_token_count(inputs: Any) -> int | None:
         return None
 
 
+def _validate_qwen_placement(model: Any, device: Any, dtype: Any, execution_mode: str) -> dict[str, Any]:
+    if execution_mode == "bf16_dequant":
+        return TransformersSceneChatEngine._validate_placement(model, device, dtype)
+    unexpected_devices: list[str] = []
+    unexpected_dtypes: list[str] = []
+    parameter_dtypes: set[str] = set()
+    buffer_dtypes: set[str] = set()
+    approved_fp32_buffers: list[str] = []
+    parameters = dict(model.named_parameters())
+    for name, tensor in [*parameters.items(), *model.named_buffers()]:
+        if tensor.device != device:
+            unexpected_devices.append(f"{name}={tensor.device}")
+        if not tensor.is_floating_point():
+            continue
+        tensor_dtype = str(tensor.dtype)
+        (parameter_dtypes if name in parameters else buffer_dtypes).add(tensor_dtype)
+        allowed = tensor.dtype == dtype or tensor_dtype == "torch.float8_e4m3fn"
+        allowed = allowed or (tensor_dtype == "torch.float32" and name.endswith("weight_scale_inv"))
+        if (
+            name not in parameters
+            and tensor_dtype == "torch.float32"
+            and name.endswith(APPROVED_FP32_BUFFER_SUFFIXES)
+        ):
+            approved_fp32_buffers.append(name)
+            allowed = True
+        if not allowed:
+            unexpected_dtypes.append(f"{name}={tensor.dtype}")
+    if unexpected_devices:
+        raise RuntimeError("Model contains tensors outside cuda:0: " + ", ".join(unexpected_devices[:10]))
+    if unexpected_dtypes:
+        raise RuntimeError(
+            "Native FP8 model contains unexpected floating dtypes: " + ", ".join(unexpected_dtypes[:10])
+        )
+    return {
+        "parameter_dtypes": sorted(parameter_dtypes),
+        "buffer_dtypes": sorted(buffer_dtypes),
+        "approved_fp32_buffer_count": len(approved_fp32_buffers),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ModelDeck SceneChat Qwen3.5 worker")
     parser.add_argument("--worker-id", required=True)
@@ -270,6 +355,8 @@ def main() -> None:
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--cache-root", required=True, type=Path)
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--execution-mode", choices=QWEN_EXECUTION_MODES, default="bf16_dequant")
+    parser.add_argument("--data-dir", type=Path, default=Path(".modeldeck"))
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument(
         "--maximum-new-tokens",
@@ -298,7 +385,11 @@ def main() -> None:
         worker_id=arguments.worker_id,
         config=config,
         api_key=os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local"),
-        engine=TransformersQwen35Engine(config),
+        engine=TransformersQwen35Engine(
+            config,
+            execution_mode=arguments.execution_mode,
+            data_dir=arguments.data_dir,
+        ),
         worker_label="SceneChat Qwen3.5",
         model_owner="Qwen",
         vision_settings={

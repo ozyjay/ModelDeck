@@ -257,7 +257,8 @@ def test_identifies_reviewed_qwen_scenechat_models(tmp_path: Path, model_id: str
     model = discover_huggingface_models([tmp_path])[0]
 
     assert model["generation_family_hint"] == "vision-language"
-    assert model["configuration_support"] == "scenechat-qwen35"
+    expected_support = "scenechat-qwen38-fp8" if model_id == "Qwen/Qwen3.8-27B-FP8" else "scenechat-qwen35"
+    assert model["configuration_support"] == expected_support
     capabilities = {item["id"]: item for item in model["potential_capabilities"]}
     assert set(capabilities) == {
         "general-chat",
@@ -266,11 +267,23 @@ def test_identifies_reviewed_qwen_scenechat_models(tmp_path: Path, model_id: str
         "video-understanding",
         "scene-analysis",
     }
-    assert capabilities["scene-analysis"]["runtime_template_ids"] == ["scenechat-qwen35"]
+    expected_scene_templates = [expected_support]
+    assert capabilities["scene-analysis"]["runtime_template_ids"] == expected_scene_templates
     assert capabilities["general-chat"]["runtime_template_ids"] == []
-    assert compatible_runtime_template_ids(
-        "general-chat", "scenechat-qwen35", runtime_template_registrations()
-    ) == ["qwen35-chat-transformers-rocm"]
+    expected_chat_templates = ["qwen35-chat-transformers-rocm"]
+    if model_id == "Qwen/Qwen3.8-27B-FP8":
+        expected_chat_templates.append("qwen38-fp8-chat-transformers-rocm")
+    assert (
+        compatible_runtime_template_ids("general-chat", expected_support, runtime_template_registrations())
+        == expected_chat_templates
+    )
+    expected_compatible_scene = ["scenechat-qwen35"]
+    if model_id == "Qwen/Qwen3.8-27B-FP8":
+        expected_compatible_scene.append("scenechat-qwen38-fp8")
+    assert (
+        compatible_runtime_template_ids("scene-analysis", expected_support, runtime_template_registrations())
+        == expected_compatible_scene
+    )
     assert all(
         evidence["kind"] in {"detected", "asserted"} and evidence["confidence"] in {"direct", "inferred"}
         for capability in capabilities.values()

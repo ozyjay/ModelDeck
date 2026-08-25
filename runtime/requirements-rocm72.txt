@@ -9,3 +9,6 @@ accelerate==1.14.0
 safetensors==0.8.0
 huggingface_hub==1.22.0
 pillow==12.3.0
+kernels==0.15.2
+kernels-data==0.16.1
+tomlkit==0.15.1

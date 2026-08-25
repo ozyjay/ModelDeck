@@ -1,0 +1,21 @@
+{
+  "format": "modeldeck-kernel-trust",
+  "version": 1,
+  "repo_id": "kernels-community/finegrained-fp8",
+  "revision": "v3",
+  "commit": "fcf89a79d85eab78182c62fb986ed01f2cbf7422",
+  "kernel_id": "_finegrained_fp8_rocm_846165b",
+  "kernel_version": 3,
+  "backend": "rocm",
+  "files": {
+    "__init__.py": "8ce8255f47ada3a40d2fd0fc4fd0f32886f75d8505e6f6408ef10bdf63020076",
+    "_ops.py": "d9ee974a8b48eb4ca1efe154d3b5fb10608b6e705046030df4a874eaf230f426",
+    "batched.py": "fd9b954183482ccb7a281337db57e05f184544a40cf6d316bef7c010a658e365",
+    "finegrained_fp8/__init__.py": "0c560f96b857c188c4a8297ff27d1299619957c3459a5e433e132329fbfdf066",
+    "grouped.py": "122a2d22705050fb57df932cf9e119e9bed8c967318564d61aadc488c3747ccb",
+    "matmul.py": "01fc86493f8baebf008d6a9c231e2dc6b7a4a4a1f88b0c92f35efb4e2c9e5bf3",
+    "metadata.json": "b1fa0f4ab2cfa72d778c5393153ec45de0d3361a01b54563e642e915aeb5866f",
+    "metadata.json.sigstore": "e526123a255faa54ca7e65658e1b3c5aa13dc27561226cb302ec3c002069e5f0",
+    "utils.py": "a49e8d26b30ccff9921d765a91399c5d6fd9810f75627a61464f0f55af328fe5"
+  }
+}
