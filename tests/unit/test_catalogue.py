@@ -7,6 +7,7 @@ import pytest
 from modeldeck.capabilities import compatible_runtime_template_ids
 from modeldeck.catalogue import discover_huggingface_models, resolve_cache_paths
 from modeldeck.registry import runtime_template_registrations
+from modeldeck.reviewed_models import REVIEWED_MODEL_SPECS
 from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS
 
 
@@ -232,20 +233,21 @@ def test_identifies_gemma4_unified_as_scenechat_compatible(tmp_path: Path) -> No
     assert model["configuration_support"] == "scenechat-gemma4"
 
 
-@pytest.mark.parametrize(
-    "model_name",
-    ["Qwen3.5-0.8B", "Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B"],
-)
-def test_identifies_allowlisted_qwen35_scenechat_models(tmp_path: Path, model_name: str) -> None:
+@pytest.mark.parametrize("model_id", sorted(REVIEWED_MODEL_SPECS))
+def test_identifies_reviewed_qwen_scenechat_models(tmp_path: Path, model_id: str) -> None:
+    spec = REVIEWED_MODEL_SPECS[model_id]
+    _, model_name = model_id.split("/", maxsplit=1)
     snapshot = tmp_path / f"models--Qwen--{model_name}" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)
+    quantization_config = dict(spec.quantization) if spec.quantization else None
     (snapshot / "config.json").write_text(
         json.dumps(
             {
-                "architectures": ["Qwen3_5ForConditionalGeneration"],
-                "model_type": "qwen3_5",
+                "architectures": [spec.architecture],
+                "model_type": spec.model_type,
                 "text_config": {"model_type": "qwen3_5_text"},
                 "vision_config": {"model_type": "qwen3_5"},
+                **({"quantization_config": quantization_config} if quantization_config else {}),
             }
         ),
         encoding="utf-8",
@@ -275,6 +277,33 @@ def test_identifies_allowlisted_qwen35_scenechat_models(tmp_path: Path, model_na
         for evidence in capability["evidence"]
     )
     assert not any("audio" in trait for item in capabilities.values() for trait in item["traits"])
+
+
+def test_rejects_qwen3_8_fp8_snapshot_with_changed_quantisation_metadata(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Qwen--Qwen3.8-27B-FP8" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3_5ForConditionalGeneration"],
+                "model_type": "qwen3_5",
+                "text_config": {},
+                "vision_config": {},
+                "quantization_config": {
+                    "quant_method": "fp8",
+                    "activation_scheme": "static",
+                    "fmt": "e4m3",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] is None
+    assert "dedicated, compatibility-tested runtime" in model["configuration_support_reason"]
 
 
 def test_does_not_allowlist_qwen35_forks_by_architecture_alone(tmp_path: Path) -> None:

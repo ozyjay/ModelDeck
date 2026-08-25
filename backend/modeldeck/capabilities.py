@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from modeldeck.reviewed_models import reviewed_model_spec
+
 
 @dataclass(frozen=True)
 class CapabilityDefinition:
@@ -141,16 +143,6 @@ CAPABILITY_ID_BY_CONTRACT = {
     if definition.protocol_contract_id is not None
 }
 
-QWEN35_MODEL_IDS = frozenset(
-    {
-        "Qwen/Qwen3.5-0.8B",
-        "Qwen/Qwen3.5-2B",
-        "Qwen/Qwen3.5-4B",
-        "Qwen/Qwen3.5-9B",
-    }
-)
-QWEN35_REVIEWED_AT = "2026-08-12"
-
 # Qwen3.5 is a vision-language architecture, but its official checkpoints also support
 # text-only conversation. These are intentionally narrow exceptions to the usual
 # generation-family matching rule below; the matcher still requires the exact official
@@ -256,22 +248,17 @@ def capability_candidates(
                     }
                 )
 
-    if model_id in QWEN35_MODEL_IDS:
-        for capability_id, detail in (
-            ("general-chat", "The official Qwen3.5 model family supports text conversation."),
-            ("text-completion", "The official Qwen3.5 model family supports text generation."),
-            ("general-image-chat", "The official Qwen3.5 model family accepts image input."),
-            ("video-understanding", "The official Qwen3.5 model family accepts video input."),
-            ("scene-analysis", "The official Qwen3.5 model family supports image understanding."),
-        ):
+    reviewed = reviewed_model_spec(model_id)
+    if reviewed is not None:
+        for capability_id in reviewed.capability_ids:
             candidates.setdefault(capability_id, []).append(
                 {
                     "kind": "asserted",
                     "confidence": "direct",
                     "source": "reviewed-model-knowledge",
-                    "detail": detail,
+                    "detail": f"The official {reviewed.display_name} checkpoint supports this capability.",
                     "reference": f"https://huggingface.co/{model_id}",
-                    "reviewed_at": QWEN35_REVIEWED_AT,
+                    "reviewed_at": reviewed.reviewed_at,
                 }
             )
 

@@ -9,6 +9,7 @@ from typing import Any
 from modeldeck.capabilities import capability_candidates
 from modeldeck.hardware.probe import cache_candidates
 from modeldeck.q4_release import Q4ReleaseError, inspect_modeldeck_q4_release
+from modeldeck.reviewed_models import reviewed_model_spec
 from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS, validate_speechshift_snapshot
 
 
@@ -201,12 +202,12 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
         return None, "The snapshot has no readable Transformers configuration."
     architectures = {str(value) for value in config.get("architectures") or ()}
     model_type = str(config.get("model_type", "")).lower()
-    qwen35_scenechat_models = {
-        "Qwen/Qwen3.5-0.8B",
-        "Qwen/Qwen3.5-2B",
-        "Qwen/Qwen3.5-4B",
-        "Qwen/Qwen3.5-9B",
-    }
+    reviewed = reviewed_model_spec(repo_id)
+    if reviewed is not None and reviewed.matches_config(config):
+        return (
+            reviewed.configuration_support,
+            f"Supported by the reviewed {reviewed.display_name} runtime; hardware verification is required.",
+        )
     if repo_id == "openai/gpt-oss-120b" or model_type == "gpt_oss":
         return None, (
             "This is the GPT-OSS source snapshot. Configure the pinned "
@@ -214,12 +215,6 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
         )
     if config.get("quantization_config"):
         return None, "Quantised snapshots require a dedicated, compatibility-tested runtime."
-    if (
-        repo_id in qwen35_scenechat_models
-        and model_type == "qwen3_5"
-        and "Qwen3_5ForConditionalGeneration" in architectures
-    ):
-        return "scenechat-qwen35", "Supported by the dedicated SceneChat Qwen3.5 worker."
     if any(architecture.endswith("ForCausalLM") for architecture in architectures) or config.get(
         "is_decoder"
     ):

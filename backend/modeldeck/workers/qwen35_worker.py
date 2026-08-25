@@ -14,6 +14,7 @@ from PIL import Image
 
 from modeldeck.contracts.scenechat import system_messages
 from modeldeck.gemma4_settings import ALLOWED_VISUAL_TOKEN_BUDGETS, DEFAULT_VISUAL_TOKEN_BUDGET
+from modeldeck.reviewed_models import REVIEWED_MODEL_SPECS, reviewed_model_spec
 from modeldeck.workers.scenechat_worker import (
     EngineConfig,
     GenerationResult,
@@ -21,14 +22,7 @@ from modeldeck.workers.scenechat_worker import (
     create_app,
 )
 
-QWEN35_MODEL_IDS = frozenset(
-    {
-        "Qwen/Qwen3.5-0.8B",
-        "Qwen/Qwen3.5-2B",
-        "Qwen/Qwen3.5-4B",
-        "Qwen/Qwen3.5-9B",
-    }
-)
+QWEN35_MODEL_IDS = frozenset(REVIEWED_MODEL_SPECS)
 QWEN35_ARCHITECTURE = "Qwen3_5ForConditionalGeneration"
 QWEN35_MODEL_TYPE = "qwen3_5"
 QWEN35_PROCESSOR_CLASS = "Qwen3VLProcessor"
@@ -36,6 +30,15 @@ QWEN35_PATCH_SIZE = 16
 QWEN35_SPATIAL_MERGE_SIZE = 2
 QWEN35_MINIMUM_PIXELS = 65_536
 QWEN35_DEFAULT_MAXIMUM_NEW_TOKENS = 1024
+
+
+def _qwen_quantization_load_config(spec: Any, config: dict[str, Any], config_class: Any) -> Any | None:
+    if not spec.quantization:
+        return None
+    settings = dict(config["quantization_config"])
+    settings.pop("fmt", None)
+    settings["dequantize"] = True
+    return config_class(**settings)
 
 
 def _is_complete_json_output(value: str) -> bool:
@@ -54,9 +57,12 @@ def _is_complete_json_output(value: str) -> bool:
 class TransformersQwen35Engine(TransformersSceneChatEngine):
     def load(self) -> None:
         import torch
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        from transformers import AutoModelForMultimodalLM, AutoProcessor, FineGrainedFP8Config
 
         snapshot = self._validate_snapshot()
+        spec = reviewed_model_spec(self.config.model_id)
+        if spec is None:
+            raise RuntimeError(f"Model {self.config.model_id!r} is not in the reviewed model registry")
         if not torch.cuda.is_available():
             raise RuntimeError("ROCm PyTorch did not expose an available 'cuda' device")
         if self.config.dtype != "bfloat16":
@@ -80,12 +86,15 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             getattr(processor, "image_processor", None),
             self.config.visual_token_budget,
         )
+        model_config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+        quantization_config = _qwen_quantization_load_config(spec, model_config, FineGrainedFP8Config)
         model = AutoModelForMultimodalLM.from_pretrained(
             snapshot,
             local_files_only=True,
             trust_remote_code=False,
             dtype=dtype,
             attn_implementation="sdpa",
+            **({"quantization_config": quantization_config} if quantization_config else {}),
         )
         if type(model).__name__ != QWEN35_ARCHITECTURE:
             raise RuntimeError(f"Expected {QWEN35_ARCHITECTURE}, received {type(model).__name__}")
@@ -107,6 +116,7 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
+            "checkpoint_quantization": "fp8-dequantized-to-bfloat16" if spec.quantization else "none",
             "visual_token_budget": self.config.visual_token_budget,
             "image_patch_size": QWEN35_PATCH_SIZE,
             "image_spatial_merge_size": QWEN35_SPATIAL_MERGE_SIZE,
@@ -116,8 +126,9 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
         }
 
     def _validate_snapshot(self) -> Path:
-        if self.config.model_id not in QWEN35_MODEL_IDS:
-            raise RuntimeError("The requested model is not an allowlisted Qwen3.5 checkpoint")
+        spec = reviewed_model_spec(self.config.model_id)
+        if spec is None or spec.configuration_support != "scenechat-qwen35":
+            raise RuntimeError("The requested model is not an allowlisted Qwen multimodal checkpoint")
         snapshot = self.snapshot_path
         if not snapshot.is_dir():
             raise RuntimeError(
@@ -140,12 +151,10 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             model_config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("The pinned Qwen3.5 configuration is unreadable") from error
-        if model_config.get("model_type") != QWEN35_MODEL_TYPE or model_config.get("architectures") != [
-            QWEN35_ARCHITECTURE
-        ]:
-            raise RuntimeError("The pinned snapshot does not declare the allowlisted Qwen3.5 architecture")
-        if model_config.get("quantization_config"):
-            raise RuntimeError("Quantised Qwen3.5 snapshots require a dedicated tested runtime")
+        if not spec.matches_config(model_config):
+            raise RuntimeError(
+                "The pinned snapshot does not match the reviewed Qwen architecture and quantisation"
+            )
         return snapshot.resolve(strict=True)
 
     def generate(

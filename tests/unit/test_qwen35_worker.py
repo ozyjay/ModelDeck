@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from modeldeck.reviewed_models import REVIEWED_MODEL_SPECS
 from modeldeck.workers.qwen35_worker import (
     QWEN35_MODEL_IDS,
     EngineConfig,
@@ -13,6 +14,7 @@ from modeldeck.workers.qwen35_worker import (
     _configure_qwen35_image_processor,
     _is_complete_json_output,
     _qwen35_visual_token_count,
+    _qwen_quantization_load_config,
 )
 from PIL import Image
 
@@ -21,6 +23,33 @@ class FakeImageProcessor:
     patch_size = 16
     merge_size = 2
     size = {"shortest_edge": 65_536, "longest_edge": 16_777_216}
+
+
+def test_qwen3_8_fp8_is_dequantized_for_offline_bf16_execution() -> None:
+    class FakeFineGrainedFP8Config:
+        def __init__(self, **settings) -> None:
+            self.settings = settings
+
+    spec = REVIEWED_MODEL_SPECS["Qwen/Qwen3.8-27B-FP8"]
+    result = _qwen_quantization_load_config(
+        spec,
+        {
+            "quantization_config": {
+                "quant_method": "fp8",
+                "activation_scheme": "dynamic",
+                "fmt": "e4m3",
+                "weight_block_size": [128, 128],
+            }
+        },
+        FakeFineGrainedFP8Config,
+    )
+
+    assert result.settings == {
+        "quant_method": "fp8",
+        "activation_scheme": "dynamic",
+        "weight_block_size": [128, 128],
+        "dequantize": True,
+    }
 
 
 @pytest.mark.parametrize(
@@ -55,8 +84,30 @@ def test_qwen35_visual_tokens_are_derived_from_processor_grid() -> None:
 
 @pytest.mark.parametrize("model_id", sorted(QWEN35_MODEL_IDS))
 def test_qwen35_snapshot_validation_accepts_only_complete_official_models(tmp_path, model_id) -> None:
+    spec = REVIEWED_MODEL_SPECS[model_id]
     organisation, model_name = model_id.split("/", maxsplit=1)
     snapshot = tmp_path / f"models--{organisation}--{model_name}" / "snapshots" / "pinned"
+    snapshot.mkdir(parents=True)
+    for filename in (
+        "chat_template.jinja",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ):
+        (snapshot / filename).write_text("{}", encoding="utf-8")
+    config = {"architectures": [spec.architecture], "model_type": spec.model_type}
+    if spec.quantization:
+        config["quantization_config"] = dict(spec.quantization)
+    (snapshot / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    engine = TransformersQwen35Engine(EngineConfig(model_id=model_id, revision="pinned", cache_root=tmp_path))
+
+    assert engine._validate_snapshot() == snapshot.resolve()
+
+
+def test_qwen3_8_snapshot_validation_rejects_unreviewed_fp8_format(tmp_path) -> None:
+    model_id = "Qwen/Qwen3.8-27B-FP8"
+    snapshot = tmp_path / "models--Qwen--Qwen3.8-27B-FP8" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)
     for filename in (
         "chat_template.jinja",
@@ -70,6 +121,11 @@ def test_qwen35_snapshot_validation_accepts_only_complete_official_models(tmp_pa
             {
                 "architectures": ["Qwen3_5ForConditionalGeneration"],
                 "model_type": "qwen3_5",
+                "quantization_config": {
+                    "quant_method": "fp8",
+                    "activation_scheme": "dynamic",
+                    "fmt": "e5m2",
+                },
             }
         ),
         encoding="utf-8",
@@ -77,7 +133,8 @@ def test_qwen35_snapshot_validation_accepts_only_complete_official_models(tmp_pa
     (snapshot / "model.safetensors").write_bytes(b"weights")
     engine = TransformersQwen35Engine(EngineConfig(model_id=model_id, revision="pinned", cache_root=tmp_path))
 
-    assert engine._validate_snapshot() == snapshot.resolve()
+    with pytest.raises(RuntimeError, match="architecture and quantisation"):
+        engine._validate_snapshot()
 
 
 def test_qwen35_snapshot_validation_rejects_third_party_fork(tmp_path) -> None:

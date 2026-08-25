@@ -7,6 +7,7 @@ import uuid
 
 import uvicorn
 
+from modeldeck.reviewed_models import reviewed_model_spec
 from modeldeck.workers.autoregressive_worker import (
     EngineConfig,
     TransformersAutoregressiveEngine,
@@ -14,7 +15,13 @@ from modeldeck.workers.autoregressive_worker import (
     _model_context_length,
     create_app,
 )
-from modeldeck.workers.qwen35_worker import QWEN35_ARCHITECTURE, QWEN35_MODEL_IDS, QWEN35_PROCESSOR_CLASS
+from modeldeck.workers.qwen35_worker import (
+    QWEN35_ARCHITECTURE,
+    QWEN35_MODEL_IDS,
+    QWEN35_PROCESSOR_CLASS,
+    _qwen_quantization_load_config,
+)
+from modeldeck.workers.scenechat_worker import TransformersSceneChatEngine
 
 
 class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
@@ -22,15 +29,26 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
 
     def load(self) -> None:
         import torch
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        from transformers import AutoConfig, AutoModelForMultimodalLM, AutoProcessor, FineGrainedFP8Config
 
-        if self.config.model_id not in QWEN35_MODEL_IDS:
-            raise RuntimeError("The requested model is not an allowlisted Qwen3.5 checkpoint")
+        spec = reviewed_model_spec(self.config.model_id)
+        if spec is None or spec.configuration_support != "scenechat-qwen35":
+            raise RuntimeError("The requested model is not an allowlisted Qwen multimodal checkpoint")
         if not torch.cuda.is_available():
             raise RuntimeError("ROCm PyTorch did not expose an available 'cuda' device")
         if self.config.dtype != "bfloat16":
             raise RuntimeError("The Qwen3.5 text chat profile requires bfloat16")
         started = time.perf_counter()
+        model_config = AutoConfig.from_pretrained(
+            self.config.model_id,
+            revision=self.config.revision,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
+        if not spec.matches_config(model_config.to_dict()):
+            raise RuntimeError(
+                "The pinned snapshot does not match the reviewed Qwen architecture and quantisation"
+            )
         processor = AutoProcessor.from_pretrained(
             self.config.model_id,
             revision=self.config.revision,
@@ -39,6 +57,12 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
         )
         if type(processor).__name__ != QWEN35_PROCESSOR_CLASS:
             raise RuntimeError(f"Expected {QWEN35_PROCESSOR_CLASS}, received {type(processor).__name__}")
+        model_config_document = model_config.to_dict()
+        quantization_config = _qwen_quantization_load_config(
+            spec,
+            model_config_document,
+            FineGrainedFP8Config,
+        )
         model = AutoModelForMultimodalLM.from_pretrained(
             self.config.model_id,
             revision=self.config.revision,
@@ -46,6 +70,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             trust_remote_code=False,
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
+            **({"quantization_config": quantization_config} if quantization_config else {}),
         )
         if type(model).__name__ != QWEN35_ARCHITECTURE:
             raise RuntimeError(f"Expected {QWEN35_ARCHITECTURE}, received {type(model).__name__}")
@@ -62,6 +87,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             raise RuntimeError("The detected GPU could not allocate a BF16 tensor") from error
         model.to(device)
         model.eval()
+        placement_details = TransformersSceneChatEngine._validate_placement(model, device, torch.bfloat16)
         self.torch = torch
         # The processor treats its first positional argument as image input. The shared
         # autoregressive protocol passes text positionally, so use the processor's
@@ -88,11 +114,13 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             "device_name": torch.cuda.get_device_name(0),
             "dtype": self.config.dtype,
             "attention_implementation": "sdpa",
+            "checkpoint_quantization": "fp8-dequantized-to-bfloat16" if spec.quantization else "none",
             "model_max_context_tokens": supported_context_length,
             "configuration_fingerprint": self._configuration_fingerprint,
             "load_epoch": self._load_epoch,
             "prefix_caching": "unsupported",
             "prefix_cache_enabled": False,
+            **placement_details,
             "load_seconds": round(time.perf_counter() - started, 4),
         }
 

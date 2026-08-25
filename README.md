@@ -157,6 +157,14 @@ adapter serves the OpenAI-compatible chat and completion contracts without accep
 content; it is hardware-verification-required until qualification records evidence for its
 exact model revision and configuration.
 
+The code-owned reviewed-model registry also includes the exact official
+`Qwen/Qwen3.8-27B-FP8` checkpoint. Its FP8 method, dynamic activation scheme and E4M3
+format must all match the reviewed metadata. The isolated Qwen worker dequantises those
+weights to BF16 during its offline load because the alternative Transformers kernel path
+loads executable code from the Hub at runtime. The profile remains
+hardware-verification-required until its exact local revision and ROCm stack pass
+qualification. HuggingFacePull remains responsible for acquisition.
+
 Reviewed runtime templates can be added as versioned
 [trusted runtime manifests](docs/TRUSTED_RUNTIME_MANIFESTS.md). Installation requires an
 explicit local SHA-256 trust step and cannot be performed from the browser; manifests may

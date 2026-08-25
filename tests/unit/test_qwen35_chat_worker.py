@@ -23,6 +23,12 @@ def test_qwen35_chat_engine_uses_the_processor_text_tokenizer(monkeypatch) -> No
         def eval(self):
             return None
 
+        def named_parameters(self):
+            return []
+
+        def named_buffers(self):
+            return []
+
     processor = Qwen3VLProcessor()
     model = Qwen3_5ForConditionalGeneration()
     torch = SimpleNamespace(
@@ -37,6 +43,15 @@ def test_qwen35_chat_engine_uses_the_processor_text_tokenizer(monkeypatch) -> No
         ),
     )
     transformers = SimpleNamespace(
+        FineGrainedFP8Config=object,
+        AutoConfig=SimpleNamespace(
+            from_pretrained=lambda *args, **kwargs: SimpleNamespace(
+                to_dict=lambda: {
+                    "architectures": ["Qwen3_5ForConditionalGeneration"],
+                    "model_type": "qwen3_5",
+                }
+            )
+        ),
         AutoProcessor=SimpleNamespace(from_pretrained=lambda *args, **kwargs: processor),
         AutoModelForMultimodalLM=SimpleNamespace(from_pretrained=lambda *args, **kwargs: model),
     )
