@@ -10,20 +10,20 @@ Run the standard suite across every configured non-mock Worker that has exactly 
 published Route:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_models.ps1
+pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1
 ```
 
 Use the quick preset to validate the benchmark setup with two measured requests per
 Worker:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_models.ps1 -Preset Quick
+pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1 -Preset Quick
 ```
 
 Select one or more Workers by editable name or UUID when a full run is unnecessary:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_models.ps1 -Preset Standard `
+pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1 -Preset Standard `
     -Workers 'Small Qwen','Medium Qwen','Large Qwen'
 ```
 
@@ -34,7 +34,7 @@ output; throughput includes every generated token reported by llama.cpp. Run it 
 chosen Worker name:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_models.ps1 `
+pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1 `
     -Workers 'GPT OSS Vulkan'
 ```
 
@@ -49,7 +49,7 @@ booth image through every curated question. The benchmark performs two warm-ups 
 measured requests per question by default:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+pwsh -NoProfile -File scripts/benchmarks/benchmark_scenechat_visual_tokens.ps1 `
     -Worker70 '<70-worker-id>' `
     -Worker140 '<140-worker-id>' `
     -Worker280 '<280-worker-id>' `
@@ -74,7 +74,7 @@ After isolated acceptance, exercise the intended resident Open Day load and two-
 minimum duration:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+pwsh -NoProfile -File scripts/benchmarks/benchmark_scenechat_visual_tokens.ps1 `
     -Worker140 '<candidate-worker-id>' `
     -RunsPerQuestion 10 `
     -LoadMode combined `
@@ -156,7 +156,7 @@ For application-managed WayFinder prefix-cache qualification, use the separate f
 runner after enabling an allowlisted replacement Worker:
 
 ```powershell
-pwsh -NoProfile -File scripts/qualify_wayfinder_prefix_cache.ps1 `
+pwsh -NoProfile -File scripts/qualification/qualify_wayfinder_prefix_cache.ps1 `
     -Workers '<worker-id>' -Repetitions 5 `
     -Output 'var/benchmarks/wayfinder-prefix-cache.json'
 ```
@@ -170,7 +170,7 @@ uses the active ModelDeck thermal policy and aborts at its configured critical s
 Run the separate sustained GPT-OSS gate after its standard benchmark:
 
 ```powershell
-pwsh -NoProfile -File scripts/stability_gpt_oss.ps1 -DurationMinutes 30
+pwsh -NoProfile -File scripts/stability/stability_gpt_oss.ps1 -DurationMinutes 30
 ```
 
 This records request latency and reliability, samples the fixed AMD DRM sysfs GTT counters,
@@ -195,7 +195,7 @@ acceptance.
 - each request used 566 prompt tokens and generated 82 completion tokens;
 - steady allocated device memory: 24,109,280,768 bytes; peak: 24,473,772,032 bytes.
 
-Run the focused workload with `scripts/benchmark_scenechat_profile.ps1` while the selected
+Run the focused workload with `scripts/benchmarks/benchmark_scenechat_profile.ps1` while the selected
 12B worker is ready.
 
 ### Moshiko speech
@@ -210,7 +210,7 @@ produced the fixed Moshiko greeting without microphone capture:
 - the management compatibility-smoke path independently returned audio in 1.2748 seconds;
 - GTT use while loaded: 18,614,816,768 of 125,829,120,000 bytes.
 
-Run this workload with `scripts/benchmark_moshiko_stream.py`. ROCm reported memory-efficient
+Run this workload with `scripts/benchmarks/benchmark_moshiko_stream.py`. ROCm reported memory-efficient
 attention as experimental, so the baseline did not enable the experimental AOTriton switch.
 
 ### GPT-OSS 120B

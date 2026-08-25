@@ -1,6 +1,6 @@
 # Test plan
 
-Normal verification is `pwsh -NoProfile -File scripts/verify.ps1`. It requires no GPU,
+Normal verification is `pwsh -NoProfile -File scripts/verification/verify.ps1`. It requires no GPU,
 network, model download, container runtime, or cached model. It runs frontend TypeScript
 checking and Vitest tests, proves the committed production bundle matches `frontend/`,
 then runs Ruff and the GPU-free pytest suite.
@@ -12,35 +12,35 @@ and rejects `asyncio.to_thread` anywhere under `backend/modeldeck`. This guards 
 Python 3.12.13 executor shutdown failure recorded in ADR-011.
 
 The end-to-end mock gateway smoke is
-`pwsh -NoProfile -File scripts/smoke_all.ps1`; it starts and always stops the local
+`pwsh -NoProfile -File scripts/smoke/smoke_all.ps1`; it starts and always stops the local
 services around both generation-family checks.
 
 The hardware-gated AR acceptance smoke is
-`pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1`. It loads the pinned cached
+`pwsh -NoProfile -File scripts/smoke/smoke_rocm_autoregressive.ps1`. It loads the pinned cached
 Qwen worker, records stack/latency/torch-memory evidence, confirms process exit, and stops
 all services it started. It never downloads a model.
 
 In-flight hardware cancellation is checked separately with
-`pwsh -NoProfile -File scripts/smoke_rocm_cancellation.ps1`.
+`pwsh -NoProfile -File scripts/smoke/smoke_rocm_cancellation.ps1`.
 
 The hardware-gated text-diffusion acceptance smoke is
-`pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1`. It loads the pinned local
+`pwsh -NoProfile -File scripts/smoke/smoke_rocm_text_diffusion.ps1`. It loads the pinned local
 DiffusionGemma snapshot through its separate native diffusion worker, records frame-shaped
 smoke evidence, confirms process exit, and never downloads a model. It must pass before
 the profile is described as tested-working on the target hardware.
 
 The 30-minute acceptance run is
-`pwsh -NoProfile -File scripts/stability_rocm_autoregressive.ps1`. It records duration,
+`pwsh -NoProfile -File scripts/stability/stability_rocm_autoregressive.ps1`. It records duration,
 request count, failures, shutdown and process-exit evidence against the compatibility
 fingerprint.
 
 The corresponding GPT-OSS Vulkan acceptance run is
-`pwsh -NoProfile -File scripts/stability_gpt_oss.ps1 -DurationMinutes 30`. It uses the
+`pwsh -NoProfile -File scripts/stability/stability_gpt_oss.ps1 -DurationMinutes 30`. It uses the
 verified `repartee-strong` provider, records latency and failures without retaining prompts
 or output, samples peak whole-device GTT use, and checks GTT recovery after process exit.
 
 The corresponding default Q4 DiffusionGemma acceptance run is
-`pwsh -NoProfile -File scripts/stability_rocm_text_diffusion.ps1 -DurationMinutes 30`.
+`pwsh -NoProfile -File scripts/stability/stability_rocm_text_diffusion.ps1 -DurationMinutes 30`.
 It exercises fixed seeded refinement jobs through the stable gateway, rejects fallback to
 another provider, records latency and failures without retaining prompts or generated
 content, samples whole-device GTT and worker Torch memory, and checks GTT recovery after
@@ -61,7 +61,7 @@ requests with zero failures. Peak whole-device GTT use was 21.8561 GiB, post-sto
 recovered below its baseline within 1.003 seconds, and process exit was confirmed.
 
 The fixed selected-preset burn-in is
-`pwsh -NoProfile -File scripts/burn_in_diffusiongemma_selected_preset.ps1`. It runs the
+`pwsh -NoProfile -File scripts/q4/burn_in_diffusiongemma_selected_preset.ps1`. It runs the
 same accepted Q4 workload for two hours and writes distinct privacy-safe reports. Use
 `-ValidateOnly` to check the fixed profile, duration, and output paths without starting
 services or the worker. This gate does not use the mock-only `open-day-minimum` API preset.
@@ -73,7 +73,7 @@ within 0.024 GiB of baseline in 0.002 seconds, and process exit was confirmed. T
 is `var/benchmarks/diffusiongemma-selected-preset-burn-in-20260719T023716Z.json`.
 
 The cross-profile physical performance suite is
-`pwsh -NoProfile -File scripts/benchmark_models.ps1`. It runs one excluded benchmark
+`pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1`. It runs one excluded benchmark
 warm-up and five measured representative requests per selected physical worker, records
 versioned JSON and Markdown reports, rejects mock gateway fallback, and restores the
 initial worker state. `-Preset Quick` reduces measured requests to two. This is an

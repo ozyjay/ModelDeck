@@ -4,19 +4,19 @@
 
 On PowerShell/Linux, launching an extensionless Python console-script wrapper can return a
 short-lived launcher PID rather than the long-lived Python service PID. Recording that
-transient PID caused `scripts/stop.ps1` to report a service absent while its listener
+transient PID caused `scripts/operations/stop.ps1` to report a service absent while its listener
 continued to occupy the configured port.
 
-`scripts/run.ps1` therefore starts the control-plane and gateway services through the
+`scripts/operations/run.ps1` therefore starts the control-plane and gateway services through the
 project virtual environment's Python interpreter using `-m`, then records those actual
-service PIDs. `scripts/stop.ps1` first uses the recorded PID files, then conservatively
+service PIDs. `scripts/operations/stop.ps1` first uses the recorded PID files, then conservatively
 recovers missing or stale records by inspecting `/proc` for only this checkout's virtual
 environment Python and the approved `modeldeck` or `modeldeck.gateway.app` modules. It
 never searches for or stops unrelated processes. The launcher also removes the superseded
 `gateway-loopback.pid` record before starting a new session.
 
-`scripts/run.ps1` is a start command, not a restart command. If its port preflight fails,
-run `pwsh -NoProfile -File scripts/stop.ps1` and then start again. The preflight retains
+`scripts/operations/run.ps1` is a start command, not a restart command. If its port preflight fails,
+run `pwsh -NoProfile -File scripts/operations/stop.ps1` and then start again. The preflight retains
 the original binding details in its error so the occupied service and address are visible.
 
 ## ADR-011 — Blocking in-process work uses isolated operation threads

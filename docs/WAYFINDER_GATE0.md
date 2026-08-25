@@ -7,8 +7,8 @@ non-streaming request; ModelDeck performs no semantic routing or automatic model
 Run ModelDeck, then configure the dedicated profile:
 
 ```powershell
-pwsh -NoProfile -File scripts/run.ps1
-pwsh -NoProfile -File scripts/configure_wayfinder_gate0.ps1
+pwsh -NoProfile -File scripts/operations/run.ps1
+pwsh -NoProfile -File scripts/configuration/configure_wayfinder_gate0.ps1
 ```
 
 Prefix caching remains disabled unless each dedicated Worker has passed physical
@@ -18,7 +18,7 @@ operation, enable `prefix_cache_enabled` on the replacement, rebind the draft Ro
 publish it. The configuration script rejects an existing Worker whose cache setting differs.
 
 When SprintBot needs Docker access, set `MODELDECK_ENABLE_DOCKER_BRIDGE=1` in `.env`.
-`scripts/run.ps1` then keeps WayFinder on `127.0.0.1:8600` and adds SprintBot's bridge
+`scripts/operations/run.ps1` then keeps WayFinder on `127.0.0.1:8600` and adds SprintBot's bridge
 listener at `172.17.0.1:8600`.
 
 The configuration creates two dedicated local Workers: `WayFinder Qwen2.5 0.5B Instruct`
@@ -105,7 +105,7 @@ load epoch is not part of that public identity.
 Qualify the 0.5B and 3B Workers independently after enabling their replacement Workers:
 
 ```powershell
-pwsh -NoProfile -File scripts/qualify_wayfinder_prefix_cache.ps1 `
+pwsh -NoProfile -File scripts/qualification/qualify_wayfinder_prefix_cache.ps1 `
     -Workers '<0.5B-worker-id>','<3B-worker-id>' `
     -Repetitions 5 `
     -Output 'var/benchmarks/wayfinder-prefix-cache.json'

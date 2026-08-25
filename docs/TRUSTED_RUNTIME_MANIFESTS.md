@@ -13,7 +13,7 @@ the file, calculate its SHA-256 independently, then install that exact content:
 
 ```powershell
 $Digest = (Get-FileHash .\open-day-runtimes.json -Algorithm SHA256).Hash.ToLowerInvariant()
-pwsh -NoProfile -File scripts/install_runtime_manifest.ps1 `
+pwsh -NoProfile -File scripts/operations/install_runtime_manifest.ps1 `
     -Manifest .\open-day-runtimes.json `
     -Sha256 $Digest
 ```

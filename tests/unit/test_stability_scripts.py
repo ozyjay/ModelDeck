@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BURN_IN = ROOT / "scripts" / "burn_in_diffusiongemma_selected_preset.ps1"
+BURN_IN = ROOT / "scripts/q4/burn_in_diffusiongemma_selected_preset.ps1"
 
 
 def test_diffusiongemma_selected_preset_burn_in_validates_without_starting_hardware(

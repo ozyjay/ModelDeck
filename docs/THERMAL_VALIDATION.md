@@ -8,7 +8,7 @@ the same approximate starting temperature. Configure the external host service s
 the script only labels the condition and records its read-only status.
 
 ```powershell
-pwsh -NoProfile -File scripts/test_thermal_throttling.ps1 `
+pwsh -NoProfile -File scripts/verification/test_thermal_throttling.ps1 `
   -Condition Combined -RunControlledWorkload -Model your-public-route -DurationSeconds 600
 ```
 

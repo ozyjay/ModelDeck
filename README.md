@@ -23,12 +23,12 @@ diagnosis remain useful when the target hardware is unavailable.
 ## Target setup
 
 ```powershell
-pwsh -NoProfile -File scripts/setup.ps1
+pwsh -NoProfile -File scripts/setup/setup.ps1
 Copy-Item .env.example .env # optional local overrides
-pwsh -NoProfile -File scripts/run.ps1
+pwsh -NoProfile -File scripts/operations/run.ps1
 ```
 
-`scripts/run.ps1` loads an optional, gitignored `.env` before launching management and
+`scripts/operations/run.ps1` loads an optional, gitignored `.env` before launching management and
 gateway processes. Only the variables documented in `.env.example` are accepted; unknown,
 duplicate, malformed, or unterminated entries stop startup without printing their values.
 Values are literal and are never evaluated as PowerShell. Variables already set in the
@@ -37,7 +37,7 @@ loading. The checked-in defaults work without a `.env`; create one when local po
 storage, timeouts, runtime interpreters, cache location, or the SceneChat credential need
 to differ.
 
-Use `MODELDECK_CONFIGURATION_LOCKED=1` (or `scripts/run.ps1 -LockConfiguration`) for a
+Use `MODELDECK_CONFIGURATION_LOCKED=1` (or `scripts/operations/run.ps1 -LockConfiguration`) for a
 prepared, read-only configuration. The former `MODELDECK_OPEN_DAY` and `-OpenDay` names are
 accepted temporarily while local launch files are updated. ModelDeck is always offline-only;
 `MODELDECK_ALLOW_DOWNLOADS` no longer changes runtime behaviour.
@@ -103,14 +103,14 @@ runtime, library and pinned Model fingerprint.
 Existing legacy databases can be backed up and replaced with an empty v4 configuration using:
 
 ```powershell
-pwsh -NoProfile -File scripts/cutover_v2.ps1
+pwsh -NoProfile -File scripts/migrations/cutover_v2.ps1
 ```
 
 The cut-over script stops ModelDeck, moves the exact SQLite database files under
 `var/backups/`, and creates an empty v4 database. To preserve a v2 configuration, first use:
 
 ```powershell
-pwsh -NoProfile -File scripts/migrate_v2_to_v3.ps1
+pwsh -NoProfile -File scripts/migrations/migrate_v2_to_v3.ps1
 ```
 
 It backs up the SQLite database, converts Event revisions to Routing Profile revisions,
@@ -118,7 +118,7 @@ preserves active routing and Workers, and omits Demo membership. Then migrate th
 v3 database, or any existing v3 installation, with:
 
 ```powershell
-pwsh -NoProfile -File scripts/migrate_v3_to_v4.ps1
+pwsh -NoProfile -File scripts/migrations/migrate_v3_to_v4.ps1
 ```
 
 The v4 migration adds capability policy and grandfathers current Worker and routing use.
@@ -126,7 +126,7 @@ Startup refuses an unmigrated database. Model caches, logs, benchmark reports an
 runtime manifests are preserved. Use `-WhatIf` to inspect either migration.
 
 For lightweight development or CI on a machine without the target GPU, run
-`pwsh -NoProfile -File scripts/setup.ps1 -ControlPlaneOnly`. The control plane and
+`pwsh -NoProfile -File scripts/setup/setup.ps1 -ControlPlaneOnly`. The control plane and
 fallbacks remain usable, but that mode is not a complete target deployment.
 
 After creating a Worker in the Models view, it can also be started through the API using
@@ -171,7 +171,7 @@ of that derivative repository and revision separately from its upstream base Mod
 Benchmark all configured physical Workers that have exactly one published capability:
 
 ```powershell
-pwsh -NoProfile -File scripts/benchmark_models.ps1
+pwsh -NoProfile -File scripts/benchmarks/benchmark_models.ps1
 ```
 
 Use `-Preset Quick` or `-Workers 'Qwen small','Qwen medium'` for a shorter run. Worker
@@ -185,11 +185,11 @@ The operator console is a committed React and TypeScript production bundle serve
 FastAPI. Node.js is required only by setup, verification, and frontend development; the
 running management service serves local static assets and does not start a Node process.
 After changing `frontend/`, rebuild with
-`pwsh -NoProfile -File scripts/build_frontend.ps1`. Verification rejects a stale
+`pwsh -NoProfile -File scripts/operations/build_frontend.ps1`. Verification rejects a stale
 committed bundle.
 
 Test fixtures are not available in the operator UI or gateway as fallback choices. Stop all
-ModelDeck workers and services with `pwsh -NoProfile -File scripts/stop.ps1`. See
+ModelDeck workers and services with `pwsh -NoProfile -File scripts/operations/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope
 and next steps.
 
@@ -202,20 +202,20 @@ For Open Day, start ModelDeck and a dedicated fullscreen Chromium-family browser
 command:
 
 ```powershell
-pwsh -NoProfile -File scripts/run_booth.ps1
+pwsh -NoProfile -File scripts/booth/run_booth.ps1
 ```
 
 For a windowed rehearsal that is easier to exit and inspect:
 
 ```powershell
-pwsh -NoProfile -File scripts/run_booth.ps1 -Windowed
+pwsh -NoProfile -File scripts/booth/run_booth.ps1 -Windowed
 ```
 
 Booth mode stops an earlier ModelDeck session, starts the services with Open Day policy,
 waits for both management and gateway health, and opens the operator console in an
 isolated `.booth-browser-profile`. The launch command then returns to the prompt. Closing
 the booth browser stops the ModelDeck workers and services through a background watcher;
-you can instead stop them explicitly with `pwsh -NoProfile -File scripts/stop.ps1`. Set
+you can instead stop them explicitly with `pwsh -NoProfile -File scripts/operations/stop.ps1`. Set
 `BOOTH_BROWSER` to a Chromium, Chrome, or Edge executable name or path if automatic
 discovery does not find the intended browser. Booth Chromium background networking is
 disabled; any remaining browser diagnostics are written under `var/log` rather than to
@@ -224,9 +224,9 @@ the launching terminal.
 ## Core ROCm model workers
 
 ```powershell
-pwsh -NoProfile -File scripts/setup.ps1
-pwsh -NoProfile -File scripts/smoke_rocm_autoregressive.ps1
-pwsh -NoProfile -File scripts/smoke_rocm_text_diffusion.ps1
+pwsh -NoProfile -File scripts/setup/setup.ps1
+pwsh -NoProfile -File scripts/smoke/smoke_rocm_autoregressive.ps1
+pwsh -NoProfile -File scripts/smoke/smoke_rocm_text_diffusion.ps1
 ```
 
 The ROCm setup prepares the primary inference environment without replacing Fedora RPMs.
@@ -251,7 +251,7 @@ original Model can be configured as a separate BF16 Worker for compatibility and
 evaluation. Their public Route names are chosen by the operator.
 
 ```powershell
-./scripts/start_diffusiongemma_q4.ps1 -Worker 'DiffusionGemma Q4' `
+./scripts/q4/start_diffusiongemma_q4.ps1 -Worker 'DiffusionGemma Q4' `
     -RouteName 'text-diffusion' -Smoke
 ```
 
@@ -262,7 +262,7 @@ Upgrade an existing v1 expert-delta checkpoint to the self-contained v2 format w
 re-quantising its expert weights:
 
 ```powershell
-./scripts/materialize_diffusiongemma_q4.ps1
+./scripts/q4/materialize_diffusiongemma_q4.ps1
 ```
 
 Materialisation reads the pinned base snapshot once and packages only the non-expert
@@ -275,7 +275,7 @@ sequentially, verifies deterministic replay and repeated Q4 requests, then leave
 ready:
 
 ```powershell
-./scripts/evaluate_diffusiongemma_q4.ps1 `
+./scripts/q4/evaluate_diffusiongemma_q4.ps1 `
     -Q4Worker 'DiffusionGemma Q4' -Q4Route 'text-diffusion' `
     -BF16Worker 'DiffusionGemma BF16' -BF16Route 'text-diffusion-bf16'
 ```
@@ -290,8 +290,8 @@ After the canonical gate passes, package and cryptographically verify the self-c
 release in place:
 
 ```powershell
-./scripts/package_diffusiongemma_q4_release.ps1
-./scripts/package_diffusiongemma_q4_release.ps1 -VerifyOnly
+./scripts/q4/package_diffusiongemma_q4_release.ps1
+./scripts/q4/package_diffusiongemma_q4_release.ps1 -VerifyOnly
 ```
 
 Packaging adds a Hugging Face-compatible model card, Apache-2.0 licence, provenance,

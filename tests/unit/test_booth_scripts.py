@@ -3,9 +3,9 @@ import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-HELPERS = PROJECT_ROOT / "scripts" / "booth_helpers.psm1"
-RUN_BOOTH = PROJECT_ROOT / "scripts" / "run_booth.ps1"
-WATCH_BOOTH = PROJECT_ROOT / "scripts" / "watch_booth.ps1"
+HELPERS = PROJECT_ROOT / "scripts/booth/booth_helpers.psm1"
+RUN_BOOTH = PROJECT_ROOT / "scripts/booth/run_booth.ps1"
+WATCH_BOOTH = PROJECT_ROOT / "scripts/booth/watch_booth.ps1"
 
 
 def _run_pwsh(command: str) -> subprocess.CompletedProcess[str]:
@@ -65,4 +65,4 @@ def test_booth_launcher_hands_shutdown_to_background_watcher() -> None:
     assert "-RedirectStandardError 'var/log/booth-browser-error.log'" in launcher
     assert "$BoothHandedOff = $true" in launcher
     assert "$BrowserProcess.WaitForExit()" in watcher
-    assert "'stop.ps1'" in watcher
+    assert "'../operations/stop.ps1'" in watcher

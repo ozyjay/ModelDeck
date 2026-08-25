@@ -5,11 +5,11 @@ import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-HELPERS = PROJECT_ROOT / "scripts" / "environment_helpers.psm1"
-MODELDECK_HELPERS = PROJECT_ROOT / "scripts" / "modeldeck_helpers.psm1"
-RUN_SCRIPT = PROJECT_ROOT / "scripts" / "run.ps1"
-STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop.ps1"
-CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts" / "check_ports.ps1"
+HELPERS = PROJECT_ROOT / "scripts/lib/environment_helpers.psm1"
+MODELDECK_HELPERS = PROJECT_ROOT / "scripts/lib/modeldeck_helpers.psm1"
+RUN_SCRIPT = PROJECT_ROOT / "scripts/operations/run.ps1"
+STOP_SCRIPT = PROJECT_ROOT / "scripts/operations/stop.ps1"
+CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts/operations/check_ports.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 

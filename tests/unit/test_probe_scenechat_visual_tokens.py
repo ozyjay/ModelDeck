@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def load_probe_module():
-    path = Path(__file__).resolve().parents[2] / "scripts" / "probe_scenechat_visual_tokens.py"
+    path = Path(__file__).resolve().parents[2] / "scripts/benchmarks/probe_scenechat_visual_tokens.py"
     spec = importlib.util.spec_from_file_location("scenechat_visual_token_probe", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

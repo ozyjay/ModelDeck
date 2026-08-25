@@ -28,7 +28,7 @@ requires per-question completion-token p95 below 1,024, with a preferred target 
 2. Start and smoke the candidate, then run:
 
    ```powershell
-   pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+   pwsh -NoProfile -File scripts/benchmarks/benchmark_scenechat_visual_tokens.ps1 `
        -Worker140 '<candidate-worker-id>' `
        -RunsPerQuestion 10 `
        -LoadMode isolated `
@@ -40,7 +40,7 @@ requires per-question completion-token p95 below 1,024, with a preferred target 
 4. Run the same candidate with the full intended Event load for at least two hours:
 
    ```powershell
-   pwsh -NoProfile -File scripts/benchmark_scenechat_visual_tokens.ps1 `
+   pwsh -NoProfile -File scripts/benchmarks/benchmark_scenechat_visual_tokens.ps1 `
        -Worker140 '<candidate-worker-id>' `
        -RunsPerQuestion 10 `
        -LoadMode combined `

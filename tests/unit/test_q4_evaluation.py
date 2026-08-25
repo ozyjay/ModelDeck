@@ -7,7 +7,7 @@ from types import ModuleType
 
 
 def load_evaluator() -> ModuleType:
-    path = Path(__file__).parents[2] / "scripts/evaluate_diffusiongemma_q4.py"
+    path = Path(__file__).parents[2] / "scripts/q4/evaluate_diffusiongemma_q4.py"
     spec = importlib.util.spec_from_file_location("modeldeck_q4_evaluation", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

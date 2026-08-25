@@ -22,21 +22,21 @@ licensing of any recorded audio.
 Translation is deliberately isolated in a Float32 CPU environment:
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_marian_cpu.ps1
+pwsh -NoProfile -File scripts/setup/setup_marian_cpu.ps1
 ```
 
 Qwen3-TTS uses its own ROCm 7.2 environment because its pinned dependencies differ from the
 primary inference environment:
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_qwen3_tts_rocm72.ps1
+pwsh -NoProfile -File scripts/setup/setup_qwen3_tts_rocm72.ps1
 ```
 
 Whisper uses a separate ROCm 7.2 environment so speech recognition remains independently
 upgradable and auditable:
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_whisper_rocm72.ps1
+pwsh -NoProfile -File scripts/setup/setup_whisper_rocm72.ps1
 ```
 
 The setup scripts prepare dependencies only. They do not create or start Workers, publish
@@ -92,7 +92,7 @@ record objective evidence for the exact fingerprint:
 7. exercise start rejection and active cancellation at the thermal boundaries; and
 8. stop the process, confirm GPU memory recovery, then repeat a clean start and request.
 
-Physical qualification is intentionally separate from `scripts/verify.ps1` because it needs
+Physical qualification is intentionally separate from `scripts/verification/verify.ps1` because it needs
 the target GPU, installed isolated environments, cached weights, sensors, time and memory.
 Run it explicitly from the control environment after setting the isolated interpreter:
 
@@ -136,7 +136,7 @@ a 24 kHz mono WAV in a gateway smoke request.
 The privacy-safe aggregate report is generated with:
 
 ```powershell
-pwsh -NoProfile -File scripts/qualify_qwen3_tts.ps1
+pwsh -NoProfile -File scripts/qualification/qualify_qwen3_tts.ps1
 ```
 
 The qualifier defaults to three repetitions for Vivian and Serena in each supported

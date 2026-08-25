@@ -18,7 +18,7 @@ runtime.
 Provision the allowlisted executable with:
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_llama_vulkan.ps1
+pwsh -NoProfile -File scripts/setup/setup_llama_vulkan.ps1
 ```
 
 The default preset uses full Vulkan offload. Compatibility testing may instead select the
@@ -33,7 +33,7 @@ revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon 8060S.
 `kyutai/moshiko-pytorch-bf16` snapshot. Provision its separate environment with:
 
 ```powershell
-pwsh -NoProfile -File scripts/setup_moshiko_rocm72.ps1
+pwsh -NoProfile -File scripts/setup/setup_moshiko_rocm72.ps1
 ```
 
 The stable WebSocket endpoint is `ws://127.0.0.1:8600/v1/speech/conversations`. The first

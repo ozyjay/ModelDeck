@@ -23,7 +23,7 @@ runtime versions, model card, licence, and notices using SHA-256.
 Run this once against the existing v1 expert delta:
 
 ```powershell
-./scripts/materialize_diffusiongemma_q4.ps1
+./scripts/q4/materialize_diffusiongemma_q4.ps1
 ```
 
 This retains the verified Q4 expert shards and adds sharded BF16 non-expert weights plus
@@ -34,13 +34,13 @@ Prove the resulting checkpoint loads and generates with an empty Hugging Face ho
 offline mode enforced:
 
 ```powershell
-./scripts/smoke_diffusiongemma_q4_offline.ps1
+./scripts/q4/smoke_diffusiongemma_q4_offline.ps1
 ```
 
 ## 2. Generate the canonical evaluation report
 
 ```powershell
-./scripts/evaluate_diffusiongemma_q4.ps1
+./scripts/q4/evaluate_diffusiongemma_q4.ps1
 ```
 
 This writes `var/q4-quality-evaluation.json` and leaves the Q4 worker ready.
@@ -48,7 +48,7 @@ This writes `var/q4-quality-evaluation.json` and leaves the Q4 worker ready.
 ## 3. Package the release bundle
 
 ```powershell
-./scripts/package_diffusiongemma_q4_release.ps1
+./scripts/q4/package_diffusiongemma_q4_release.ps1
 ```
 
 The command validates the checkpoint and evaluation before writing these files beside
@@ -71,7 +71,7 @@ are not recopied.
 ## 4. Verify before use or upload
 
 ```powershell
-./scripts/package_diffusiongemma_q4_release.ps1 -VerifyOnly
+./scripts/q4/package_diffusiongemma_q4_release.ps1 -VerifyOnly
 ```
 
 Verification streams every shard through SHA-256 and rejects missing files, size or hash
@@ -121,7 +121,7 @@ hf upload $RepoId $Checkpoint . `
 
 $Verification = 'var/verification/diffusiongemma-q4-v1.1.0'
 hf download $RepoId --revision main --local-dir $Verification
-./scripts/package_diffusiongemma_q4_release.ps1 `
+./scripts/q4/package_diffusiongemma_q4_release.ps1 `
     -CheckpointDir $Verification `
     -VerifyOnly
 ```
@@ -130,7 +130,7 @@ Run the offline ModelDeck smoke test against the downloaded directory. After it 
 create the artifact tag on Hugging Face:
 
 ```powershell
-./scripts/smoke_diffusiongemma_q4_offline.ps1 `
+./scripts/q4/smoke_diffusiongemma_q4_offline.ps1 `
     -CheckpointDir $Verification `
     -JsonOutput var/verification/q4-hub-self-contained-smoke.json
 

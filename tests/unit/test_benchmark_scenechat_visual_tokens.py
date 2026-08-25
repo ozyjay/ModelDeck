@@ -10,7 +10,7 @@ import pytest
 
 
 def load_benchmark_module():
-    path = Path(__file__).resolve().parents[2] / "scripts" / "benchmark_scenechat_visual_tokens.py"
+    path = Path(__file__).resolve().parents[2] / "scripts/benchmarks/benchmark_scenechat_visual_tokens.py"
     spec = importlib.util.spec_from_file_location("scenechat_visual_token_benchmark", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

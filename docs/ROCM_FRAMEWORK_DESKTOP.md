@@ -52,11 +52,11 @@ Sources:
 
 ## Probe and smoke policy
 
-Run `pwsh -NoProfile -File scripts/check_environment.ps1`. The hardware-gated allocation
+Run `pwsh -NoProfile -File scripts/operations/check_environment.ps1`. The hardware-gated allocation
 check required for target acceptance is:
 
 ```powershell
-pwsh -NoProfile -File scripts/check_environment.ps1 --allocation-test
+pwsh -NoProfile -File scripts/operations/check_environment.ps1 --allocation-test
 ```
 
 ROCm PyTorch deliberately exposes devices through the `cuda` API, so

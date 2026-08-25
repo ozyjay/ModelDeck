@@ -11,7 +11,7 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.migrate_v3_to_v4 import migrate
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MIGRATION_WRAPPER = PROJECT_ROOT / "scripts" / "migrate_v3_to_v4.ps1"
+MIGRATION_WRAPPER = PROJECT_ROOT / "scripts/migrations/migrate_v3_to_v4.ps1"
 
 
 def test_migration_grandfathers_current_workers_without_historical_routes(tmp_path) -> None:
@@ -168,11 +168,14 @@ def test_migration_wrapper_stops_backs_up_and_migrates_after_approval(tmp_path) 
 def _wrapper_fixture(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "repo"
     scripts = root / "scripts"
-    scripts.mkdir(parents=True)
-    wrapper = scripts / MIGRATION_WRAPPER.name
+    migrations = scripts / "migrations"
+    operations = scripts / "operations"
+    migrations.mkdir(parents=True)
+    operations.mkdir()
+    wrapper = migrations / MIGRATION_WRAPPER.name
     shutil.copy2(MIGRATION_WRAPPER, wrapper)
-    (scripts / "stop.ps1").write_text(
-        "Set-Content -LiteralPath (Join-Path $PSScriptRoot '../stop-called') -Value 'stopped'\n",
+    (operations / "stop.ps1").write_text(
+        "Set-Content -LiteralPath (Join-Path $PSScriptRoot '../../stop-called') -Value 'stopped'\n",
         encoding="utf-8",
     )
     python = root / ".venv/bin/python"

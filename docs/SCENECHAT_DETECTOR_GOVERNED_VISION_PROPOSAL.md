@@ -99,7 +99,7 @@ retained between requests.
 | Runtime trust/launch | `backend/modeldeck/runtime_trust.py`, `backend/modeldeck/supervisor/service.py`, `backend/modeldeck/registry_data/runtime_templates.json` | Publish contract capability/policy and preserve immutable launch configuration. Avoid loading a second model solely to obtain another contract. |
 | Event validation/smoke | `backend/modeldeck/domain.py`, `backend/modeldeck/v2_api.py` | Validate and smoke the new Route explicitly. |
 | Mocks | `backend/modeldeck/mock_templates.py`, `backend/modeldeck/workers/mock_worker.py` | Add deterministic enrichment success, delay and request-error behaviours. |
-| Benchmarking | `scripts/benchmark_scenechat_visual_tokens.py` and a new PowerShell entry point | Extend or add a strategy benchmark with fixed inputs, resource sampling and thermal condition control. |
+| Benchmarking | `scripts/benchmarks/benchmark_scenechat_visual_tokens.py` and a new PowerShell entry point | Extend or add a strategy benchmark with fixed inputs, resource sampling and thermal condition control. |
 | Telemetry/thermal | `backend/modeldeck/hardware/probe.py`, `backend/modeldeck/thermal.py` | Reuse safe sensor discovery; benchmark-only resource sampling needs package power and utilisation sources. Do not change unrelated speech thresholds implicitly. |
 | Documentation/tests | `docs/API_CONTRACT.md`, `docs/WORKER_PROTOCOL.md`, `docs/BENCHMARKS.md`, contract/integration/unit tests | Document and verify the added development contract and disabled-by-default publication. |
 

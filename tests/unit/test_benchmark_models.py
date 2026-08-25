@@ -11,7 +11,7 @@ import pytest
 
 
 def load_benchmark_module():
-    path = Path(__file__).resolve().parents[2] / "scripts" / "benchmark_models.py"
+    path = Path(__file__).resolve().parents[2] / "scripts/benchmarks/benchmark_models.py"
     spec = importlib.util.spec_from_file_location("modeldeck_benchmark_models", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
