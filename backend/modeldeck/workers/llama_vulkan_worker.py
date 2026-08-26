@@ -96,8 +96,15 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
     return command
 
 
-def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]:
+def qwen_llama_command(
+    *, runtime: ValidatedQwenRuntime, port: int, thinking_mode: str | None = None
+) -> list[str]:
     manifest = runtime.manifest
+    effective_thinking_mode = thinking_mode or (
+        "disabled" if manifest.id == "qwen35-4b-q8-vulkan" else "adaptive"
+    )
+    if effective_thinking_mode not in {"adaptive", "disabled"}:
+        raise ValueError("The Qwen llama.cpp command requires a trusted thinking mode")
     command = [
         str(runtime.executable),
         "--host",
@@ -137,7 +144,7 @@ def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]
         command.extend(["--mmproj", str(runtime.projector)])
     else:
         command.append("--no-mmproj")
-    if manifest.id == "qwen35-4b-q8-vulkan":
+    if effective_thinking_mode == "disabled":
         command.extend(["--reasoning-effort", "none"])
     if runtime.mtp_model is not None and manifest.mtp_draft_tokens is not None:
         command.extend(
@@ -345,7 +352,11 @@ class LlamaProcess:
             self.qwen_runtime = validate_qwen_runtime(self.args.runtime_profile, self.artifact_path.parent)
             if self.args.context_length != self.qwen_runtime.manifest.context_length:
                 raise ValueError("Configured context length does not match the trusted Qwen manifest")
-            command = qwen_llama_command(runtime=self.qwen_runtime, port=self.internal_port)
+            command = qwen_llama_command(
+                runtime=self.qwen_runtime,
+                port=self.internal_port,
+                thinking_mode=self.args.thinking_mode,
+            )
         else:
             command = llama_command(
                 model=self.artifact_path,
@@ -438,13 +449,11 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
     thinking_mode = getattr(args, "thinking_mode", None)
-    expected_thinking_mode = (
-        "disabled" if getattr(args, "runtime_profile", None) == "qwen35-4b-q8-vulkan" else "adaptive"
-    )
-    if is_qwen and thinking_mode != expected_thinking_mode:
-        raise ValueError(
-            f"The selected Qwen llama.cpp Worker requires thinking_mode={expected_thinking_mode}"
-        )
+    if is_qwen and getattr(args, "runtime_profile", None) == "qwen35-4b-q8-vulkan":
+        if thinking_mode != "disabled":
+            raise ValueError("The selected Qwen3.5 llama.cpp Worker requires thinking_mode=disabled")
+    elif is_qwen and thinking_mode not in {"adaptive", "disabled"}:
+        raise ValueError("The selected Qwen3.8 llama.cpp Worker requires a trusted thinking mode")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -475,7 +484,9 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 {
                     "runtime_profile": manifest.id,
                     "thinking_mode": thinking_mode,
-                    "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
+                    "configuration_fingerprint": configuration_fingerprint(
+                        runtime.qwen_runtime, thinking_mode=thinking_mode
+                    ),
                     "verified_capabilities": (
                         ["chat", "completions", "streaming", "cancellation"]
                         + (
@@ -546,7 +557,9 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     "mtp_enabled": runtime.qwen_runtime.mtp_model is not None,
                     "thinking_mode": thinking_mode,
                     "mtp_draft_tokens": manifest.mtp_draft_tokens or 0,
-                    "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
+                    "configuration_fingerprint": configuration_fingerprint(
+                        runtime.qwen_runtime, thinking_mode=thinking_mode
+                    ),
                 }
                 if manifest
                 else {}
@@ -607,6 +620,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                 {"error": {"code": "invalid_request", "message": str(error)}}, status_code=400
             )
         body["model"] = args.model_id
+        filter_reasoning = not is_qwen or thinking_mode == "disabled"
         request_started = time.monotonic()
         client = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=1))
         try:
@@ -628,7 +642,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                             runtime.last_time_to_first_token_seconds = round(
                                 time.monotonic() - request_started, 6
                             )
-                        if not is_qwen and line.startswith("data: ") and line != "data: [DONE]":
+                        if filter_reasoning and line.startswith("data: ") and line != "data: [DONE]":
                             try:
                                 line = "data: " + json.dumps(remove_reasoning(json.loads(line[6:])))
                             except json.JSONDecodeError:
@@ -645,7 +659,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         try:
             payload = response.json()
             return JSONResponse(
-                payload if is_qwen else remove_reasoning(payload), status_code=response.status_code
+                remove_reasoning(payload) if filter_reasoning else payload,
+                status_code=response.status_code,
             )
         finally:
             await response.aclose()

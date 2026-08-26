@@ -35,6 +35,7 @@ CAPABILITY_DEFINITIONS = {
                 "qwen35-llamacpp-q8-vulkan",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
+                "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
             ),
         ),
         CapabilityDefinition(
@@ -50,6 +51,7 @@ CAPABILITY_DEFINITIONS = {
                 "qwen35-llamacpp-q8-vulkan",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
+                "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
             ),
         ),
         CapabilityDefinition(
@@ -74,7 +76,10 @@ CAPABILITY_DEFINITIONS = {
             "Open-ended conversation grounded in one or more images.",
             "openai-image-chat-v1",
             ("text-input", "image-input", "text-output", "chat"),
-            ("qwen38-llamacpp-q8-mtp-vulkan",),
+            (
+                "qwen38-llamacpp-q8-mtp-vulkan",
+                "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+            ),
         ),
         CapabilityDefinition(
             "video-understanding",
@@ -158,9 +163,18 @@ QWEN_TEXT_CAPABILITY_TEMPLATES = {
         "text-completion": ("qwen35-llamacpp-q8-vulkan",),
     },
     "qwen38-llamacpp-q8-mtp-vulkan": {
-        "general-chat": ("qwen38-llamacpp-q8-mtp-vulkan",),
-        "text-completion": ("qwen38-llamacpp-q8-mtp-vulkan",),
-        "general-image-chat": ("qwen38-llamacpp-q8-mtp-vulkan",),
+        "general-chat": (
+            "qwen38-llamacpp-q8-mtp-vulkan",
+            "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+        ),
+        "text-completion": (
+            "qwen38-llamacpp-q8-mtp-vulkan",
+            "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+        ),
+        "general-image-chat": (
+            "qwen38-llamacpp-q8-mtp-vulkan",
+            "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+        ),
     },
     "scenechat-qwen35": {
         "general-chat": ("qwen35-chat-transformers-rocm",),

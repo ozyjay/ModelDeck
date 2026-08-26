@@ -157,10 +157,11 @@ def validate_qwen_runtime(profile: str, snapshot: Path) -> ValidatedQwenRuntime:
     )
 
 
-def configuration_fingerprint(runtime: ValidatedQwenRuntime) -> str:
+def configuration_fingerprint(runtime: ValidatedQwenRuntime, *, thinking_mode: str | None = None) -> str:
     payload = {
         "manifest": runtime.manifest.model_dump(mode="json"),
         "executable_sha256": runtime.executable_sha256,
+        "thinking_mode": thinking_mode,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

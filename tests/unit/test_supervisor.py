@@ -262,6 +262,31 @@ def test_qwen38_llamacpp_launch_enforces_adaptive_thinking(tmp_path) -> None:
         build_worker_launch(profile)
 
 
+def test_qwen38_llamacpp_disabled_thinking_uses_its_distinct_template(tmp_path) -> None:
+    artefact = tmp_path / "Qwen3.8-27B-Q8_0.gguf"
+    artefact.write_bytes(b"gguf")
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="ggml-org/Qwen3.8-27B-GGUF",
+            revision="97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827",
+            alias="qwen38-no-thinking",
+            runtime_template_id="qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+            context_length=8192,
+        ),
+        cache_root=tmp_path,
+        artifact_path=artefact,
+        port=8630,
+        configuration_support="qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+    )
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "disabled"
+    profile.settings["thinking_mode"] = "adaptive"
+    with pytest.raises(ValueError, match="thinking_mode=disabled"):
+        build_worker_launch(profile)
+
+
 def test_qwen35_llamacpp_launch_enforces_disabled_thinking(tmp_path) -> None:
     artefact = tmp_path / "Qwen_Qwen3.5-4B-Q8_0.gguf"
     artefact.write_bytes(b"gguf")

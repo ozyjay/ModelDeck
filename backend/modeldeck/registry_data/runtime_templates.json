@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -125,6 +125,16 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "image_input": true, "structured_output": true, "tool_calling": true, "reasoning": true, "mtp": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 512, "thinking_mode": "adaptive", "startup_timeout_seconds": 900, "warmup_timeout_seconds": 180, "runtime_profile": "qwen38-q8-mtp-vulkan", "hardware_verification_required": true},
+      "cache_setting": "artifact_path",
+      "lifecycle": "exclusive"
+    },
+    {
+      "id": "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+      "display_name": "Qwen3.8 27B Q8 llama.cpp Vulkan MTP · Thinking disabled",
+      "runtime": "qwen38-llamacpp-vulkan",
+      "generation_family": "autoregressive",
+      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "image_input": true, "structured_output": true, "tool_calling": true, "mtp": true},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 512, "thinking_mode": "disabled", "startup_timeout_seconds": 900, "warmup_timeout_seconds": 180, "runtime_profile": "qwen38-q8-mtp-vulkan", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
       "lifecycle": "exclusive"
     },

@@ -45,14 +45,22 @@ tokens, acceptance ratio, effective generation rate, prompt-processing rate, loa
 whole-device memory counters.
 
 The worker preserves llama.cpp's OpenAI-compatible chat, completion, streaming, image,
-tool-call, structured-output, finish-reason, usage and reasoning fields. GPT-OSS retains
-its existing reasoning-removal policy; that policy is deliberately not applied to Qwen.
-Its immutable `thinking_mode=adaptive` policy leaves `reasoning_effort` unset when a
-request omits it, allowing the pinned Qwen chat template to select its default. A request
-may instead select one of llama.cpp's reviewed effort values (`default`, `none`,
-`minimal`, `low`, `medium`, `high`, `xhigh` or `max`); other values are rejected before
-they reach the private server. Health, model and metrics responses attest the policy, and
-qualification evidence includes it in the compatibility fingerprint.
+tool-call, structured-output, finish-reason and usage fields. ModelDeck exposes two
+distinct immutable Worker templates over the same pinned artefacts:
+
+- `qwen38-llamacpp-q8-mtp-vulkan` uses `thinking_mode=adaptive`, advertises reasoning,
+  and leaves `reasoning_effort` unset when a request omits it. A request may select one of
+  llama.cpp's reviewed effort values (`default`, `none`, `minimal`, `low`, `medium`,
+  `high`, `xhigh` or `max`).
+- `qwen38-llamacpp-q8-mtp-vulkan-no-thinking` uses `thinking_mode=disabled`, starts
+  llama.cpp with `reasoning_effort=none`, injects `none` into every request, rejects any
+  other effort and defensively removes reasoning-only response fields.
+
+Both retain image, tool, structured-output and MTP support; only the adaptive template
+claims reasoning. Other effort values are rejected before they reach the private server.
+Health, model and metrics responses attest the policy. The thinking policy is included in
+both runtime and Worker configuration fingerprints, so each variant accumulates separate
+qualification evidence.
 
 ## Physical qualification and acceptance
 

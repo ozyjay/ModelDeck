@@ -116,6 +116,12 @@ def test_qwen_command_is_fixed_to_loopback_full_vulkan_offload_and_mtp(monkeypat
     assert "--offline" in command
     assert command[command.index("-lv") + 1] == "4"
 
+    disabled_command = qwen_llama_command(runtime=runtime, port=49153, thinking_mode="disabled")
+    assert disabled_command[disabled_command.index("--reasoning-effort") + 1] == "none"
+    assert llama_runtime.configuration_fingerprint(
+        runtime, thinking_mode="adaptive"
+    ) != llama_runtime.configuration_fingerprint(runtime, thinking_mode="disabled")
+
 
 def test_qwen35_command_disables_thinking_without_vision_or_mtp_companions(tmp_path) -> None:
     manifest = llama_runtime.load_qwen_manifest("qwen35-4b-q8-vulkan")

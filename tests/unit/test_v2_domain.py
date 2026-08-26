@@ -49,6 +49,11 @@ def worker_definition() -> WorkerDefinition:
     ("runtime", "runtime_template_id", "expected"),
     [
         ("qwen38-llamacpp-vulkan", "qwen38-llamacpp-q8-mtp-vulkan", "adaptive"),
+        (
+            "qwen38-llamacpp-vulkan",
+            "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+            "disabled",
+        ),
         ("qwen35-llamacpp-vulkan", "qwen35-llamacpp-q8-vulkan", "disabled"),
     ],
 )

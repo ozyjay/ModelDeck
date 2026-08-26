@@ -32,13 +32,14 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "gpt-oss-llama-vulkan",
         "qwen35-llamacpp-q8-vulkan",
         "qwen38-llamacpp-q8-mtp-vulkan",
+        "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
         "moshiko-speech",
         "opus-translation-cpu",
         "qwen3-tts-rocm",
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
-    assert registrations["scenechat-qwen35"].package.version == "0.6.0"
+    assert registrations["scenechat-qwen35"].package.version == "0.7.0"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 
@@ -102,10 +103,38 @@ def test_qwen38_llamacpp_profile_keeps_quantised_identity_separate_from_fp8(tmp_
     )
 
     assert profile.preferred_runtime == "qwen38-llamacpp-vulkan"
-    assert profile.runtime_template_version == "0.6.0"
+    assert profile.runtime_template_version == "0.7.0"
     assert profile.dtype == "q8_0"
     assert profile.settings["runtime_profile"] == "qwen38-q8-mtp-vulkan"
     assert profile.settings["thinking_mode"] == "adaptive"
+
+
+def test_qwen38_llamacpp_disabled_thinking_is_a_distinct_worker_template(tmp_path) -> None:
+    gguf = tmp_path / "Qwen3.8-27B-Q8_0.gguf"
+    gguf.write_bytes(b"gguf")
+
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="ggml-org/Qwen3.8-27B-GGUF",
+            revision="97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827",
+            alias="qwen38-no-thinking",
+            artifact_id="qwen38-27b-q8-mtp",
+            runtime_template_id="qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+            context_length=8192,
+            maximum_new_tokens=512,
+        ),
+        cache_root=tmp_path,
+        artifact_path=gguf,
+        port=8630,
+        configuration_support="qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+    )
+
+    assert profile.preferred_runtime == "qwen38-llamacpp-vulkan"
+    assert profile.runtime_template_version == "0.7.0"
+    assert profile.settings["thinking_mode"] == "disabled"
+    assert profile.capabilities.reasoning is False
+    assert profile.capabilities.mtp is True
+    assert profile.capabilities.image_input is True
 
 
 def test_qwen35_llamacpp_profile_is_text_only_with_thinking_disabled(tmp_path) -> None:
@@ -129,7 +158,7 @@ def test_qwen35_llamacpp_profile_is_text_only_with_thinking_disabled(tmp_path) -
     )
 
     assert profile.preferred_runtime == "qwen35-llamacpp-vulkan"
-    assert profile.runtime_template_version == "0.6.0"
+    assert profile.runtime_template_version == "0.7.0"
     assert profile.dtype == "q8_0"
     assert profile.capabilities.image_input is False
     assert profile.settings["runtime_profile"] == "qwen35-4b-q8-vulkan"

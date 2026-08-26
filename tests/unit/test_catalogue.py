@@ -404,7 +404,10 @@ def test_qwen38_gguf_requires_exact_revision_and_complete_q8_companions(tmp_path
         "general-image-chat",
         model["configuration_support"],
         runtime_template_registrations(),
-    ) == ["qwen38-llamacpp-q8-mtp-vulkan"]
+    ) == [
+        "qwen38-llamacpp-q8-mtp-vulkan",
+        "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+    ]
     assert model["artifacts"] == [
         {
             "artifact_id": "qwen38-27b-q8-mtp",
