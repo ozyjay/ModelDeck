@@ -52,10 +52,11 @@ def _candidate_fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
         json.dumps(
             {
                 "repo_id": REPOSITORY,
-                "expected_revision": REVISION,
+                "expected_commit": REVISION,
+                "revision": REVISION,
                 "resolved_revision": REVISION,
                 "snapshot_path": str(snapshot),
-                "selected_files": [{"path": FILENAME, "size": len(payload)}],
+                "files": [{"path": FILENAME, "size": len(payload), "blob_id": "a" * 40}],
             }
         ),
         encoding="utf-8",
@@ -100,6 +101,10 @@ def test_rejects_candidate_when_file_does_not_match_tree_checksum(tmp_path: Path
     tree["files"][FILENAME]["size"] = len(b"tampered-qwen35-q8")
     tree["files"][FILENAME]["lfs_size"] = len(b"tampered-qwen35-q8")
     tree_path.write_text(json.dumps(tree), encoding="utf-8")
+    marker_path = library_root / "bartowski--Qwen_Qwen3.5-9B-GGUF" / REVISION / ".huggingfacepull.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["files"][0]["size"] = len(b"tampered-qwen35-q8")
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
 
     with pytest.raises(ValueError, match="checksum"):
         approve_candidate(

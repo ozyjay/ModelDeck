@@ -100,15 +100,22 @@ def _candidate_metadata(
         marker.get(name) != expected
         for name, expected in (
             ("repo_id", repo_id),
-            ("expected_revision", revision),
+            ("expected_commit", revision),
+            ("revision", revision),
             ("resolved_revision", revision),
         )
     ):
         raise ValueError("The HuggingFacePull marker does not match this exact Model revision")
-    selected = marker.get("selected_files")
-    if not isinstance(selected, list) or not any(
-        isinstance(item, dict) and item.get("path") == filename for item in selected
-    ):
+    files = marker.get("files")
+    selected = (
+        next(
+            (item for item in files if isinstance(item, dict) and item.get("path") == filename),
+            None,
+        )
+        if isinstance(files, list)
+        else None
+    )
+    if selected is None:
         raise ValueError("HuggingFacePull did not record the selected Q8_0 artefact")
     marker_snapshot = marker.get("snapshot_path")
     if not isinstance(marker_snapshot, str) or Path(marker_snapshot).resolve() != snapshot.resolve():
@@ -125,6 +132,8 @@ def _candidate_metadata(
         raise ValueError("HuggingFacePull tree metadata is incomplete for the Q8_0 artefact") from error
     if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
         raise ValueError("HuggingFacePull recorded an invalid Q8_0 checksum")
+    if selected.get("size") != expected_size or selected.get("blob_id") != metadata.get("blob_id"):
+        raise ValueError("The HuggingFacePull marker and tree metadata do not identify the same artefact")
     if model_path.stat().st_size != expected_size:
         raise ValueError("The local Q8_0 artefact size does not match HuggingFacePull metadata")
     return size_label, filename, expected_size, expected_sha256
