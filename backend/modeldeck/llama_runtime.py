@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LLAMA_CPP_COMMIT = "9d77fa17254e1dee4b9e92504c91611a60b1359f"
 LLAMA_RUNTIME_ROOT = Path(".runtime-tools/llama.cpp")
@@ -38,8 +38,8 @@ class QwenLlamaManifest(BaseModel):
     artefact_revision: str = Field(pattern=r"^[a-f0-9]{40}$")
     quantisation: str
     model: TrustedArtefact
-    projector: TrustedArtefact
-    mtp_model: TrustedArtefact
+    projector: TrustedArtefact | None = None
+    mtp_model: TrustedArtefact | None = None
     llama_cpp_commit: str = Field(pattern=r"^[a-f0-9]{40}$")
     operating_system: Literal["linux"]
     architecture: Literal["x86_64"]
@@ -49,9 +49,17 @@ class QwenLlamaManifest(BaseModel):
     context_length: int = Field(ge=8192, le=32768)
     cache_type_k: Literal["f16", "q8_0"]
     cache_type_v: Literal["f16", "q8_0"]
-    mtp_draft_tokens: Literal[4]
+    mtp_draft_tokens: Literal[4] | None = None
     source_url: str
     licence: Literal["Apache-2.0"]
+
+    @model_validator(mode="after")
+    def validate_optional_companions(self) -> QwenLlamaManifest:
+        if (self.projector is None) != (self.mtp_model is None):
+            raise ValueError("Qwen llama.cpp projector and MTP artefacts must be declared together")
+        if (self.mtp_model is None) != (self.mtp_draft_tokens is None):
+            raise ValueError("Qwen llama.cpp MTP settings must match the declared MTP artefact")
+        return self
 
 
 class LlamaBuildReceipt(BaseModel):
@@ -71,14 +79,18 @@ class ValidatedQwenRuntime:
     manifest: QwenLlamaManifest
     executable: Path
     model: Path
-    projector: Path
-    mtp_model: Path
+    projector: Path | None
+    mtp_model: Path | None
     executable_sha256: str
 
 
 def manifest_path(profile: str) -> Path:
-    if profile not in {"qwen38-q8-mtp-vulkan", "qwen38-q4-mtp-vulkan"}:
-        raise ValueError("Unknown allowlisted Qwen3.8 llama.cpp profile")
+    if profile not in {
+        "qwen35-4b-q8-vulkan",
+        "qwen38-q8-mtp-vulkan",
+        "qwen38-q4-mtp-vulkan",
+    }:
+        raise ValueError("Unknown allowlisted Qwen llama.cpp profile")
     return Path(__file__).with_name("registry_data") / f"{profile}.json"
 
 
@@ -128,11 +140,13 @@ def validate_qwen_runtime(profile: str, snapshot: Path) -> ValidatedQwenRuntime:
 
     snapshot = snapshot.absolute()
     model = snapshot / manifest.model.filename
-    projector = snapshot / manifest.projector.filename
-    mtp_model = snapshot / manifest.mtp_model.filename
+    projector = snapshot / manifest.projector.filename if manifest.projector else None
+    mtp_model = snapshot / manifest.mtp_model.filename if manifest.mtp_model else None
     _verify_artefact(model, manifest.model)
-    _verify_artefact(projector, manifest.projector)
-    _verify_artefact(mtp_model, manifest.mtp_model)
+    if projector is not None and manifest.projector is not None:
+        _verify_artefact(projector, manifest.projector)
+    if mtp_model is not None and manifest.mtp_model is not None:
+        _verify_artefact(mtp_model, manifest.mtp_model)
     return ValidatedQwenRuntime(
         manifest=manifest,
         executable=executable,

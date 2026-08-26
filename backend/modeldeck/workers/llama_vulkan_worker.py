@@ -98,7 +98,7 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
 
 def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]:
     manifest = runtime.manifest
-    return [
+    command = [
         str(runtime.executable),
         "--host",
         "127.0.0.1",
@@ -106,8 +106,6 @@ def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]
         str(port),
         "--model",
         str(runtime.model),
-        "--mmproj",
-        str(runtime.projector),
         "--ctx-size",
         str(manifest.context_length),
         "--parallel",
@@ -127,16 +125,6 @@ def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]
         "--jinja",
         "--reasoning-format",
         "deepseek",
-        "--spec-type",
-        "draft-mtp",
-        "--spec-draft-model",
-        str(runtime.mtp_model),
-        "--spec-draft-device",
-        "Vulkan0",
-        "--spec-draft-ngl",
-        "all",
-        "--spec-draft-n-max",
-        str(manifest.mtp_draft_tokens),
         "--metrics",
         "--slots",
         "--offline",
@@ -145,6 +133,28 @@ def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]
         "-lv",
         "4",
     ]
+    if runtime.projector is not None:
+        command.extend(["--mmproj", str(runtime.projector)])
+    else:
+        command.append("--no-mmproj")
+    if manifest.id == "qwen35-4b-q8-vulkan":
+        command.extend(["--reasoning-effort", "none"])
+    if runtime.mtp_model is not None and manifest.mtp_draft_tokens is not None:
+        command.extend(
+            [
+                "--spec-type",
+                "draft-mtp",
+                "--spec-draft-model",
+                str(runtime.mtp_model),
+                "--spec-draft-device",
+                "Vulkan0",
+                "--spec-draft-ngl",
+                "all",
+                "--spec-draft-n-max",
+                str(manifest.mtp_draft_tokens),
+            ]
+        )
+    return command
 
 
 def allocate_private_port() -> int:
@@ -204,19 +214,24 @@ class LlamaEvidence:
         elif match := self._GENERATION.search(line):
             self.generated_tokens_per_second = float(match.group(1))
 
-    def startup_checks(self) -> dict[str, bool]:
-        return {
+    def startup_checks(
+        self, *, projector_required: bool = True, mtp_required: bool = True
+    ) -> dict[str, bool]:
+        checks = {
             "Vulkan backend": self.backend_vulkan,
             "expected AMD Vulkan device": self.device_expected,
             "complete GPU layer offload": self.full_offload,
-            "Qwen3.8 architecture": self.architecture_qwen,
+            "Qwen architecture": self.architecture_qwen,
             "expected quantisation": self.quantisation_loaded,
-            "BF16 vision projector": self.projector_loaded,
-            "MTP speculative decoder": self.mtp_enabled,
         }
+        if projector_required:
+            checks["BF16 vision projector"] = self.projector_loaded
+        if mtp_required:
+            checks["MTP speculative decoder"] = self.mtp_enabled
+        return checks
 
-    def startup_errors(self) -> list[str]:
-        checks = self.startup_checks()
+    def startup_errors(self, *, projector_required: bool = True, mtp_required: bool = True) -> list[str]:
+        checks = self.startup_checks(projector_required=projector_required, mtp_required=mtp_required)
         return [name for name, passed in checks.items() if not passed]
 
     def record_generation_timings(self, payload: Any) -> None:
@@ -260,12 +275,16 @@ def qwen_request(
 ) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("Request body must be a JSON object")
-    if thinking_mode != "adaptive":
-        raise ValueError("The Qwen3.8 llama.cpp Worker requires thinking_mode=adaptive")
+    if thinking_mode not in {"adaptive", "disabled"}:
+        raise ValueError("The Qwen llama.cpp Worker requires a trusted thinking mode")
     result = {key: value for key, value in body.items() if key in QWEN_OPENAI_REQUEST_FIELDS}
     result["model"] = model_id
     reasoning_effort = result.get("reasoning_effort")
-    if reasoning_effort is not None and (
+    if thinking_mode == "disabled":
+        if reasoning_effort not in {None, "none"}:
+            raise ValueError("reasoning_effort must be none when thinking is disabled")
+        result["reasoning_effort"] = "none"
+    elif reasoning_effort is not None and (
         not isinstance(reasoning_effort, str) or reasoning_effort not in QWEN_REASONING_EFFORTS
     ):
         raise ValueError("reasoning_effort is not supported by the trusted llama.cpp runtime")
@@ -404,7 +423,10 @@ class LlamaProcess:
         try:
             async with httpx.AsyncClient(timeout=0.5) as client:
                 response = await client.get(f"http://127.0.0.1:{self.internal_port}/health")
-            verified = not self.qwen_runtime or not self.evidence.startup_errors()
+            verified = not self.qwen_runtime or not self.evidence.startup_errors(
+                projector_required=self.qwen_runtime.projector is not None,
+                mtp_required=self.qwen_runtime.mtp_model is not None,
+            )
             if response.is_success and verified and self.load_seconds is None:
                 self.load_seconds = round(time.monotonic() - self.started, 4)
             return response.is_success and verified
@@ -416,8 +438,13 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
     thinking_mode = getattr(args, "thinking_mode", None)
-    if is_qwen and thinking_mode != "adaptive":
-        raise ValueError("The Qwen3.8 llama.cpp Worker requires thinking_mode=adaptive")
+    expected_thinking_mode = (
+        "disabled" if getattr(args, "runtime_profile", None) == "qwen35-4b-q8-vulkan" else "adaptive"
+    )
+    if is_qwen and thinking_mode != expected_thinking_mode:
+        raise ValueError(
+            f"The selected Qwen llama.cpp Worker requires thinking_mode={expected_thinking_mode}"
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -450,17 +477,14 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     "thinking_mode": thinking_mode,
                     "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
                     "verified_capabilities": (
-                        [
-                            "chat",
-                            "completions",
-                            "streaming",
-                            "cancellation",
-                            "image_input",
-                            "structured_output",
-                            "tool_calling",
-                            "reasoning",
-                            "mtp",
-                        ]
+                        ["chat", "completions", "streaming", "cancellation"]
+                        + (
+                            ["image_input", "structured_output", "tool_calling"]
+                            if runtime.qwen_runtime.projector
+                            else []
+                        )
+                        + (["reasoning"] if thinking_mode == "adaptive" else [])
+                        + (["mtp"] if runtime.qwen_runtime.mtp_model else [])
                         if ready
                         else []
                     ),
@@ -484,7 +508,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             response = await client.post(f"http://127.0.0.1:{runtime.internal_port}/completion", json=payload)
         if response.is_success and is_qwen:
             runtime.evidence.record_generation_timings(response.json())
-        mtp_verified = not is_qwen or runtime.evidence.draft_accepted > 0
+        mtp_required = bool(runtime.qwen_runtime and runtime.qwen_runtime.mtp_model)
+        mtp_verified = not mtp_required or runtime.evidence.draft_accepted > 0
         ready = response.is_success and mtp_verified
         return JSONResponse({"ready": ready, "mtp_verified": mtp_verified}, status_code=200 if ready else 503)
 
@@ -510,17 +535,17 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     "artefact_model_id": manifest.artefact_model_id,
                     "artefact_revision": manifest.artefact_revision,
                     "gguf_sha256": manifest.model.sha256,
-                    "projector_sha256": manifest.projector.sha256,
-                    "mtp_model_sha256": manifest.mtp_model.sha256,
+                    **({"projector_sha256": manifest.projector.sha256} if manifest.projector else {}),
+                    **({"mtp_model_sha256": manifest.mtp_model.sha256} if manifest.mtp_model else {}),
                     "llama_cpp_commit": manifest.llama_cpp_commit,
                     "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
                     "backend": manifest.backend,
                     "context_length": manifest.context_length,
                     "cache_type_k": manifest.cache_type_k,
                     "cache_type_v": manifest.cache_type_v,
-                    "mtp_enabled": True,
+                    "mtp_enabled": runtime.qwen_runtime.mtp_model is not None,
                     "thinking_mode": thinking_mode,
-                    "mtp_draft_tokens": manifest.mtp_draft_tokens,
+                    "mtp_draft_tokens": manifest.mtp_draft_tokens or 0,
                     "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
                 }
                 if manifest
@@ -530,15 +555,24 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     @app.get("/metrics")
     async def metrics():
-        startup_checks = runtime.evidence.startup_checks() if runtime.qwen_runtime else {}
+        startup_checks = (
+            runtime.evidence.startup_checks(
+                projector_required=runtime.qwen_runtime.projector is not None,
+                mtp_required=runtime.qwen_runtime.mtp_model is not None,
+            )
+            if runtime.qwen_runtime
+            else {}
+        )
         return {
             "runtime": "llama-vulkan",
             "execution_preset": args.execution_preset,
             "load_seconds": runtime.load_seconds,
-            "mtp_enabled": bool(runtime.qwen_runtime),
+            "mtp_enabled": bool(runtime.qwen_runtime and runtime.qwen_runtime.mtp_model),
             **({"thinking_mode": thinking_mode} if is_qwen else {}),
             "mtp_draft_tokens": (
-                runtime.qwen_runtime.manifest.mtp_draft_tokens if runtime.qwen_runtime else 0
+                runtime.qwen_runtime.manifest.mtp_draft_tokens
+                if runtime.qwen_runtime and runtime.qwen_runtime.manifest.mtp_draft_tokens
+                else 0
             ),
             "draft_proposed_tokens": runtime.evidence.draft_proposed,
             "draft_accepted_tokens": runtime.evidence.draft_accepted,
@@ -648,11 +682,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-path", required=True)
     parser.add_argument(
         "--runtime-profile",
-        choices=("qwen38-q8-mtp-vulkan", "qwen38-q4-mtp-vulkan"),
+        choices=("qwen35-4b-q8-vulkan", "qwen38-q8-mtp-vulkan", "qwen38-q4-mtp-vulkan"),
     )
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=256)
-    parser.add_argument("--thinking-mode", choices=("adaptive",), default="adaptive")
+    parser.add_argument("--thinking-mode", choices=("adaptive", "disabled"), default="adaptive")
     parser.add_argument(
         "--execution-preset",
         choices=("vulkan-full", "vulkan-cpu-moe"),

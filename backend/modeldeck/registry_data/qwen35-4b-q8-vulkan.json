@@ -1,0 +1,23 @@
+{
+  "format": "modeldeck-qwen-llamacpp-runtime",
+  "version": 1,
+  "id": "qwen35-4b-q8-vulkan",
+  "status": "reviewed-candidate",
+  "original_model_id": "Qwen/Qwen3.5-4B",
+  "original_model_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "artefact_model_id": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+  "artefact_revision": "4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+  "quantisation": "Q8_0",
+  "model": {"filename": "Qwen_Qwen3.5-4B-Q8_0.gguf", "size": 4622131168, "sha256": "5c74c0ede371924357dff0cb6ba145bd67208b9b2389ded681adfff3f7608db7", "dtype": "Q8_0"},
+  "llama_cpp_commit": "9d77fa17254e1dee4b9e92504c91611a60b1359f",
+  "operating_system": "linux",
+  "architecture": "x86_64",
+  "backend": "Vulkan",
+  "qwen_architecture": "qwen35",
+  "chat_template_fingerprint": "embedded-gguf-sha256:5c74c0ede371924357dff0cb6ba145bd67208b9b2389ded681adfff3f7608db7",
+  "context_length": 8192,
+  "cache_type_k": "q8_0",
+  "cache_type_v": "q8_0",
+  "source_url": "https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF",
+  "licence": "Apache-2.0"
+}

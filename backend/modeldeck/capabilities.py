@@ -32,6 +32,7 @@ CAPABILITY_DEFINITIONS = {
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
+                "qwen35-llamacpp-q8-vulkan",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
             ),
@@ -46,6 +47,7 @@ CAPABILITY_DEFINITIONS = {
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
+                "qwen35-llamacpp-q8-vulkan",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
             ),
@@ -151,6 +153,10 @@ CAPABILITY_ID_BY_CONTRACT = {
 # adapters. These are intentionally narrow exceptions to the usual generation-family
 # matching rule below; the matcher still requires the exact snapshot and adapter.
 QWEN_TEXT_CAPABILITY_TEMPLATES = {
+    "qwen35-llamacpp-q8-vulkan": {
+        "general-chat": ("qwen35-llamacpp-q8-vulkan",),
+        "text-completion": ("qwen35-llamacpp-q8-vulkan",),
+    },
     "qwen38-llamacpp-q8-mtp-vulkan": {
         "general-chat": ("qwen38-llamacpp-q8-mtp-vulkan",),
         "text-completion": ("qwen38-llamacpp-q8-mtp-vulkan",),

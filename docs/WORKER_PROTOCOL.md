@@ -66,9 +66,10 @@ It advertises health while loading and becomes ready only after explicit warmup.
 The dedicated Qwen3.5 text-chat runtime has an immutable `thinking_mode=disabled`
 policy. Message prompts are rendered with the official tokenizer chat template and
 `enable_thinking=False`; startup rejects a Worker definition that attempts to change
-that policy. This runtime uses the official local Transformers BF16 snapshot. A Q8_0
-Qwen3.5 Worker requires a separately reviewed GGUF artefact and llama.cpp runtime and is
-not represented by the BF16 Worker.
+that policy. The Transformers runtime uses the official local BF16 snapshot. The separate
+Qwen3.5 4B Q8_0 llama.cpp/Vulkan runtime enforces the same disabled-thinking policy at
+both Worker launch and request translation. It is text-only and does not advertise a
+vision projector, MTP speculative decoding, or autoregressive trace capability.
 
 Autoregressive generation performs one cached prompt prefill followed by one-token forwards
 using `past_key_values`; it never recomputes the growing full sequence after prefill. Where

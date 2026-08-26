@@ -430,6 +430,42 @@ def test_qwen38_gguf_mutable_or_incomplete_snapshot_is_not_allowlisted(tmp_path:
     assert "not the reviewed immutable revision" in model["configuration_support_reason"]
 
 
+def test_qwen35_q8_gguf_requires_the_reviewed_revision_and_filename(tmp_path: Path) -> None:
+    revision = "4168f45a16a1290d65a4ec0fa312ae917a4c15d6"
+    snapshot = tmp_path / "models--bartowski--Qwen_Qwen3.5-4B-GGUF" / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    (snapshot / "Qwen_Qwen3.5-4B-Q8_0.gguf").write_bytes(b"gguf")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "autoregressive"
+    assert model["configuration_support"] == "qwen35-llamacpp-q8-vulkan"
+    assert compatible_runtime_template_ids(
+        "general-chat",
+        model["configuration_support"],
+        runtime_template_registrations(),
+    ) == ["qwen35-llamacpp-q8-vulkan"]
+    assert model["artifacts"] == [
+        {
+            "artifact_id": "qwen35-4b-q8",
+            "kind": "gguf",
+            "format": "Q8_0",
+            "filenames": ["Qwen_Qwen3.5-4B-Q8_0.gguf"],
+        }
+    ]
+
+
+def test_qwen35_q8_gguf_at_an_unreviewed_revision_is_not_allowlisted(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--bartowski--Qwen_Qwen3.5-4B-GGUF" / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "Qwen_Qwen3.5-4B-Q8_0.gguf").write_bytes(b"gguf")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] is None
+    assert "not the reviewed immutable revision" in model["configuration_support_reason"]
+
+
 def test_identifies_diffusiongemma_configuration_support(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--google--diffusiongemma" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)

@@ -59,6 +59,20 @@ def _weight_files_complete(paths: list[Path]) -> bool:
 
 
 def _artifacts(snapshot: Path, repo_id: str) -> list[dict[str, Any]]:
+    if repo_id == "bartowski/Qwen_Qwen3.5-4B-GGUF":
+        filename = "Qwen_Qwen3.5-4B-Q8_0.gguf"
+        return (
+            [
+                {
+                    "artifact_id": "qwen35-4b-q8",
+                    "kind": "gguf",
+                    "format": "Q8_0",
+                    "filenames": [filename],
+                }
+            ]
+            if (snapshot / filename).is_file()
+            else []
+        )
     if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
         shared = ["mmproj-Qwen3.8-27B-BF16.gguf"]
         candidates = (
@@ -126,7 +140,7 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
         return "speech-conversation"
     if repo_id == "ggml-org/gpt-oss-120b-GGUF":
         return "autoregressive"
-    if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
+    if repo_id in {"bartowski/Qwen_Qwen3.5-4B-GGUF", "ggml-org/Qwen3.8-27B-GGUF"}:
         return "autoregressive"
     if repo_id == "Qwen/Qwen3-Embedding-0.6B":
         return "embedding"
@@ -206,6 +220,15 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
             "The GPT-OSS MXFP4 GGUF snapshot must contain the official consolidated "
             "artefact or all three legacy shards."
         )
+    if repo_id == "bartowski/Qwen_Qwen3.5-4B-GGUF":
+        if revision != "4168f45a16a1290d65a4ec0fa312ae917a4c15d6":
+            return None, "The Qwen3.5 4B GGUF snapshot revision is not the reviewed immutable revision."
+        if _artifacts(snapshot, repo_id):
+            return "qwen35-llamacpp-q8-vulkan", (
+                "Supported by the pinned text-only Qwen3.5 llama.cpp Vulkan Q8 candidate; "
+                "hardware qualification is required."
+            )
+        return None, "The reviewed Qwen3.5 4B Q8_0 GGUF artefact is missing."
     if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
         if revision != "97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827":
             return None, "The Qwen3.8 GGUF snapshot revision is not the reviewed immutable revision."

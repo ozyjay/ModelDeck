@@ -129,8 +129,9 @@ def create_local_profile(
             }
         )
     profile_dtype = template.dtype or request.dtype
-    if template.runtime == "qwen38-llamacpp-vulkan":
+    if template.runtime in {"qwen35-llamacpp-vulkan", "qwen38-llamacpp-vulkan"}:
         profile_dtype = {
+            "qwen35-4b-q8-vulkan": "q8_0",
             "qwen38-q8-mtp-vulkan": "q8_0",
             "qwen38-q4-mtp-vulkan": "q4_k_m",
         }[str(settings["runtime_profile"])]

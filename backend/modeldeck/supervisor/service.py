@@ -727,6 +727,39 @@ def _qwen38_llamacpp_launch(
     )
 
 
+def _qwen35_llamacpp_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    if profile.model_id != "bartowski/Qwen_Qwen3.5-4B-GGUF":
+        raise ValueError("The Qwen3.5 llama.cpp runtime is allowlisted only for its pinned GGUF repository")
+    artifact_path = profile.settings.get("artifact_path")
+    if not artifact_path or profile.settings.get("runtime_profile") != "qwen35-4b-q8-vulkan":
+        raise ValueError("Qwen3.5 llama.cpp requires its allowlisted Q8 GGUF profile and artefact")
+    if int(profile.settings.get("context_length", 8192)) != 8192:
+        raise ValueError("The reviewed Qwen3.5 llama.cpp candidate is limited to an 8,192-token context")
+    if profile.settings.get("thinking_mode") != "disabled":
+        raise ValueError("Qwen3.5 llama.cpp requires thinking_mode=disabled")
+    return WorkerLaunch(
+        command=[
+            sys.executable,
+            "-m",
+            "modeldeck.workers.llama_vulkan_worker",
+            *common,
+            "--artifact-path",
+            str(artifact_path),
+            "--context-length",
+            "8192",
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 256)),
+            "--runtime-profile",
+            "qwen35-4b-q8-vulkan",
+            "--thinking-mode",
+            "disabled",
+        ],
+        environment=environment,
+    )
+
+
 def _moshiko_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
     python = Path(os.environ.get("MODELDECK_MOSHIKO_PYTHON", ".venv-moshi-rocm72/bin/python")).expanduser()
     if not python.is_file():
@@ -931,6 +964,7 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "text-diffusion-transformers-rocm": _text_diffusion_launch,
     "text-diffusion-gptq-rocm": _text_diffusion_launch,
     "llama-vulkan": _llama_vulkan_launch,
+    "qwen35-llamacpp-vulkan": _qwen35_llamacpp_launch,
     "qwen38-llamacpp-vulkan": _qwen38_llamacpp_launch,
     "moshiko-rocm": _moshiko_launch,
     "marian-transformers-cpu": _translation_launch,
