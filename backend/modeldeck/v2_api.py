@@ -1517,7 +1517,7 @@ def _image_chat_smoke_body(model: str) -> dict[str, object]:
 
 def _worker_smoke_request(definition: WorkerDefinition):
     model = definition.to_profile().alias
-    if definition.runtime == "llama-vulkan":
+    if definition.runtime in {"llama-vulkan", "qwen38-llamacpp-vulkan"}:
         return (
             "/v1/chat/completions",
             {

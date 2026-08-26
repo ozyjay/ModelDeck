@@ -219,6 +219,23 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert body["max_tokens"] == 4
     assert headers is None
 
+    qwen_llama = autoregressive.model_copy(
+        update={
+            "runtime": "qwen38-llamacpp-vulkan",
+            "runtime_template_id": "qwen38-llamacpp-q8-mtp-vulkan",
+            "capabilities": {
+                "chat": True,
+                "completions": True,
+                "image_input": True,
+                "mtp": True,
+            },
+        }
+    )
+    path, body, headers = _worker_smoke_request(qwen_llama)
+    assert path == "/v1/chat/completions"
+    assert body["messages"] == [{"role": "user", "content": "Reply with the word ready."}]
+    assert headers is None
+
     diffusion = autoregressive.model_copy(
         update={
             "generation_family": "text-diffusion",
