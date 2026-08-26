@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import socket
 import sys
 
 import pytest
+from modeldeck.llama_runtime import LLAMA_CPP_COMMIT, QwenLlamaManifest, TrustedArtefact
 from modeldeck.profiles import LocalProfileRequest, create_local_profile
 from modeldeck.protocol import LifecycleClass
+from modeldeck.qwen_candidates import candidate_path
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
@@ -338,6 +341,67 @@ def test_qwen35_llamacpp_adaptive_thinking_uses_its_distinct_template(tmp_path) 
     profile.settings["thinking_mode"] = "disabled"
     with pytest.raises(ValueError, match="thinking_mode=adaptive"):
         build_worker_launch(profile)
+
+
+def test_approved_qwen35_candidate_launch_is_bound_to_manifest_and_data_dir(tmp_path) -> None:
+    payload = b"approved-qwen35-9b"
+    digest = hashlib.sha256(payload).hexdigest()
+    candidate_id = f"qwen35-9b-q8-{digest[:12]}"
+    artefact = tmp_path / "Qwen_Qwen3.5-9B-Q8_0.gguf"
+    artefact.write_bytes(payload)
+    manifest = QwenLlamaManifest(
+        format="modeldeck-qwen-llamacpp-runtime",
+        version=1,
+        id=candidate_id,
+        status="approved-local",
+        original_model_id="Qwen/Qwen3.5-9B",
+        original_model_revision=None,
+        artefact_model_id="bartowski/Qwen_Qwen3.5-9B-GGUF",
+        artefact_revision="a" * 40,
+        quantisation="Q8_0",
+        model=TrustedArtefact(
+            filename=artefact.name,
+            size=len(payload),
+            sha256=digest,
+            dtype="Q8_0",
+        ),
+        llama_cpp_commit=LLAMA_CPP_COMMIT,
+        operating_system="linux",
+        architecture="x86_64",
+        backend="Vulkan",
+        qwen_architecture="qwen35",
+        chat_template_fingerprint=f"embedded-gguf-sha256:{digest}",
+        context_length=8192,
+        cache_type_k="q8_0",
+        cache_type_v="q8_0",
+        source_url="https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF",
+        licence="Apache-2.0",
+    )
+    data_dir = tmp_path / "data"
+    destination = candidate_path(data_dir, candidate_id)
+    destination.parent.mkdir(parents=True)
+    destination.write_text(manifest.model_dump_json(), encoding="utf-8")
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id=manifest.artefact_model_id,
+            revision=manifest.artefact_revision,
+            alias="qwen35-9b-adaptive",
+            runtime_template_id="qwen35-local-q8-vulkan-adaptive",
+            context_length=8192,
+        ),
+        cache_root=tmp_path,
+        artifact_path=artefact,
+        candidate_manifest_id=candidate_id,
+        port=8630,
+        configuration_support="qwen35-local-q8-vulkan-adaptive",
+    )
+
+    launch = build_worker_launch(profile, data_dir=data_dir)
+
+    assert launch.command[launch.command.index("--runtime-profile") + 1] == ("qwen35-approved-q8-vulkan")
+    assert launch.command[launch.command.index("--candidate-manifest-id") + 1] == candidate_id
+    assert launch.command[launch.command.index("--data-dir") + 1] == str(data_dir)
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "adaptive"
 
 
 def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:

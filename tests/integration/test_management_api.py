@@ -235,7 +235,7 @@ async def test_management_has_no_public_event_or_mock_worker_api(tmp_path) -> No
 async def test_capability_policy_records_missing_runtime_intent_and_master_denial(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [discovered_model()])
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [discovered_model()])
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
@@ -271,7 +271,7 @@ async def test_capability_policy_records_missing_runtime_intent_and_master_denia
 @pytest.mark.asyncio
 async def test_qwen35_chat_capability_creates_only_its_dedicated_worker(tmp_path, monkeypatch) -> None:
     model = discovered_qwen35_model()
-    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [model])
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
     monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
@@ -315,7 +315,7 @@ async def test_disallowing_capability_reports_current_profile_references(tmp_pat
     monkeypatch.setattr(
         main_module,
         "discover_huggingface_models",
-        lambda: [discovered_model(runtime="autoregressive-transformers")],
+        lambda **_: [discovered_model(runtime="autoregressive-transformers")],
     )
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
@@ -354,7 +354,7 @@ async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monk
         "cache_location": str(cache_root / "model"),
         "snapshot_location": str(snapshot),
     }
-    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda: [model])
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
     monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
     app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
     request = {

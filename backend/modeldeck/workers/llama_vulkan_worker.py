@@ -349,7 +349,12 @@ class LlamaProcess:
         self.internal_port = allocate_private_port()
         self.evidence = LlamaEvidence()
         if getattr(self.args, "runtime_profile", None):
-            self.qwen_runtime = validate_qwen_runtime(self.args.runtime_profile, self.artifact_path.parent)
+            self.qwen_runtime = validate_qwen_runtime(
+                self.args.runtime_profile,
+                self.artifact_path.parent,
+                data_dir=Path(self.args.data_dir) if self.args.data_dir else None,
+                candidate_id=self.args.candidate_manifest_id,
+            )
             if self.args.context_length != self.qwen_runtime.manifest.context_length:
                 raise ValueError("Configured context length does not match the trusted Qwen manifest")
             command = qwen_llama_command(
@@ -694,8 +699,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-path", required=True)
     parser.add_argument(
         "--runtime-profile",
-        choices=("qwen35-4b-q8-vulkan", "qwen38-q8-mtp-vulkan", "qwen38-q4-mtp-vulkan"),
+        choices=(
+            "qwen35-4b-q8-vulkan",
+            "qwen35-approved-q8-vulkan",
+            "qwen38-q8-mtp-vulkan",
+            "qwen38-q4-mtp-vulkan",
+        ),
     )
+    parser.add_argument("--candidate-manifest-id")
+    parser.add_argument("--data-dir")
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=256)
     parser.add_argument("--thinking-mode", choices=("adaptive", "disabled"), default="adaptive")

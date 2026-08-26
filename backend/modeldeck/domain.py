@@ -72,6 +72,11 @@ class WorkerDefinition(BaseModel):
                 "qwen35-llamacpp-vulkan",
                 "qwen35-llamacpp-q8-vulkan-adaptive",
             ): "adaptive",
+            ("qwen35-llamacpp-vulkan", "qwen35-local-q8-vulkan"): "disabled",
+            (
+                "qwen35-llamacpp-vulkan",
+                "qwen35-local-q8-vulkan-adaptive",
+            ): "adaptive",
         }.get((self.runtime, self.runtime_template_id))
         if thinking_default is not None and "thinking_mode" not in self.settings:
             # Workers created before thinking policy became explicit retain the

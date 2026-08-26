@@ -222,6 +222,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "runtime_profile",
+                    "candidate_manifest_id",
                     "hardware_verification_required",
                 }
             ),

@@ -157,6 +157,17 @@ adapter serves the OpenAI-compatible chat and completion contracts without accep
 content; it is hardware-verification-required until qualification records evidence for its
 exact model revision and configuration.
 
+Qwen3.5 GGUF experiments do not require a new ModelDeck release for every supported model
+size. For a complete HuggingFacePull snapshot from
+`bartowski/Qwen_Qwen3.5-{0.8B,2B,4B,9B}-GGUF` containing the matching `Q8_0` artefact, the
+Models view offers **Verify and approve**. ModelDeck validates the immutable revision and
+HuggingFacePull completion marker, reads the expected LFS size and SHA-256 from the cached
+tree, hashes the actual GGUF, then writes a local trusted candidate manifest under
+`MODELDECK_DATA_DIR/trusted-qwen-candidates`. Once approved, the same two reusable
+llama.cpp/Vulkan templates are available for every supported size: thinking disabled and
+adaptive thinking. Worker launches remain offline and accept only the manifest-bound Model,
+revision, filename, checksum, 8,192-token context and code-owned llama.cpp pin.
+
 The code-owned reviewed-model registry also includes the exact official
 `Qwen/Qwen3.8-27B-FP8` checkpoint. Its FP8 method, dynamic activation scheme and E4M3
 format must all match the reviewed metadata. The isolated Qwen worker dequantises those

@@ -25,6 +25,7 @@ from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
 from modeldeck.config import Settings, gateway_base_url
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
+from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
 from modeldeck.thermal import ThermalPolicyManager
@@ -49,6 +50,11 @@ class ModelCapabilityPolicyRequest(ModelCachePolicyRequest):
     capability_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
 
 
+class CandidateApprovalRequest(BaseModel):
+    model_id: str = Field(min_length=3, max_length=256)
+    revision: str = Field(pattern=r"^[a-f0-9]{40}$")
+
+
 class LifecycleEvidence(BaseModel):
     shutdown_result: Literal["success", "failed"]
     memory_recovery_result: Literal[
@@ -63,6 +69,10 @@ class LifecycleEvidence(BaseModel):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings.from_env()
+
+    def discover_models():
+        return discover_huggingface_models(data_dir=configured.data_dir)
+
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     store.initialise_v4()
@@ -111,9 +121,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         worker_profiles,
         log_dir=configured.log_dir,
         thermal_manager=thermal_manager,
+        data_dir=configured.data_dir,
     )
     thermal_manager.critical_handler = app.state.supervisor.critical_stop_all
     app.state.runtime_registrations = runtime_template_registrations(configured.data_dir)
+    app.state.discover_models = discover_models
 
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
@@ -178,7 +190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/catalogue")
     async def catalogue(request: Request):
-        models = await run_in_isolated_thread(discover_huggingface_models)
+        models = await run_in_isolated_thread(discover_models)
         policy = request.app.state.compatibility_store.list_model_cache_policy()
         capability_policy = request.app.state.compatibility_store.list_model_capability_policy()
         tests = request.app.state.compatibility_store.list_tests()
@@ -291,7 +303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cached = next(
             (
                 model
-                for model in discover_huggingface_models()
+                for model in discover_models()
                 if model["model_id"] == payload.model_id
                 and model["revision"] == payload.revision
                 and model["download_state"] == "installed-untested"
@@ -337,13 +349,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "allowed": payload.allowed,
         }
 
+    @app.post("/api/catalogue/candidates/approve")
+    async def approve_catalogue_candidate(payload: CandidateApprovalRequest, request: Request):
+        _require_mutable(request)
+        cached = next(
+            (
+                model
+                for model in discover_models()
+                if model["model_id"] == payload.model_id
+                and model["revision"] == payload.revision
+                and model["download_state"] == "installed-untested"
+            ),
+            None,
+        )
+        if cached is None or cached.get("snapshot_location") is None:
+            raise HTTPException(404, "The exact complete cached Model revision was not discovered")
+        registration = cached.get("candidate_registration")
+        if not isinstance(registration, dict) or not registration.get("eligible"):
+            reason = registration.get("reason") if isinstance(registration, dict) else None
+            raise HTTPException(409, reason or "This Model is not eligible for local candidate approval")
+        try:
+            manifest = await run_in_isolated_thread(
+                approve_candidate,
+                payload.model_id,
+                payload.revision,
+                Path(cached["snapshot_location"]),
+                data_dir=configured.data_dir,
+            )
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
+        return {
+            "ok": True,
+            "candidate_id": manifest.id,
+            "model_id": manifest.artefact_model_id,
+            "revision": manifest.artefact_revision,
+            "sha256": manifest.model.sha256,
+        }
+
     @app.post("/api/catalogue/policy")
     async def set_catalogue_policy(payload: ModelCachePolicyRequest, request: Request):
         _require_mutable(request)
         cached = next(
             (
                 model
-                for model in discover_huggingface_models()
+                for model in discover_models()
                 if model["model_id"] == payload.model_id and model["revision"] == payload.revision
             ),
             None,

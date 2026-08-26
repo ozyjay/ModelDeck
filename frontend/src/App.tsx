@@ -638,6 +638,7 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   const [parameters, setParameters] = useState<WorkerParameterValues>(() => runtimeParameterDefaults());
   const [feedback, setFeedback] = useState<string | null>(null);
   const [removingWorker, setRemovingWorker] = useState<string | null>(null);
+  const [approvingCandidate, setApprovingCandidate] = useState<string | null>(null);
   const sorted = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return models.filter((model) => !needle || [model.model_id, model.generation_family_hint, model.runnable_reason, ...model.capability_hints, ...model.potential_capabilities.flatMap((capability) => [capability.id, capability.display_name, capability.description, capability.qualification_status, capability.runtime_status])].some((value) => value?.toLocaleLowerCase().includes(needle))).sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id));
@@ -693,6 +694,22 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
     setFeedback(`${humanise(capabilityId)} is now ${allowed ? "allowed" : "disallowed"}.`);
     await refresh();
   };
+  const approveCandidate = async (model: ModelEntry) => {
+    const identity = `${model.model_id}@${model.revision}`;
+    setApprovingCandidate(identity);
+    try {
+      const result = await postJson<{ candidate_id: string }>("/api/catalogue/candidates/approve", {
+        model_id: model.model_id,
+        revision: model.revision,
+      });
+      setFeedback(`Approved ${model.model_id} as trusted local candidate ${result.candidate_id}.`);
+      await refresh();
+    } catch (reason) {
+      setFeedback(messageFrom(reason));
+    } finally {
+      setApprovingCandidate(null);
+    }
+  };
   if (configuring) {
     const model = models.find((item) => `${item.model_id}@${item.revision}` === configuring);
     const capability = model?.potential_capabilities.find((item) => item.id === configuringCapability);
@@ -705,6 +722,7 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
       return <ModelCardShell model={model} key={`${model.model_id}@${model.revision}`}>
         <div className="tag-list">{model.capability_hints.map((hint) => <span className="tag" key={hint}>{humanise(hint)}</span>)}</div>
         <div className="model-policy"><span><strong>ModelDeck master policy</strong><small>{model.modeldeck_allowed ? "Allowed" : "Disallowed · capability choices retained"}</small></span><button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setModelAllowed(model, !model.modeldeck_allowed).catch((reason) => setFeedback(messageFrom(reason)))}>{model.modeldeck_allowed ? "Disallow model" : "Allow model"}</button></div>
+        {model.candidate_registration?.eligible && <div className="model-policy"><span><strong>Local Qwen3.5 candidate</strong><small>{model.candidate_registration.reason}{model.candidate_registration.filename ? ` · ${model.candidate_registration.filename}` : ""}</small></span>{model.candidate_registration.approved ? <StateBadge state="qualified" /> : <button className="secondary compact-button" disabled={openDay || !model.revision || approvingCandidate === `${model.model_id}@${model.revision}`} onClick={() => void approveCandidate(model)}>{approvingCandidate === `${model.model_id}@${model.revision}` ? "Verifying SHA-256…" : "Verify and approve"}</button>}</div>}
         <div className="potential-capability-list">{model.potential_capabilities.length ? model.potential_capabilities.map((capability) => <article key={capability.id} className={`potential-capability ${capability.effective_allowed ? "allowed" : ""}`}><div className="potential-capability-heading"><span><strong>{capability.display_name}</strong><small>{capability.description}</small></span><div><StateBadge state={capability.policy_allowed ? capability.qualification_status : "disallowed"} /><button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setCapabilityAllowed(model, capability.id, !capability.policy_allowed).catch((reason) => setFeedback(messageFrom(reason)))}>{capability.policy_allowed ? "Disallow" : "Allow"}</button></div></div><div className="tag-list">{capability.traits.map((trait) => <span className="tag" key={trait}>{humanise(trait)}</span>)}</div><p className="capability-reason">{capability.reason}</p><details><summary>Evidence and provenance</summary>{capability.evidence.map((evidence, index) => <p className="manifest-note" key={`${evidence.source}-${index}`}><strong>{humanise(evidence.kind)} · {humanise(evidence.confidence)}</strong> — {evidence.detail}{evidence.reference && <> · <a href={evidence.reference} target="_blank" rel="noreferrer">Reviewed source</a></>}</p>)}</details>{capability.creatable && <div className="model-actions"><button disabled={openDay} onClick={() => begin(model, capability.id)}>Create Worker</button></div>}</article>) : <p className="model-stage">No capability can be supported by the available local metadata yet.</p>}</div>
         <ModelWorkerSummary model={model} workers={workers} openDay={openDay} removingWorker={removingWorker} onRemove={removeWorker} />
         <p className="model-stage">{model.runnable_reason}</p>

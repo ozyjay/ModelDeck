@@ -100,6 +100,7 @@ class RuntimeTemplate(BaseModel):
         if self.settings.get("runtime_profile") not in {
             None,
             "qwen35-4b-q8-vulkan",
+            "qwen35-approved-q8-vulkan",
             "qwen38-q8-mtp-vulkan",
             "qwen38-q4-mtp-vulkan",
         }:

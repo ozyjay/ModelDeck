@@ -18,6 +18,7 @@ import httpx
 
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import GenerationFamily, WorkerEvent, WorkerState
+from modeldeck.qwen_candidates import load_candidate
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
@@ -73,6 +74,7 @@ class WorkerSupervisor:
         stop_timeout: float = 4.0,
         log_dir: Path | None = None,
         thermal_manager: ThermalPolicyManager | None = None,
+        data_dir: Path | None = None,
     ) -> None:
         self.workers = {profile.id: ManagedWorker(profile=profile) for profile in profiles}
         self.startup_timeout = startup_timeout
@@ -86,6 +88,7 @@ class WorkerSupervisor:
         )
         self.log_dir = log_dir
         self.thermal_manager = thermal_manager
+        self.data_dir = data_dir or Path(os.environ.get("MODELDECK_DATA_DIR", ".modeldeck"))
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             self._load_persisted_logs()
@@ -164,7 +167,7 @@ class WorkerSupervisor:
                 raise RuntimeError(worker.last_error)
 
             try:
-                launch = build_worker_launch(worker.profile)
+                launch = build_worker_launch(worker.profile, data_dir=self.data_dir)
             except ValueError as error:
                 worker.last_error = str(error)
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
@@ -417,7 +420,7 @@ class WorkerLaunch:
     environment: dict[str, str]
 
 
-def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
+def build_worker_launch(profile: ModelProfile, *, data_dir: Path | None = None) -> WorkerLaunch:
     environment = dict(os.environ)
     environment.update(
         {
@@ -426,6 +429,8 @@ def build_worker_launch(profile: ModelProfile) -> WorkerLaunch:
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
+    if data_dir is not None:
+        environment["MODELDECK_DATA_DIR"] = str(data_dir)
     common = [
         "--worker-id",
         profile.id,
@@ -736,16 +741,35 @@ def _qwen38_llamacpp_launch(
 def _qwen35_llamacpp_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
-    if profile.model_id != "bartowski/Qwen_Qwen3.5-4B-GGUF":
-        raise ValueError("The Qwen3.5 llama.cpp runtime is allowlisted only for its pinned GGUF repository")
     artifact_path = profile.settings.get("artifact_path")
-    if not artifact_path or profile.settings.get("runtime_profile") != "qwen35-4b-q8-vulkan":
+    runtime_profile = profile.settings.get("runtime_profile")
+    if not artifact_path or runtime_profile not in {
+        "qwen35-4b-q8-vulkan",
+        "qwen35-approved-q8-vulkan",
+    }:
         raise ValueError("Qwen3.5 llama.cpp requires its allowlisted Q8 GGUF profile and artefact")
+    candidate_id = profile.settings.get("candidate_manifest_id")
+    if runtime_profile == "qwen35-4b-q8-vulkan":
+        if profile.model_id != "bartowski/Qwen_Qwen3.5-4B-GGUF" or candidate_id is not None:
+            raise ValueError("The reviewed Qwen3.5 profile is pinned to its exact 4B repository")
+    else:
+        if not isinstance(candidate_id, str):
+            raise ValueError("The locally approved Qwen3.5 candidate identity is missing")
+        data_dir = Path(environment.get("MODELDECK_DATA_DIR", ".modeldeck"))
+        manifest = load_candidate(data_dir, candidate_id)
+        if (
+            manifest.artefact_model_id != profile.model_id
+            or manifest.artefact_revision != profile.revision
+            or Path(str(artifact_path)).name != manifest.model.filename
+        ):
+            raise ValueError("The Worker does not match its locally approved Qwen3.5 manifest")
     if int(profile.settings.get("context_length", 8192)) != 8192:
         raise ValueError("The reviewed Qwen3.5 llama.cpp candidate is limited to an 8,192-token context")
     expected_thinking_mode = {
         "qwen35-llamacpp-q8-vulkan": "disabled",
         "qwen35-llamacpp-q8-vulkan-adaptive": "adaptive",
+        "qwen35-local-q8-vulkan": "disabled",
+        "qwen35-local-q8-vulkan-adaptive": "adaptive",
     }.get(profile.runtime_template_id)
     if expected_thinking_mode is None:
         raise ValueError("Qwen3.5 llama.cpp requires an allowlisted thinking policy")
@@ -764,9 +788,19 @@ def _qwen35_llamacpp_launch(
             "--maximum-new-tokens",
             str(profile.settings.get("maximum_new_tokens", 256)),
             "--runtime-profile",
-            "qwen35-4b-q8-vulkan",
+            str(runtime_profile),
             "--thinking-mode",
             expected_thinking_mode,
+            *(
+                [
+                    "--candidate-manifest-id",
+                    str(candidate_id),
+                    "--data-dir",
+                    str(environment.get("MODELDECK_DATA_DIR", ".modeldeck")),
+                ]
+                if candidate_id is not None
+                else []
+            ),
         ],
         environment=environment,
     )

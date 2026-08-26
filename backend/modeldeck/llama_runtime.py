@@ -31,9 +31,9 @@ class QwenLlamaManifest(BaseModel):
     format: Literal["modeldeck-qwen-llamacpp-runtime"]
     version: Literal[1]
     id: str
-    status: Literal["reviewed-candidate", "experimental"]
+    status: Literal["reviewed-candidate", "experimental", "approved-local"]
     original_model_id: str
-    original_model_revision: str = Field(pattern=r"^[a-f0-9]{40}$")
+    original_model_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{40}$")
     artefact_model_id: str
     artefact_revision: str = Field(pattern=r"^[a-f0-9]{40}$")
     quantisation: str
@@ -94,7 +94,15 @@ def manifest_path(profile: str) -> Path:
     return Path(__file__).with_name("registry_data") / f"{profile}.json"
 
 
-def load_qwen_manifest(profile: str) -> QwenLlamaManifest:
+def load_qwen_manifest(
+    profile: str, *, data_dir: Path | None = None, candidate_id: str | None = None
+) -> QwenLlamaManifest:
+    if profile == "qwen35-approved-q8-vulkan":
+        if data_dir is None or candidate_id is None:
+            raise ValueError("The approved Qwen candidate identity is required")
+        from modeldeck.qwen_candidates import load_candidate
+
+        return load_candidate(data_dir, candidate_id)
     return QwenLlamaManifest.model_validate_json(manifest_path(profile).read_bytes())
 
 
@@ -115,8 +123,18 @@ def _verify_artefact(path: Path, expected: TrustedArtefact) -> None:
         raise ValueError(f"Trusted llama.cpp artefact checksum mismatch: {expected.filename}")
 
 
-def validate_qwen_runtime(profile: str, snapshot: Path) -> ValidatedQwenRuntime:
-    manifest = load_qwen_manifest(profile)
+def validate_qwen_runtime(
+    profile: str,
+    snapshot: Path,
+    *,
+    data_dir: Path | None = None,
+    candidate_id: str | None = None,
+) -> ValidatedQwenRuntime:
+    manifest = (
+        load_qwen_manifest(profile, data_dir=data_dir, candidate_id=candidate_id)
+        if profile == "qwen35-approved-q8-vulkan"
+        else load_qwen_manifest(profile)
+    )
     if platform.system().lower() != manifest.operating_system:
         raise ValueError("The trusted llama.cpp runtime supports Linux only")
     if platform.machine().lower() not in {manifest.architecture, "amd64"}:

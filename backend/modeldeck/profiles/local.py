@@ -64,6 +64,7 @@ def create_local_profile(
     base_model_id: str | None = None,
     base_model_revision: str | None = None,
     artifact_path: Path | None = None,
+    candidate_manifest_id: str | None = None,
     template_registrations: dict[str, RuntimeTemplateRegistration] | None = None,
 ) -> ModelProfile:
     registration = (template_registrations or runtime_template_registrations()).get(configuration_support)
@@ -80,6 +81,10 @@ def create_local_profile(
     ):
         raise ValueError("ModelDeck Q4 release identity is incomplete")
     settings = dict(template.settings)
+    if settings.get("runtime_profile") == "qwen35-approved-q8-vulkan":
+        if candidate_manifest_id is None:
+            raise ValueError("This runtime requires an approved local Qwen candidate")
+        settings["candidate_manifest_id"] = candidate_manifest_id
     if request.model_id == "google/gemma-4-12B-it":
         settings["hardware_verification_required"] = True
     if template.generation_family.value in {
@@ -132,6 +137,7 @@ def create_local_profile(
     if template.runtime in {"qwen35-llamacpp-vulkan", "qwen38-llamacpp-vulkan"}:
         profile_dtype = {
             "qwen35-4b-q8-vulkan": "q8_0",
+            "qwen35-approved-q8-vulkan": "q8_0",
             "qwen38-q8-mtp-vulkan": "q8_0",
             "qwen38-q4-mtp-vulkan": "q4_k_m",
         }[str(settings["runtime_profile"])]

@@ -9,6 +9,7 @@ from typing import Any
 from modeldeck.capabilities import capability_candidates
 from modeldeck.hardware.probe import cache_candidates
 from modeldeck.q4_release import Q4ReleaseError, inspect_modeldeck_q4_release
+from modeldeck.qwen_candidates import QWEN35_REPOSITORY, inspect_candidate, load_candidates
 from modeldeck.reviewed_models import reviewed_model_spec
 from modeldeck.speechshift import SPEECHSHIFT_MODEL_SPECS, validate_speechshift_snapshot
 
@@ -58,7 +59,21 @@ def _weight_files_complete(paths: list[Path]) -> bool:
     return shard_numbers == set(range(1, expected + 1))
 
 
-def _artifacts(snapshot: Path, repo_id: str) -> list[dict[str, Any]]:
+def _artifacts(
+    snapshot: Path,
+    repo_id: str,
+    approved_candidate: Any | None = None,
+) -> list[dict[str, Any]]:
+    if approved_candidate is not None:
+        return [
+            {
+                "artifact_id": approved_candidate.id,
+                "candidate_manifest_id": approved_candidate.id,
+                "kind": "gguf",
+                "format": approved_candidate.quantisation,
+                "filenames": [approved_candidate.model.filename],
+            }
+        ]
     if repo_id == "bartowski/Qwen_Qwen3.5-4B-GGUF":
         filename = "Qwen_Qwen3.5-4B-Q8_0.gguf"
         return (
@@ -140,7 +155,7 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
         return "speech-conversation"
     if repo_id == "ggml-org/gpt-oss-120b-GGUF":
         return "autoregressive"
-    if repo_id in {"bartowski/Qwen_Qwen3.5-4B-GGUF", "ggml-org/Qwen3.8-27B-GGUF"}:
+    if QWEN35_REPOSITORY.fullmatch(repo_id) or repo_id == "ggml-org/Qwen3.8-27B-GGUF":
         return "autoregressive"
     if repo_id == "Qwen/Qwen3-Embedding-0.6B":
         return "embedding"
@@ -191,7 +206,17 @@ def _capability_hints(generation_family: str | None) -> list[str]:
     }.get(generation_family, [])
 
 
-def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = "") -> tuple[str | None, str]:
+def _configuration_support(
+    snapshot: Path,
+    repo_id: str = "",
+    revision: str = "",
+    approved_candidate: Any | None = None,
+) -> tuple[str | None, str]:
+    if approved_candidate is not None:
+        return "qwen35-local-q8-vulkan", (
+            "Locally approved Qwen3.5 Q8_0 candidate with exact HuggingFacePull provenance; "
+            "hardware qualification is required."
+        )
     if spec := SPEECHSHIFT_MODEL_SPECS.get(repo_id):
         if error := validate_speechshift_snapshot(snapshot, repo_id, revision):
             return None, error
@@ -284,8 +309,13 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
     return None, "No allowlisted ModelDeck worker supports this architecture yet."
 
 
-def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dict[str, Any]]:
+def discover_huggingface_models(
+    paths: Iterable[Path] | None = None,
+    *,
+    data_dir: Path | None = None,
+) -> list[dict[str, Any]]:
     models = []
+    approved_candidates = load_candidates(data_dir)
     for cache_root in paths or resolve_cache_paths():
         if not cache_root.is_dir():
             continue
@@ -309,8 +339,15 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
             )
             state = "partial" if partial and not complete else "installed-untested" if complete else "partial"
             revision = _revision(model_dir, chosen) if chosen else None
+            packaged_qwen35 = (
+                repo_id == "bartowski/Qwen_Qwen3.5-4B-GGUF"
+                and revision == "4168f45a16a1290d65a4ec0fa312ae917a4c15d6"
+            )
+            approved_candidate = (
+                None if packaged_qwen35 else approved_candidates.get((repo_id, revision or ""))
+            )
             support, support_reason = (
-                _configuration_support(chosen, repo_id, revision or "")
+                _configuration_support(chosen, repo_id, revision or "", approved_candidate)
                 if chosen and complete
                 else (None, "Finish the local snapshot before configuring a runtime.")
             )
@@ -320,6 +357,11 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                 q4_release = None
             generation_family = _generation_family(chosen, repo_id) if chosen else None
             config = _transformers_config(chosen)
+            candidate_registration = (
+                inspect_candidate(repo_id, revision or "", chosen, data_dir=data_dir).model_dump(mode="json")
+                if (chosen and complete and not packaged_qwen35 and QWEN35_REPOSITORY.fullmatch(repo_id))
+                else None
+            )
             potential_capabilities = (
                 capability_candidates(
                     model_id=repo_id,
@@ -347,7 +389,10 @@ def discover_huggingface_models(paths: Iterable[Path] | None = None) -> list[dic
                     "base_model_revision": (q4_release.get("base_model_revision") if q4_release else None),
                     "runnable": False,
                     "runnable_reason": "Compatibility has not been tested for the current stack.",
-                    "artifacts": _artifacts(chosen, repo_id) if chosen and complete else [],
+                    "artifacts": (
+                        _artifacts(chosen, repo_id, approved_candidate) if chosen and complete else []
+                    ),
+                    "candidate_registration": candidate_registration,
                 }
             )
     return models

@@ -52,7 +52,7 @@ function responses(configured = false): Record<string, unknown> {
 }
 
 function mockFetch(payloads: Record<string, unknown>) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
     const payload = payloads[path];
     return new Response(JSON.stringify(payload ?? { detail: `Unexpected request: ${path}` }), {
@@ -150,5 +150,37 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByText("Allowed; a trusted runtime is required.")).toBeInTheDocument();
     expect(screen.getByText("Evidence and provenance")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disallow" })).toBeInTheDocument();
+  });
+
+  it("offers explicit checksum approval for eligible local Qwen3.5 candidates", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { downloads_started: false, models: [{
+      model_id: "bartowski/Qwen_Qwen3.5-9B-GGUF", revision: "a".repeat(40),
+      cache_location: "/cache/model", snapshot_location: `/cache/model/snapshots/${"a".repeat(40)}`,
+      physical_size_bytes: 9_804_541_984, download_state: "installed-untested",
+      generation_family_hint: "autoregressive", capability_hints: ["text-generation", "chat"],
+      configuration_support: null, configuration_support_reason: "Explicit approval required.",
+      modeldeck_allowed: true, base_model_id: null, base_model_revision: null, runnable: false,
+      runnable_reason: "Explicit approval required.", worker_count: 0, artifacts: [],
+      potential_capabilities: [],
+      candidate_registration: {
+        eligible: true, approved: false, candidate_id: null,
+        filename: "Qwen_Qwen3.5-9B-Q8_0.gguf", expected_size: 9_804_541_984,
+        expected_sha256: "b".repeat(64),
+        reason: "Ready for explicit local approval and full SHA-256 verification.",
+      },
+    }] };
+    payloads["/api/catalogue/candidates/approve"] = {
+      ok: true, candidate_id: "qwen35-9b-q8-bbbbbbbbbbbb",
+    };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Verify and approve" }));
+
+    expect(await screen.findByText(/Approved bartowski\/Qwen_Qwen3.5-9B-GGUF/)).toBeInTheDocument();
+    const approval = fetchMock.mock.calls.find(([input]) => String(input) === "/api/catalogue/candidates/approve");
+    expect(approval?.[1]).toMatchObject({ method: "POST" });
   });
 });

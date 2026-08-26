@@ -22,7 +22,7 @@ from modeldeck.capabilities import (
     worker_cache_identity,
     worker_configuration_fingerprint,
 )
-from modeldeck.catalogue import discover_huggingface_models
+from modeldeck.catalogue import discover_huggingface_models  # noqa: F401 - compatibility hook
 from modeldeck.config import gateway_base_url
 from modeldeck.domain import (
     RoutingProfile,
@@ -52,6 +52,10 @@ NATIVE_FP8_MAXIMUM_FIRST_TOKEN_SECONDS = 0.50
 NATIVE_FP8_MAXIMUM_STEADY_MEMORY_BYTES = 36 * 1024**3
 NATIVE_FP8_MAXIMUM_PEAK_MEMORY_BYTES = 38 * 1024**3
 NATIVE_FP8_BENCHMARK_REPETITIONS = 5
+
+
+def _discover_models(request: Request):
+    return request.app.state.discover_models()
 
 
 def _default_runtime_template_id(configuration_support: str | None, capability_id: str | None) -> str | None:
@@ -246,7 +250,7 @@ def create_v3_router() -> APIRouter:
         cached = next(
             (
                 model
-                for model in discover_huggingface_models()
+                for model in _discover_models(request)
                 if model["model_id"] == payload.model_id
                 and model["revision"] == payload.revision
                 and model["download_state"] == "installed-untested"
@@ -302,6 +306,7 @@ def create_v3_router() -> APIRouter:
             else None
         )
         artefact_path = None
+        candidate_manifest_id = None
         if selected.template.cache_setting == "artifact_path":
             artefact = next(
                 (item for item in cached.get("artifacts", []) if item["artifact_id"] == payload.artifact_id),
@@ -310,6 +315,8 @@ def create_v3_router() -> APIRouter:
             if artefact is None:
                 raise HTTPException(409, "Select a discovered allowlisted artefact")
             artefact_path = Path(cached["snapshot_location"]) / artefact["filenames"][0]
+            raw_candidate_id = artefact.get("candidate_manifest_id")
+            candidate_manifest_id = raw_candidate_id if isinstance(raw_candidate_id, str) else None
         if checkpoint_dir is not None:
             try:
                 await run_in_isolated_thread(verify_modeldeck_q4_release, checkpoint_dir)
@@ -356,6 +363,7 @@ def create_v3_router() -> APIRouter:
             base_model_id=cached.get("base_model_id"),
             base_model_revision=cached.get("base_model_revision"),
             artifact_path=artefact_path,
+            candidate_manifest_id=candidate_manifest_id,
             template_registrations=registrations,
         ).model_copy(update={"id": worker_id})
         definition = WorkerDefinition.from_profile(profile, name=clean_name)
@@ -603,7 +611,7 @@ def create_v3_router() -> APIRouter:
         cached = next(
             (
                 model
-                for model in discover_huggingface_models()
+                for model in _discover_models(request)
                 if model["model_id"] == model_id
                 and model["revision"] == revision
                 and model["download_state"] == "installed-untested"
@@ -1246,7 +1254,7 @@ def _replacement_artifact_id(
     cached = next(
         (
             model
-            for model in discover_huggingface_models()
+            for model in _discover_models(request)
             if model["model_id"] == model_id and model["revision"] == revision
         ),
         None,

@@ -159,6 +159,15 @@ export interface ModelEntry {
   worker_count: number;
   potential_capabilities: PotentialCapability[];
   artifacts?: ModelArtifact[];
+  candidate_registration?: {
+    eligible: boolean;
+    approved: boolean;
+    candidate_id: string | null;
+    filename: string | null;
+    expected_size: number | null;
+    expected_sha256: string | null;
+    reason: string;
+  } | null;
 }
 
 export interface CompatibilityTest {
