@@ -1,8 +1,8 @@
 # Qwen3.5 4B Q8 llama.cpp Vulkan runtime
 
 ModelDeck recognises one immutable Qwen3.5 4B Q8_0 GGUF snapshot as the candidate
-`qwen35-llamacpp-vulkan` runtime. It is intended for the concise Wayfinder Worker and is
-separate from the official BF16 Transformers Workers.
+`qwen35-llamacpp-vulkan` runtime. It supports separate concise and adaptive-thinking
+Worker templates and is separate from the official BF16 Transformers Workers.
 
 ## Trusted inputs
 
@@ -22,15 +22,25 @@ Startup verifies the model size and digest plus the pinned llama-server build re
 
 ## Behaviour and limits
 
-The runtime exposes OpenAI-compatible chat and text completion. Thinking is immutable at
-`disabled`: ModelDeck starts llama.cpp with `reasoning-effort=none`, injects `none` into
-forwarded requests, and rejects an attempt to request another reasoning effort. The
-default output ceiling is 256 tokens.
+The runtime exposes OpenAI-compatible chat and text completion through two immutable
+Worker templates:
+
+- `qwen35-llamacpp-q8-vulkan` disables thinking, starts llama.cpp with
+  `reasoning-effort=none`, injects `none` into forwarded requests and uses a 256-token
+  default output ceiling. This is the concise Wayfinder-fast configuration.
+- `qwen35-llamacpp-q8-vulkan-adaptive` advertises reasoning, leaves the model's thinking
+  policy adaptive and uses a 1,024-token default output ceiling. Requests may select a
+  reviewed llama.cpp reasoning effort.
+
+The disabled Worker rejects another reasoning effort and defensively removes reasoning-only
+response fields. Each template has a distinct configuration fingerprint and qualification
+record; an existing Worker is never changed in place.
 
 This GGUF contains no vision projector or MTP companion model. The Worker therefore does
 not claim image chat, speculative decoding or native autoregressive traces. It remains a
 reviewed candidate until load, warm-up, generation, cancellation and sustained thermal
 tests pass on the target Framework Desktop.
 
-Create it from the Models page after ModelDeck has rediscovered the exact cached snapshot.
-The generated Worker definition uses the `Qwen3.5 4B Q8 llama.cpp Vulkan` runtime template.
+Create either variant from the Models page after ModelDeck has rediscovered the exact
+cached snapshot. Choose the disabled runtime for bounded latency or the adaptive runtime
+for model-generated reasoning.

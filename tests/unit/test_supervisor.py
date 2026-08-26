@@ -313,6 +313,33 @@ def test_qwen35_llamacpp_launch_enforces_disabled_thinking(tmp_path) -> None:
         build_worker_launch(profile)
 
 
+def test_qwen35_llamacpp_adaptive_thinking_uses_its_distinct_template(tmp_path) -> None:
+    artefact = tmp_path / "Qwen_Qwen3.5-4B-Q8_0.gguf"
+    artefact.write_bytes(b"gguf")
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="bartowski/Qwen_Qwen3.5-4B-GGUF",
+            revision="4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+            alias="qwen35-adaptive",
+            runtime_template_id="qwen35-llamacpp-q8-vulkan-adaptive",
+            context_length=8192,
+            maximum_new_tokens=1024,
+        ),
+        cache_root=tmp_path,
+        artifact_path=artefact,
+        port=8630,
+        configuration_support="qwen35-llamacpp-q8-vulkan-adaptive",
+    )
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "adaptive"
+    assert launch.command[launch.command.index("--maximum-new-tokens") + 1] == "1024"
+    profile.settings["thinking_mode"] = "disabled"
+    with pytest.raises(ValueError, match="thinking_mode=adaptive"):
+        build_worker_launch(profile)
+
+
 def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:
     profile = create_local_profile(
         LocalProfileRequest(

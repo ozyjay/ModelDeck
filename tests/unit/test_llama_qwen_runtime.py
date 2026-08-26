@@ -142,6 +142,9 @@ def test_qwen35_command_disables_thinking_without_vision_or_mtp_companions(tmp_p
     assert "--spec-type" not in command
     assert "--offline" in command
 
+    adaptive_command = qwen_llama_command(runtime=runtime, port=49153, thinking_mode="adaptive")
+    assert "--reasoning-effort" not in adaptive_command
+
 
 def test_qwen_runtime_rejects_a_tampered_artefact(monkeypatch, tmp_path) -> None:
     runtime = _validated_runtime(monkeypatch, tmp_path)

@@ -33,6 +33,7 @@ CAPABILITY_DEFINITIONS = {
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
                 "qwen35-llamacpp-q8-vulkan",
+                "qwen35-llamacpp-q8-vulkan-adaptive",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
@@ -49,6 +50,7 @@ CAPABILITY_DEFINITIONS = {
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
                 "qwen35-llamacpp-q8-vulkan",
+                "qwen35-llamacpp-q8-vulkan-adaptive",
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
@@ -159,8 +161,14 @@ CAPABILITY_ID_BY_CONTRACT = {
 # matching rule below; the matcher still requires the exact snapshot and adapter.
 QWEN_TEXT_CAPABILITY_TEMPLATES = {
     "qwen35-llamacpp-q8-vulkan": {
-        "general-chat": ("qwen35-llamacpp-q8-vulkan",),
-        "text-completion": ("qwen35-llamacpp-q8-vulkan",),
+        "general-chat": (
+            "qwen35-llamacpp-q8-vulkan",
+            "qwen35-llamacpp-q8-vulkan-adaptive",
+        ),
+        "text-completion": (
+            "qwen35-llamacpp-q8-vulkan",
+            "qwen35-llamacpp-q8-vulkan-adaptive",
+        ),
     },
     "qwen38-llamacpp-q8-mtp-vulkan": {
         "general-chat": (

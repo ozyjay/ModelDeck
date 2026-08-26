@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -116,6 +116,15 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 256, "thinking_mode": "disabled", "startup_timeout_seconds": 300, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-4b-q8-vulkan", "hardware_verification_required": true},
+      "cache_setting": "artifact_path"
+    },
+    {
+      "id": "qwen35-llamacpp-q8-vulkan-adaptive",
+      "display_name": "Qwen3.5 4B Q8 llama.cpp Vulkan · Adaptive thinking",
+      "runtime": "qwen35-llamacpp-vulkan",
+      "generation_family": "autoregressive",
+      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "reasoning": true},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 1024, "thinking_mode": "adaptive", "startup_timeout_seconds": 300, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-4b-q8-vulkan", "hardware_verification_required": true},
       "cache_setting": "artifact_path"
     },
     {

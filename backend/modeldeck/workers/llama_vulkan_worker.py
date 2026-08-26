@@ -449,11 +449,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
     thinking_mode = getattr(args, "thinking_mode", None)
-    if is_qwen and getattr(args, "runtime_profile", None) == "qwen35-4b-q8-vulkan":
-        if thinking_mode != "disabled":
-            raise ValueError("The selected Qwen3.5 llama.cpp Worker requires thinking_mode=disabled")
-    elif is_qwen and thinking_mode not in {"adaptive", "disabled"}:
-        raise ValueError("The selected Qwen3.8 llama.cpp Worker requires a trusted thinking mode")
+    if is_qwen and thinking_mode not in {"adaptive", "disabled"}:
+        raise ValueError("The selected Qwen llama.cpp Worker requires a trusted thinking mode")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

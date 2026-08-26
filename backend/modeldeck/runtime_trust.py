@@ -213,7 +213,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             id="qwen35-llamacpp-vulkan",
             display_name="Qwen3.5 llama.cpp Vulkan",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
-            capabilities=frozenset({"chat", "completions", "streaming", "cancellation"}),
+            capabilities=frozenset({"chat", "completions", "streaming", "cancellation", "reasoning"}),
             template_settings=frozenset(
                 {
                     "context_length",

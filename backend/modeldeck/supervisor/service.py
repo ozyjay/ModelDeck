@@ -743,8 +743,14 @@ def _qwen35_llamacpp_launch(
         raise ValueError("Qwen3.5 llama.cpp requires its allowlisted Q8 GGUF profile and artefact")
     if int(profile.settings.get("context_length", 8192)) != 8192:
         raise ValueError("The reviewed Qwen3.5 llama.cpp candidate is limited to an 8,192-token context")
-    if profile.settings.get("thinking_mode") != "disabled":
-        raise ValueError("Qwen3.5 llama.cpp requires thinking_mode=disabled")
+    expected_thinking_mode = {
+        "qwen35-llamacpp-q8-vulkan": "disabled",
+        "qwen35-llamacpp-q8-vulkan-adaptive": "adaptive",
+    }.get(profile.runtime_template_id)
+    if expected_thinking_mode is None:
+        raise ValueError("Qwen3.5 llama.cpp requires an allowlisted thinking policy")
+    if profile.settings.get("thinking_mode") != expected_thinking_mode:
+        raise ValueError(f"Qwen3.5 llama.cpp requires thinking_mode={expected_thinking_mode}")
     return WorkerLaunch(
         command=[
             sys.executable,
@@ -760,7 +766,7 @@ def _qwen35_llamacpp_launch(
             "--runtime-profile",
             "qwen35-4b-q8-vulkan",
             "--thinking-mode",
-            "disabled",
+            expected_thinking_mode,
         ],
         environment=environment,
     )

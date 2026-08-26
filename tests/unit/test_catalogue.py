@@ -447,7 +447,10 @@ def test_qwen35_q8_gguf_requires_the_reviewed_revision_and_filename(tmp_path: Pa
         "general-chat",
         model["configuration_support"],
         runtime_template_registrations(),
-    ) == ["qwen35-llamacpp-q8-vulkan"]
+    ) == [
+        "qwen35-llamacpp-q8-vulkan",
+        "qwen35-llamacpp-q8-vulkan-adaptive",
+    ]
     assert model["artifacts"] == [
         {
             "artifact_id": "qwen35-4b-q8",

@@ -55,6 +55,11 @@ def worker_definition() -> WorkerDefinition:
             "disabled",
         ),
         ("qwen35-llamacpp-vulkan", "qwen35-llamacpp-q8-vulkan", "disabled"),
+        (
+            "qwen35-llamacpp-vulkan",
+            "qwen35-llamacpp-q8-vulkan-adaptive",
+            "adaptive",
+        ),
     ],
 )
 def test_legacy_qwen_llamacpp_workers_receive_their_immutable_thinking_default(
