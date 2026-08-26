@@ -96,6 +96,7 @@ def test_qwen_command_is_fixed_to_loopback_full_vulkan_offload_and_mtp(monkeypat
     assert command[command.index("--spec-draft-n-max") + 1] == "4"
     assert "--mmproj" in command
     assert "--offline" in command
+    assert command[command.index("-lv") + 1] == "4"
 
 
 def test_qwen_runtime_rejects_a_tampered_artefact(monkeypatch, tmp_path) -> None:
@@ -122,11 +123,22 @@ def test_llama_evidence_requires_backend_offload_projector_and_mtp() -> None:
         evidence.feed(line, quantisation="Q8_0")
 
     assert evidence.startup_errors() == []
+    assert all(evidence.startup_checks().values())
     assert evidence.draft_proposed == 16
     assert evidence.draft_accepted == 12
     assert evidence.acceptance_ratio == 0.75
     assert evidence.prompt_tokens_per_second == 2000.0
     assert evidence.generated_tokens_per_second == 100.0
+
+
+def test_llama_evidence_records_mtp_acceptance_from_completion_timings() -> None:
+    evidence = LlamaEvidence()
+
+    evidence.record_generation_timings({"timings": {"draft_n": 49, "draft_n_accepted": 34}})
+
+    assert evidence.draft_proposed == 49
+    assert evidence.draft_accepted == 34
+    assert evidence.acceptance_ratio == pytest.approx(34 / 49)
 
 
 def test_qwen_request_drops_backend_parameters_and_enforces_generation_limit() -> None:

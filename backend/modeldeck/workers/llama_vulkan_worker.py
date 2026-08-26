@@ -142,6 +142,8 @@ def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]
         "--offline",
         "--log-colors",
         "off",
+        "-lv",
+        "4",
     ]
 
 
@@ -202,8 +204,8 @@ class LlamaEvidence:
         elif match := self._GENERATION.search(line):
             self.generated_tokens_per_second = float(match.group(1))
 
-    def startup_errors(self) -> list[str]:
-        checks = {
+    def startup_checks(self) -> dict[str, bool]:
+        return {
             "Vulkan backend": self.backend_vulkan,
             "expected AMD Vulkan device": self.device_expected,
             "complete GPU layer offload": self.full_offload,
@@ -212,7 +214,27 @@ class LlamaEvidence:
             "BF16 vision projector": self.projector_loaded,
             "MTP speculative decoder": self.mtp_enabled,
         }
+
+    def startup_errors(self) -> list[str]:
+        checks = self.startup_checks()
         return [name for name, passed in checks.items() if not passed]
+
+    def record_generation_timings(self, payload: Any) -> None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("timings"), dict):
+            return
+        timings = payload["timings"]
+        proposed = timings.get("draft_n")
+        accepted = timings.get("draft_n_accepted")
+        if (
+            isinstance(proposed, int)
+            and not isinstance(proposed, bool)
+            and isinstance(accepted, int)
+            and not isinstance(accepted, bool)
+            and proposed >= accepted >= 0
+        ):
+            self.draft_proposed = proposed
+            self.draft_accepted = accepted
+            self.acceptance_ratio = accepted / proposed if proposed else None
 
 
 def remove_reasoning(value: Any) -> Any:
@@ -404,7 +426,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "worker_id": args.worker_id,
             "runtime": "llama-vulkan",
             "generation_family": GenerationFamily.AUTOREGRESSIVE,
-            "state": "warming" if ready else "loading",
+            "state": "ready" if ready else "loading",
             "model_id": args.model_id,
             "model_revision": args.revision,
             "device": "vulkan:0",
@@ -441,12 +463,15 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         if not await runtime.ready():
             return JSONResponse({"ready": False}, status_code=503)
         payload = {
-            "prompt": "Continue the sequence with one number per token: 1 1 1 1 1 1 1 1",
-            "n_predict": 32 if is_qwen else 1,
+            "prompt": "Count from 1 to 20, separated by spaces:\n1 2 3 4 5",
+            "n_predict": 48 if is_qwen else 1,
             "temperature": 0,
+            **({"ignore_eos": True} if is_qwen else {}),
         }
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(f"http://127.0.0.1:{runtime.internal_port}/completion", json=payload)
+        if response.is_success and is_qwen:
+            runtime.evidence.record_generation_timings(response.json())
         mtp_verified = not is_qwen or runtime.evidence.draft_accepted > 0
         ready = response.is_success and mtp_verified
         return JSONResponse({"ready": ready, "mtp_verified": mtp_verified}, status_code=200 if ready else 503)
@@ -492,6 +517,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     @app.get("/metrics")
     async def metrics():
+        startup_checks = runtime.evidence.startup_checks() if runtime.qwen_runtime else {}
         return {
             "runtime": "llama-vulkan",
             "execution_preset": args.execution_preset,
@@ -510,6 +536,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "generated_tokens_per_second": runtime.evidence.generated_tokens_per_second,
             "time_to_first_token_seconds": runtime.last_time_to_first_token_seconds,
             "throughput_basis": "effective_mtp" if runtime.qwen_runtime else "backend_reported",
+            "startup_checks": startup_checks,
+            "startup_errors": [name for name, passed in startup_checks.items() if not passed],
             **runtime.memory_metrics(),
         }
 
