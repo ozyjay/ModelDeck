@@ -11,7 +11,12 @@ from modeldeck.llama_runtime import (
     TrustedArtefact,
     ValidatedQwenRuntime,
 )
-from modeldeck.workers.llama_vulkan_worker import LlamaEvidence, qwen_llama_command, qwen_request
+from modeldeck.workers.llama_vulkan_worker import (
+    LlamaEvidence,
+    normalise_qwen_chat_completion,
+    qwen_llama_command,
+    qwen_request,
+)
 
 
 def _artefact(path: Path, content: bytes, dtype: str) -> TrustedArtefact:
@@ -230,3 +235,86 @@ def test_qwen_adaptive_thinking_uses_template_default_or_allowlisted_request_eff
             maximum_new_tokens=512,
             thinking_mode="disabled",
         )
+
+
+def test_qwen_chat_completion_normalises_native_tool_calls_for_openai_clients() -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "list_workspace_entries",
+                                "arguments": "",
+                            }
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    result = normalise_qwen_chat_completion(
+        payload,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_workspace_entries",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    call = result["choices"][0]["message"]["tool_calls"][0]
+    assert call["type"] == "function"
+    assert call["id"].startswith("call_")
+    assert call["function"] == {"name": "list_workspace_entries", "arguments": "{}"}
+
+
+def test_qwen_chat_completion_recovers_xml_tool_call_from_reasoning() -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": (
+                        "I need the file.\n<tool_call>\n<function=read_workspace_text_file>\n"
+                        "<parameter=path>\nReadme.md\n</parameter>\n</function>\n</tool_call>"
+                    ),
+                },
+            }
+        ]
+    }
+
+    result = normalise_qwen_chat_completion(
+        payload,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_workspace_text_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+    )
+
+    choice = result["choices"][0]
+    call = choice["message"]["tool_calls"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    assert call["id"].startswith("call_")
+    assert call["function"] == {
+        "name": "read_workspace_text_file",
+        "arguments": '{"path": "Readme.md"}',
+    }

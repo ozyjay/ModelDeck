@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import time
+import uuid
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -53,6 +54,11 @@ QWEN_OPENAI_REQUEST_FIELDS = frozenset(
     }
 )
 QWEN_REASONING_EFFORTS = frozenset({"default", "none", "minimal", "low", "medium", "high", "xhigh", "max"})
+_QWEN_TOOL_CALL = re.compile(
+    r"<tool_call>\s*<function=(?P<name>[^\s>]+)>\s*(?P<body>.*?)\s*</function>\s*</tool_call>",
+    re.DOTALL,
+)
+_QWEN_TOOL_PARAMETER = re.compile(r"<parameter=(?P<name>[^\s>]+)>\s*(?P<value>.*?)\s*</parameter>", re.DOTALL)
 
 
 def fixed_llama_server() -> Path:
@@ -303,6 +309,115 @@ def qwen_request(
     if isinstance(requested, int) and requested > maximum_new_tokens:
         raise ValueError("max_tokens exceeds the configured generation limit")
     return result
+
+
+def normalise_qwen_chat_completion(payload: Any, *, tools: Any) -> Any:
+    """Canonicalise known llama.cpp Qwen tool-call variants at the OpenAI boundary.
+
+    The local llama.cpp server owns prompt rendering and generation, but its Qwen
+    templates may omit a call identifier, use an empty value for an empty-object
+    argument list, or leave a complete XML call in a reasoning field.  None of
+    those variants is valid on ModelDeck's public OpenAI-compatible surface.
+    """
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("choices"), list):
+        return payload
+    parameter_schemas = _qwen_tool_parameter_schemas(tools)
+    for choice in payload["choices"]:
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            continue
+        message = choice["message"]
+        calls = message.get("tool_calls")
+        if isinstance(calls, list) and calls:
+            message["tool_calls"] = [_normalise_qwen_tool_call(call, parameter_schemas) for call in calls]
+            continue
+        recovered, clean_content = _recover_qwen_tool_calls(message, parameter_schemas)
+        if recovered:
+            message["tool_calls"] = recovered
+            if clean_content is not None:
+                message["content"] = clean_content
+            choice["finish_reason"] = "tool_calls"
+    return payload
+
+
+def _qwen_tool_parameter_schemas(tools: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(tools, list):
+        return {}
+    schemas: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+            continue
+        parameters = function.get("parameters")
+        properties = parameters.get("properties") if isinstance(parameters, dict) else None
+        schemas[function["name"]] = properties if isinstance(properties, dict) else {}
+    return schemas
+
+
+def _normalise_qwen_tool_call(call: Any, parameter_schemas: dict[str, dict[str, Any]]) -> Any:
+    if not isinstance(call, dict):
+        return call
+    function = call.get("function")
+    if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        return call
+    normalised = {**call, "type": "function", "function": dict(function)}
+    arguments = normalised["function"].get("arguments")
+    if isinstance(arguments, dict):
+        normalised["function"]["arguments"] = json.dumps(arguments)
+    elif arguments == "" and not parameter_schemas.get(function["name"]):
+        normalised["function"]["arguments"] = "{}"
+    if not isinstance(normalised.get("id"), str) or not normalised["id"]:
+        normalised["id"] = f"call_{uuid.uuid4().hex}"
+    return normalised
+
+
+def _recover_qwen_tool_calls(
+    message: dict[str, Any], parameter_schemas: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], str | None]:
+    recovered: list[dict[str, Any]] = []
+    clean_content: str | None = None
+    for field in ("content", "reasoning_content"):
+        value = message.get(field)
+        if not isinstance(value, str):
+            continue
+        matches = list(_QWEN_TOOL_CALL.finditer(value))
+        for match in matches:
+            arguments = _qwen_xml_arguments(
+                match.group("body"), parameter_schemas.get(match.group("name"), {})
+            )
+            if arguments is None:
+                continue
+            recovered.append(
+                {
+                    "id": f"call_{uuid.uuid4().hex}",
+                    "type": "function",
+                    "function": {"name": match.group("name"), "arguments": json.dumps(arguments)},
+                }
+            )
+        if field == "content" and recovered:
+            remaining = _QWEN_TOOL_CALL.sub("", value).strip()
+            clean_content = remaining or None
+    return recovered, clean_content
+
+
+def _qwen_xml_arguments(body: str, parameter_schemas: dict[str, Any]) -> dict[str, Any] | None:
+    arguments: dict[str, Any] = {}
+    for parameter in _QWEN_TOOL_PARAMETER.finditer(body):
+        name = parameter.group("name")
+        value = parameter.group("value").strip()
+        schema = parameter_schemas.get(name)
+        if isinstance(schema, dict) and schema.get("type") not in {None, "string"}:
+            try:
+                arguments[name] = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        else:
+            arguments[name] = value
+    if _QWEN_TOOL_PARAMETER.sub("", body).strip():
+        return None
+    return arguments
 
 
 def amd_gpu_memory_metrics() -> dict[str, int]:
@@ -660,6 +775,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             return StreamingResponse(filtered_stream(), media_type="text/event-stream")
         try:
             payload = response.json()
+            if is_qwen and path == "/v1/chat/completions":
+                payload = normalise_qwen_chat_completion(payload, tools=body.get("tools"))
             return JSONResponse(
                 remove_reasoning(payload) if filter_reasoning else payload,
                 status_code=response.status_code,
