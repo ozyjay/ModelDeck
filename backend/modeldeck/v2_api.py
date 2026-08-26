@@ -37,6 +37,13 @@ from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_loc
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
 from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
+from modeldeck.smoke_probes import (
+    build_probe_request,
+    image_chat_probe_body,
+    probe_for_capability,
+    probe_for_contract,
+    validate_probe_response,
+)
 from modeldeck.thermal import ThermalAdmissionError
 
 NATIVE_FP8_RUNTIME_PREFIX = "qwen38-fp8-"
@@ -488,8 +495,12 @@ def create_v3_router() -> APIRouter:
         model_payload = {}
         metrics_payload = {}
         generation_payload = {}
+        diagnostic_capability_id = _worker_smoke_capability_id(definition)
+        diagnostic_contract_id = CAPABILITY_DEFINITIONS[diagnostic_capability_id].protocol_contract_id
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(
+                timeout=_capability_smoke_timeout(str(diagnostic_contract_id), request)
+            ) as client:
                 health_response, model_response, metrics_response = await asyncio.gather(
                     client.get(f"{worker['endpoint']}/health"),
                     client.get(f"{worker['endpoint']}/model"),
@@ -512,19 +523,28 @@ def create_v3_router() -> APIRouter:
                 generation_payload = generation_response.json()
                 if health_payload.get("ready") is not True:
                     raise RuntimeError("Worker health did not report ready")
-                if not _has_smoke_evidence(definition, generation_payload):
+                if not _has_smoke_evidence(
+                    definition, generation_payload, capability_id=diagnostic_capability_id
+                ):
                     raise RuntimeError("Smoke response contained no valid Worker evidence")
-            result = "tested-working"
+            result = "diagnostic-passed"
             failure_class = None
             error_summary = None
         except (httpx.HTTPError, ValueError, RuntimeError) as error:
-            result = "transient-failure"
-            failure_class = "smoke-failure"
+            result, failure_class = _classify_probe_failure(error, operation="worker-diagnostic")
             error_summary = f"{type(error).__name__}: {error}"
         probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
         evidence = {
             "worker_id": definition.id,
+            "evidence_kind": "worker-diagnostic",
+            "capability_id": diagnostic_capability_id,
+            "protocol_contract_id": diagnostic_contract_id,
+            "runtime_template_id": definition.runtime_template_id,
+            "runtime_template_version": definition.runtime_template_version,
+            "worker_configuration_fingerprint": worker_configuration_fingerprint(
+                definition.model_dump(mode="json")
+            ),
             "hardware_profile": probe["configured"]["profile_id"],
             "fedora_version": detected.get("fedora_release"),
             "kernel": detected.get("kernel"),
@@ -545,12 +565,10 @@ def create_v3_router() -> APIRouter:
             "quantisation": model_payload.get("quantization", "none"),
             "dtype": model_payload.get("dtype", definition.dtype),
             "runtime": definition.runtime,
-            "environment_overrides": {
-                key: os.environ.get(key) for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "LD_PRELOAD")
-            },
+            "environment_overrides": request.app.state.supervisor.worker_environment(worker_id),
             "load_result": "success" if health_payload.get("ready") else "not-confirmed",
             "warmup_result": "success" if health_payload.get("ready") else "not-confirmed",
-            "smoke_result": "success" if result == "tested-working" else "failed",
+            "smoke_result": "success" if result == "diagnostic-passed" else "failed",
             "cold_load_seconds": metrics_payload.get("load_seconds"),
             "first_output_seconds": (
                 generation_payload.get("metrics", {}).get("first_token_seconds")
@@ -564,10 +582,18 @@ def create_v3_router() -> APIRouter:
             "test_duration_seconds": round(asyncio.get_running_loop().time() - started, 4),
             "error_summary": error_summary,
         }
-        record = request.app.state.compatibility_store.record_test(
-            evidence, result=result, failure_class=failure_class
-        )
-        return {"ok": result == "tested-working", "worker_id": worker_id, "test": record}
+        diagnostic = {
+            "result": result,
+            "failure_class": failure_class,
+            "evidence": evidence,
+        }
+        return {
+            "ok": result == "diagnostic-passed",
+            "worker_id": worker_id,
+            "diagnostic": diagnostic,
+            # Retain the legacy response key while callers migrate to `diagnostic`.
+            "test": diagnostic,
+        }
 
     @router.post("/workers/{worker_id}/capabilities/{capability_id}/qualify")
     async def qualify_worker_capability(worker_id: str, capability_id: str, request: Request):
@@ -642,7 +668,7 @@ def create_v3_router() -> APIRouter:
                 generation_payload = generation_response.json()
                 if health_payload.get("ready") is not True:
                     raise RuntimeError("Worker health did not report ready")
-                if not _has_smoke_evidence(definition, generation_payload):
+                if not _has_smoke_evidence(definition, generation_payload, capability_id=capability_id):
                     raise RuntimeError("Qualification response contained no valid Worker evidence")
                 if definition.runtime == "qwen38-fp8-chat-transformers-rocm":
                     benchmark_path, benchmark_body = _native_fp8_text_benchmark_request(definition)
@@ -653,7 +679,11 @@ def create_v3_router() -> APIRouter:
                         )
                         benchmark_response.raise_for_status()
                         benchmark_payload = benchmark_response.json()
-                        if not _has_smoke_evidence(definition, benchmark_payload):
+                        if not _has_smoke_evidence(
+                            definition,
+                            benchmark_payload,
+                            capability_id="autoregressive-trace",
+                        ):
                             raise RuntimeError("Native FP8 benchmark response contained no output")
                         benchmark_payloads.append(benchmark_payload)
                     generation_payload = _aggregate_native_fp8_text_benchmark(benchmark_payloads)
@@ -673,7 +703,7 @@ def create_v3_router() -> APIRouter:
                         )
                         repeated_response.raise_for_status()
                         repeated_payload = repeated_response.json()
-                        if not _has_smoke_evidence(definition, repeated_payload):
+                        if not _has_smoke_evidence(definition, repeated_payload, capability_id=capability_id):
                             raise RuntimeError("Native FP8 image benchmark response contained no output")
                 if definition.runtime.startswith(NATIVE_FP8_RUNTIME_PREFIX):
                     refreshed_metrics = await client.get(f"{worker['endpoint']}/metrics")
@@ -688,8 +718,7 @@ def create_v3_router() -> APIRouter:
             failure_class = None
             error_summary = None
         except (httpx.HTTPError, ValueError, RuntimeError) as error:
-            result = "transient-failure"
-            failure_class = "capability-qualification-failure"
+            result, failure_class = _classify_probe_failure(error, operation="capability-qualification")
             error_summary = f"{type(error).__name__}: {error}"
         probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
@@ -724,9 +753,7 @@ def create_v3_router() -> APIRouter:
             "quantisation": model_payload.get("quantization", "none"),
             "dtype": model_payload.get("dtype", definition.dtype),
             "runtime": definition.runtime,
-            "environment_overrides": {
-                key: os.environ.get(key) for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "LD_PRELOAD")
-            },
+            "environment_overrides": request.app.state.supervisor.worker_environment(worker_id),
             "load_result": "success" if health_payload.get("ready") else "not-confirmed",
             "warmup_result": "success" if health_payload.get("ready") else "not-confirmed",
             "smoke_result": "success" if result == "tested-working" else "failed",
@@ -845,11 +872,17 @@ def create_v3_router() -> APIRouter:
                 )
             response.raise_for_status()
             result = (
-                {"audio": True}
+                {
+                    "audio": len(response.content) > 44
+                    and response.content.startswith(b"RIFF")
+                    and response.content[8:12] == b"WAVE"
+                }
                 if capability["protocol_contract"] == "speech-synthesis-v1"
                 else response.json()
             )
-        except (httpx.HTTPError, ValueError) as error:
+            if not validate_probe_response(probe_for_contract(capability["protocol_contract"]), result):
+                raise RuntimeError("Gateway capability response contained no valid protocol evidence")
+        except (httpx.HTTPError, ValueError, RuntimeError) as error:
             raise HTTPException(503, f"Gateway capability smoke test failed: {error}") from error
         return {
             "ok": True,
@@ -1335,85 +1368,26 @@ def _integer_template_default(settings: dict[str, object], name: str, fallback: 
 def _capability_smoke_request(capability):
     public_name = capability["public_name"]
     contract = capability["protocol_contract"]
-    if contract == "openai-chat-v1":
-        return "/v1/chat/completions", {
-            "model": public_name,
-            "messages": [{"role": "user", "content": "Reply with the word ready."}],
-            "max_tokens": 4,
-            "temperature": 0,
-            "stream": False,
-        }
-    if contract == "openai-image-chat-v1":
-        return "/v1/chat/completions", _image_chat_smoke_body(public_name)
-    if contract == "openai-completions-v1":
-        return "/v1/completions", {
-            "model": public_name,
-            "prompt": "Reply with the word ready.",
-            "max_tokens": 4,
-            "temperature": 0,
-            "stream": False,
-        }
-    if contract == "openai-embeddings-v1":
-        return "/v1/embeddings", {
-            "model": public_name,
-            "input": ["The local Worker is ready."],
-        }
-    if contract == "native-ar-trace-v1":
-        return "/native/v1/autoregressive/traces", {
-            "model": public_name,
-            "prompt": "Reply with the word ready.",
-            "max_tokens": 4,
-            "temperature": 0,
-            "top_k": 3,
-            "seed": 7,
-        }
-    if contract == "text-diffusion-v1":
-        return "/native/v1/text-diffusion/refine", {
-            "model": public_name,
-            "prompt": "A local Worker is ready.",
-            "denoising_steps": 4,
-            "seed": 7,
-        }
-    if contract in {"translation-en-fr-v1", "translation-en-de-v1"}:
-        target_language = "fr" if contract == "translation-en-fr-v1" else "de"
-        return "/v1/translations", {
-            "request_id": "modeldeck-route-smoke",
-            "model": public_name,
-            "input": "The local Worker is ready.",
-            "source_language": "en",
-            "target_language": target_language,
-        }
-    if contract == "speech-synthesis-v1":
-        return "/v1/audio/speech", {
-            "request_id": "modeldeck-route-smoke",
-            "model": public_name,
-            "input": "The local Worker is ready.",
-            "voice": "ryan",
-            "language": "en",
-            "response_format": "wav",
-        }
-    if contract == "speech-recognition-v1":
-        return "/v1/audio/transcriptions", {
-            "request_id": "modeldeck-route-smoke",
-            "model": public_name,
-            "language": "en",
-            "encoding": "pcm_s16le",
-            "sample_rate_hz": 16000,
-            "channels": 1,
-            "audio_base64": "AAAAAA==",
-        }
-    raise HTTPException(409, "This protocol requires an interactive smoke-test client")
+    try:
+        probe_request = build_probe_request(probe_for_contract(contract), "gateway", public_name)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return probe_request.path, probe_request.body
 
 
 def _capability_smoke_timeout(contract: str, request: Request) -> float:
     settings = request.app.state.settings
-    if contract == "text-diffusion-v1":
+    try:
+        timeout_class = probe_for_contract(contract).timeout_class
+    except ValueError:
+        timeout_class = "default"
+    if timeout_class == "diffusion":
         return settings.diffusion_timeout_seconds
-    if contract == "speech-synthesis-v1":
+    if timeout_class == "speech-synthesis":
         return settings.speech_synthesis_timeout_seconds
-    if contract == "speech-recognition-v1":
+    if timeout_class == "speech-recognition":
         return settings.speech_recognition_timeout_seconds
-    if contract.startswith("translation-"):
+    if timeout_class == "translation":
         return settings.translation_timeout_seconds
     return max(60.0, settings.scenechat_timeout_seconds)
 
@@ -1422,174 +1396,69 @@ def _worker_capability_request(
     definition: WorkerDefinition, capability_id: str
 ) -> tuple[str, dict[str, object] | None, dict[str, str] | None]:
     model = definition.to_profile().alias
-    if capability_id == "general-chat":
-        return (
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with the word ready."}],
-                "max_tokens": 4,
-                "temperature": 0,
-                "stream": False,
-            },
-            None,
+    try:
+        probe_request = build_probe_request(
+            probe_for_capability(capability_id),
+            "worker",
+            model,
+            api_key=os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local"),
         )
-    if capability_id == "text-completion":
-        return (
-            "/v1/completions",
-            {
-                "model": model,
-                "prompt": "Reply with the word ready.",
-                "max_tokens": 4,
-                "temperature": 0,
-                "stream": False,
-            },
-            None,
-        )
-    if capability_id == "general-image-chat":
-        return "/v1/chat/completions", _image_chat_smoke_body(model), None
-    if capability_id == "autoregressive-trace":
-        return (
-            "/native/autoregressive/trace",
-            {
-                "model": model,
-                "prompt": "Reply with the word ready.",
-                "max_tokens": 4,
-                "temperature": 0,
-                "top_k": 3,
-                "seed": 7,
-            },
-            None,
-        )
-    if capability_id == "embeddings":
-        return "/v1/embeddings", {"model": model, "input": ["The local Worker is ready."]}, None
-    if capability_id == "scene-analysis":
-        return (
-            "/native/vision-language/smoke",
-            None,
-            {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")},
-        )
-    if capability_id == "text-refinement":
-        return (
-            "/v1/refine",
-            {
-                "model": model,
-                "prompt": "A local Worker is ready.",
-                "denoising_steps": 4,
-                "seed": 7,
-            },
-            None,
-        )
-    if capability_id == "speech-conversation":
-        return "/smoke", None, None
-    if capability_id in {"translation-en-fr", "translation-en-de"}:
-        return "/native/text-translation/smoke", None, None
-    if capability_id == "speech-synthesis":
-        return "/native/speech-synthesis/smoke", None, None
-    if capability_id == "speech-recognition":
-        return "/native/speech-recognition/smoke", None, None
-    raise HTTPException(409, "This capability has no bounded qualification adapter")
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return probe_request.path, probe_request.body, probe_request.headers
 
 
 def _image_chat_smoke_body(model: str) -> dict[str, object]:
-    # A fixed, local 1x1 PNG keeps qualification bounded and requires no file or network access.
-    image_url = (
-        "data:image/png;base64,"
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
-        "AAAAASUVORK5CYII="
-    )
-    return {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": "Reply with the word ready."},
-                ],
-            }
-        ],
-        "max_tokens": 4,
-        "temperature": 0,
-        "stream": False,
-    }
+    return image_chat_probe_body(model)
 
 
 def _worker_smoke_request(definition: WorkerDefinition):
-    model = definition.to_profile().alias
-    if definition.runtime in {"llama-vulkan", "qwen38-llamacpp-vulkan"}:
-        return (
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with the word ready."}],
-                "max_tokens": 4,
-                "temperature": 0,
-                "stream": False,
-            },
-            None,
-        )
-    if definition.generation_family == "autoregressive":
-        return (
-            "/native/autoregressive/trace",
-            {
-                "model": model,
-                "prompt": "Reply with the word ready.",
-                "max_tokens": 4,
-                "temperature": 0,
-                "top_k": 3,
-                "seed": 7,
-            },
-            None,
-        )
-    if definition.generation_family == "embedding":
-        return (
-            "/v1/embeddings",
-            {"model": model, "input": ["The local Worker is ready."]},
-            None,
-        )
-    if definition.generation_family == "vision-language":
-        return (
-            "/native/vision-language/smoke",
-            None,
-            {"Authorization": "Bearer " + os.environ.get("MODELDECK_SCENECHAT_API_KEY", "local")},
-        )
-    if definition.generation_family == "speech-conversation":
-        return "/smoke", None, None
-    if definition.generation_family == "text-diffusion":
-        return (
-            "/v1/refine",
-            {
-                "model": model,
-                "prompt": "A local Worker is ready.",
-                "denoising_steps": 4,
-                "seed": 7,
-            },
-            None,
-        )
-    if definition.generation_family == "text-translation":
-        return "/native/text-translation/smoke", None, None
-    if definition.generation_family == "speech-synthesis":
-        return "/native/speech-synthesis/smoke", None, None
-    if definition.generation_family == "speech-recognition":
-        return "/native/speech-recognition/smoke", None, None
-    raise HTTPException(409, "This Worker family does not support an automatic smoke test")
+    return _worker_capability_request(definition, _worker_smoke_capability_id(definition))
 
 
-def _has_smoke_evidence(definition: WorkerDefinition, payload: dict[str, object]) -> bool:
-    if definition.generation_family != "embedding":
-        return bool(
-            payload.get("events") or payload.get("frames") or payload.get("ok") or payload.get("choices")
-        )
-    data = payload.get("data")
-    if not isinstance(data, list) or not data:
-        return False
-    for index, item in enumerate(data):
-        if not isinstance(item, dict) or item.get("object") != "embedding" or item.get("index") != index:
-            return False
-        vector = item.get("embedding")
-        if not isinstance(vector, list) or len(vector) != 1024:
-            return False
-        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in vector):
-            return False
-    return True
+def _worker_smoke_capability_id(definition: WorkerDefinition) -> str:
+    supported = capabilities_for_worker(definition.model_dump(mode="json"))
+    for capability_id in (
+        "general-chat",
+        "text-completion",
+        "autoregressive-trace",
+        "embeddings",
+        "general-image-chat",
+        "scene-analysis",
+        "text-refinement",
+        "speech-conversation",
+        "translation-en-fr",
+        "translation-en-de",
+        "speech-synthesis",
+        "speech-recognition",
+    ):
+        if capability_id in supported:
+            return capability_id
+    raise HTTPException(409, "This Worker has no bounded diagnostic adapter")
+
+
+def _has_smoke_evidence(
+    definition: WorkerDefinition,
+    payload: dict[str, object],
+    *,
+    capability_id: str | None = None,
+) -> bool:
+    selected = capability_id or _worker_smoke_capability_id(definition)
+    return validate_probe_response(probe_for_capability(selected), payload)
+
+
+def _classify_probe_failure(error: Exception, *, operation: str) -> tuple[str, str]:
+    if isinstance(error, httpx.TimeoutException):
+        return "transient-failure", f"{operation}-timeout"
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        if status_code in {404, 405}:
+            return "deterministic-failure", f"{operation}-adapter-mismatch"
+        if status_code in {400, 401, 403, 409, 415, 422}:
+            return "deterministic-failure", f"{operation}-request-rejected"
+        return "transient-failure", f"{operation}-worker-unavailable"
+    if isinstance(error, ValueError):
+        return "deterministic-failure", f"{operation}-malformed-response"
+    if isinstance(error, RuntimeError):
+        return "deterministic-failure", f"{operation}-invalid-response"
+    return "transient-failure", f"{operation}-transport-failure"

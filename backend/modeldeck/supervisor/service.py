@@ -39,6 +39,7 @@ class ManagedWorker:
     started_at: datetime | None = None
     last_error: str | None = None
     log_session_id: str | None = None
+    launch_environment: dict[str, str] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     def snapshot(self) -> dict[str, Any]:
@@ -122,6 +123,10 @@ class WorkerSupervisor:
             return records
         return [record for record in records if record.get("session_id") == worker.log_session_id]
 
+    def worker_environment(self, worker_id: str) -> dict[str, str | None]:
+        environment = self._require(worker_id).launch_environment
+        return {key: environment.get(key) for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "LD_PRELOAD")}
+
     async def start(self, worker_id: str) -> dict[str, Any]:
         worker = self._require(worker_id)
         async with self._load_lock, self._worker_locks[worker_id]:
@@ -163,6 +168,7 @@ class WorkerSupervisor:
                 worker.last_error = str(error)
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 raise RuntimeError(worker.last_error) from error
+            worker.launch_environment = dict(launch.environment)
             await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
             worker.log_session_id = uuid.uuid4().hex
             try:

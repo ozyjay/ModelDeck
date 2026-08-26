@@ -13,8 +13,11 @@ from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
 from modeldeck.migrate_v3_to_v4 import migrate as migrate_v3_to_v4
+from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
+from modeldeck.smoke_probes import PROTOCOL_PROBES, probe_for_capability, validate_probe_response
 from modeldeck.v2_api import (
     _capability_smoke_request,
+    _classify_probe_failure,
     _has_smoke_evidence,
     _rehearse_route_tool_calling,
     _valid_rehearsal_final_text,
@@ -171,14 +174,41 @@ def test_tested_working_profile_requires_matching_evidence() -> None:
     profile = routing_profile(worker.id, qualification="tested-working")
     assert validate_routing_profile(profile, [worker], [])["valid"] is False
     evidence = {
+        "id": 1,
         "result": "tested-working",
         "evidence": {
+            "worker_id": worker.id,
+            "capability_id": "autoregressive-trace",
+            "model_id": worker.model_id,
+            "model_revision": worker.revision,
+            "runtime": worker.runtime,
+            "worker_configuration_fingerprint": worker_configuration_fingerprint(
+                worker.model_dump(mode="json")
+            ),
+        },
+    }
+    assert validate_routing_profile(profile, [worker], [evidence])["valid"] is True
+
+
+def test_generic_worker_diagnostic_does_not_qualify_a_capability() -> None:
+    worker = worker_definition()
+    profile = routing_profile(worker.id, qualification="tested-working")
+    diagnostic = {
+        "id": 1,
+        "result": "tested-working",
+        "evidence": {
+            "evidence_kind": "worker-diagnostic",
+            "worker_id": worker.id,
             "model_id": worker.model_id,
             "model_revision": worker.revision,
             "runtime": worker.runtime,
         },
     }
-    assert validate_routing_profile(profile, [worker], [evidence])["valid"] is True
+
+    validation = validate_routing_profile(profile, [worker], [diagnostic])
+
+    assert validation["valid"] is False
+    assert validation["errors"][0]["message"] == "No matching tested-working evidence is recorded"
 
 
 def test_v4_profile_requires_capability_permission_and_exact_evidence() -> None:
@@ -215,7 +245,7 @@ def test_v4_profile_requires_capability_permission_and_exact_evidence() -> None:
 def test_worker_smoke_requests_use_worker_protocols() -> None:
     autoregressive = worker_definition()
     path, body, headers = _worker_smoke_request(autoregressive)
-    assert path == "/native/autoregressive/trace"
+    assert path == "/v1/chat/completions"
     assert body["max_tokens"] == 4
     assert headers is None
 
@@ -258,6 +288,40 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert path == "/v1/embeddings"
     assert body["input"] == ["The local Worker is ready."]
     assert headers is None
+
+
+def test_every_protocol_contract_has_an_explicit_probe_definition() -> None:
+    assert set(PROTOCOL_PROBES) == set(PROTOCOL_CONTRACTS)
+
+
+def test_protocol_probe_validation_rejects_structurally_empty_success_payloads() -> None:
+    chat = probe_for_capability("general-chat")
+    trace = probe_for_capability("autoregressive-trace")
+
+    assert validate_probe_response(chat, {"choices": [{}]}) is False
+    assert (
+        validate_probe_response(
+            chat,
+            {"choices": [{"message": {"role": "assistant", "content": "ready"}}]},
+        )
+        is True
+    )
+    assert validate_probe_response(trace, {"events": [{}]}) is False
+    assert validate_probe_response(trace, {"events": [{"token_id": 7, "token": "ready"}]}) is True
+
+
+def test_probe_failures_distinguish_adapter_mismatch_from_timeouts() -> None:
+    request = httpx.Request("POST", "http://127.0.0.1/native/missing")
+    response = httpx.Response(404, request=request)
+    mismatch = httpx.HTTPStatusError("not found", request=request, response=response)
+
+    assert _classify_probe_failure(mismatch, operation="worker-diagnostic") == (
+        "deterministic-failure",
+        "worker-diagnostic-adapter-mismatch",
+    )
+    assert _classify_probe_failure(
+        httpx.ReadTimeout("slow", request=request), operation="capability-qualification"
+    ) == ("transient-failure", "capability-qualification-timeout")
 
 
 def test_tool_calling_rehearsal_requires_exactly_one_named_json_call() -> None:

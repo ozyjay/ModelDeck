@@ -364,7 +364,6 @@ def capability_evidence_status(
     worker: Mapping[str, Any], capability_id: str, tests: Iterable[Mapping[str, Any]]
 ) -> tuple[str, int | None]:
     fingerprint = worker_configuration_fingerprint(worker)
-    legacy_worker = worker.get("capability_policy_version") is None
     stale = False
     failed: int | None = None
     for test in tests:
@@ -372,14 +371,8 @@ def capability_evidence_status(
         if not isinstance(evidence, Mapping):
             continue
         evidence_capability = evidence.get("capability_id")
-        if legacy_worker and evidence_capability is None:
-            legacy_match = (
-                evidence.get("model_id") == worker.get("model_id")
-                and evidence.get("model_revision") == worker.get("revision")
-                and evidence.get("runtime") == worker.get("runtime")
-            )
-            if legacy_match and test.get("result") == "tested-working":
-                return "legacy", int(test.get("id", 0)) or None
+        if evidence_capability is None:
+            # Generic Worker diagnostics do not prove any particular capability.
             continue
         if evidence.get("worker_id") != worker.get("id"):
             continue

@@ -96,6 +96,18 @@ async def test_supervisor_registers_and_removes_only_stopped_profiles() -> None:
         supervisor.get_worker(base.id)
 
 
+def test_supervisor_reports_the_environment_passed_to_the_worker() -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile])
+    supervisor.workers[profile.id].launch_environment = build_worker_launch(profile).environment
+
+    assert supervisor.worker_environment(profile.id) == {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "LD_PRELOAD": None,
+    }
+
+
 def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     runtime_python = tmp_path / "bin/python"

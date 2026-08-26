@@ -136,6 +136,84 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_check_is_diagnostic_and_does_not_record_compatibility_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    worker = worker_definition()
+    store.save_worker_definition(worker.model_dump(mode="json"))
+
+    class ProbeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url: str):
+            payload = {
+                "/health": {"ready": True, "device_name": "Test GPU"},
+                "/model": {"model_id": worker.model_id, "revision": worker.revision},
+                "/metrics": {"load_seconds": 1.25},
+            }[next(path for path in ("/health", "/model", "/metrics") if url.endswith(path))]
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+
+        async def post(self, url: str, *, json=None, headers=None):
+            assert url.endswith("/v1/chat/completions")
+            assert json["model"] == worker.to_profile().alias
+            assert headers is None
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": "ready"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(v2_api_module.httpx, "AsyncClient", lambda *args, **kwargs: ProbeClient())
+    monkeypatch.setattr(
+        v2_api_module,
+        "probe_environment",
+        lambda: {
+            "configured": {"profile_id": "test", "gpu_architecture": "test-gpu"},
+            "detected": {"fedora_release": "Test Fedora", "kernel": "test-kernel"},
+        },
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        monkeypatch.setattr(
+            app.state.supervisor,
+            "get_worker",
+            lambda _worker_id: {"state": "ready", "endpoint": "http://127.0.0.1:8630"},
+        )
+        monkeypatch.setattr(
+            app.state.supervisor,
+            "worker_environment",
+            lambda _worker_id: {
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "LD_PRELOAD": None,
+            },
+        )
+        async with real_async_client(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(f"/api/workers/{worker.id}/smoke")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["diagnostic"]["result"] == "diagnostic-passed"
+    assert payload["diagnostic"]["evidence"]["environment_overrides"] == {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "LD_PRELOAD": None,
+    }
+    assert store.list_tests() == []
+
+
+@pytest.mark.asyncio
 async def test_management_has_no_public_event_or_mock_worker_api(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
