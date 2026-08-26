@@ -97,6 +97,12 @@ class RuntimeTemplate(BaseModel):
             )
         if self.settings.get("execution_preset") not in {None, "vulkan-full"}:
             raise ValueError("runtime template execution preset is not trusted")
+        if self.settings.get("runtime_profile") not in {
+            None,
+            "qwen38-q8-mtp-vulkan",
+            "qwen38-q4-mtp-vulkan",
+        }:
+            raise ValueError("runtime template llama.cpp profile is not trusted")
         for name in ("hardware_verification_required", "hsa_preload_evidence"):
             if name in self.settings and not isinstance(self.settings[name], bool):
                 raise ValueError(f"runtime template setting {name} must be boolean")

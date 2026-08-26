@@ -128,6 +128,12 @@ def create_local_profile(
                 "prefix_cache_enabled": request.prefix_cache_enabled,
             }
         )
+    profile_dtype = template.dtype or request.dtype
+    if template.runtime == "qwen38-llamacpp-vulkan":
+        profile_dtype = {
+            "qwen38-q8-mtp-vulkan": "q8_0",
+            "qwen38-q4-mtp-vulkan": "q4_k_m",
+        }[str(settings["runtime_profile"])]
     return ModelProfile(
         id=f"local-{request.profile_name or request.alias}",
         model_id=base_model_id if template.uses_base_model_identity else request.model_id,
@@ -143,7 +149,7 @@ def create_local_profile(
         port=port,
         local_files_only=True,
         trust_remote_code=False,
-        dtype=template.dtype or request.dtype,
+        dtype=profile_dtype,
         capabilities=capabilities,
         settings=settings,
     )

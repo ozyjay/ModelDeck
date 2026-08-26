@@ -654,6 +654,39 @@ def _llama_vulkan_launch(
     )
 
 
+def _qwen38_llamacpp_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    if profile.model_id != "ggml-org/Qwen3.8-27B-GGUF":
+        raise ValueError("The Qwen3.8 llama.cpp runtime is allowlisted only for its pinned GGUF repository")
+    artifact_path = profile.settings.get("artifact_path")
+    runtime_profile = profile.settings.get("runtime_profile")
+    if not artifact_path or runtime_profile not in {
+        "qwen38-q8-mtp-vulkan",
+        "qwen38-q4-mtp-vulkan",
+    }:
+        raise ValueError("Qwen3.8 llama.cpp requires an allowlisted GGUF profile and artefact")
+    if int(profile.settings.get("context_length", 8192)) != 8192:
+        raise ValueError("The reviewed Qwen3.8 llama.cpp candidate is limited to an 8,192-token context")
+    return WorkerLaunch(
+        command=[
+            sys.executable,
+            "-m",
+            "modeldeck.workers.llama_vulkan_worker",
+            *common,
+            "--artifact-path",
+            str(artifact_path),
+            "--context-length",
+            str(profile.settings.get("context_length", 8192)),
+            "--maximum-new-tokens",
+            str(profile.settings.get("maximum_new_tokens", 512)),
+            "--runtime-profile",
+            str(runtime_profile),
+        ],
+        environment=environment,
+    )
+
+
 def _moshiko_launch(profile: ModelProfile, environment: dict[str, str], common: list[str]) -> WorkerLaunch:
     python = Path(os.environ.get("MODELDECK_MOSHIKO_PYTHON", ".venv-moshi-rocm72/bin/python")).expanduser()
     if not python.is_file():
@@ -858,6 +891,7 @@ TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "text-diffusion-transformers-rocm": _text_diffusion_launch,
     "text-diffusion-gptq-rocm": _text_diffusion_launch,
     "llama-vulkan": _llama_vulkan_launch,
+    "qwen38-llamacpp-vulkan": _qwen38_llamacpp_launch,
     "moshiko-rocm": _moshiko_launch,
     "marian-transformers-cpu": _translation_launch,
     "qwen3-tts-rocm": _qwen_tts_launch,

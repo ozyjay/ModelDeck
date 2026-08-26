@@ -33,6 +33,7 @@ CAPABILITY_DEFINITIONS = {
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
                 "qwen38-fp8-chat-transformers-rocm",
+                "qwen38-llamacpp-q8-mtp-vulkan",
             ),
         ),
         CapabilityDefinition(
@@ -46,6 +47,7 @@ CAPABILITY_DEFINITIONS = {
                 "gpt-oss-llama-vulkan",
                 "qwen35-chat-transformers-rocm",
                 "qwen38-fp8-chat-transformers-rocm",
+                "qwen38-llamacpp-q8-mtp-vulkan",
             ),
         ),
         CapabilityDefinition(
@@ -70,7 +72,7 @@ CAPABILITY_DEFINITIONS = {
             "Open-ended conversation grounded in one or more images.",
             None,
             ("text-input", "image-input", "text-output", "chat"),
-            (),
+            ("qwen38-llamacpp-q8-mtp-vulkan",),
         ),
         CapabilityDefinition(
             "video-understanding",

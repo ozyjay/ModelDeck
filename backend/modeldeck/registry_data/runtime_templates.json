@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -106,6 +106,16 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 256, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "execution_preset": "vulkan-full", "hardware_verification_required": true},
+      "cache_setting": "artifact_path",
+      "lifecycle": "exclusive"
+    },
+    {
+      "id": "qwen38-llamacpp-q8-mtp-vulkan",
+      "display_name": "Qwen3.8 27B Q8 llama.cpp Vulkan MTP",
+      "runtime": "qwen38-llamacpp-vulkan",
+      "generation_family": "autoregressive",
+      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "image_input": true, "structured_output": true, "tool_calling": true, "reasoning": true, "mtp": true},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 512, "startup_timeout_seconds": 900, "warmup_timeout_seconds": 180, "runtime_profile": "qwen38-q8-mtp-vulkan", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
       "lifecycle": "exclusive"
     },

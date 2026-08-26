@@ -6,7 +6,9 @@ import json
 import os
 import re
 import signal
+import socket
 import time
+from collections import deque
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -16,12 +18,41 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from modeldeck.llama_runtime import (
+    ValidatedQwenRuntime,
+    configuration_fingerprint,
+    validate_qwen_runtime,
+)
 from modeldeck.protocol import GenerationFamily
 
 REASONING_MARKERS = re.compile(
     r"<\|(?:analysis|reasoning|channel)[^>]*\>.*?<\|(?:end|final)[^>]*\>", re.DOTALL
 )
 AMD_VENDOR_ID = "0x1002"
+QWEN_OPENAI_REQUEST_FIELDS = frozenset(
+    {
+        "frequency_penalty",
+        "logit_bias",
+        "max_completion_tokens",
+        "max_tokens",
+        "messages",
+        "model",
+        "n",
+        "presence_penalty",
+        "prompt",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "stop",
+        "stream",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p",
+        "user",
+    }
+)
 
 
 def fixed_llama_server() -> Path:
@@ -65,6 +96,125 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
     return command
 
 
+def qwen_llama_command(*, runtime: ValidatedQwenRuntime, port: int) -> list[str]:
+    manifest = runtime.manifest
+    return [
+        str(runtime.executable),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--model",
+        str(runtime.model),
+        "--mmproj",
+        str(runtime.projector),
+        "--ctx-size",
+        str(manifest.context_length),
+        "--parallel",
+        "1",
+        "--device",
+        "Vulkan0",
+        "--gpu-layers",
+        "all",
+        "--fit",
+        "off",
+        "--flash-attn",
+        "on",
+        "--cache-type-k",
+        manifest.cache_type_k,
+        "--cache-type-v",
+        manifest.cache_type_v,
+        "--jinja",
+        "--reasoning-format",
+        "deepseek",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-model",
+        str(runtime.mtp_model),
+        "--spec-draft-device",
+        "Vulkan0",
+        "--spec-draft-ngl",
+        "all",
+        "--spec-draft-n-max",
+        str(manifest.mtp_draft_tokens),
+        "--metrics",
+        "--slots",
+        "--offline",
+        "--log-colors",
+        "off",
+    ]
+
+
+def allocate_private_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+class LlamaEvidence:
+    """Bounded startup evidence and speculative-decoding metrics from llama-server."""
+
+    _DRAFT = re.compile(
+        r"draft acceptance\s*=\s*([0-9.]+)\s*\(\s*(\d+) accepted\s*/\s*(\d+) generated",
+        re.IGNORECASE,
+    )
+    _PROMPT = re.compile(r"prompt eval time.+?([0-9.]+) tokens per second", re.IGNORECASE)
+    _GENERATION = re.compile(r"eval time.+?([0-9.]+) tokens per second", re.IGNORECASE)
+
+    def __init__(self) -> None:
+        self.lines: deque[str] = deque(maxlen=500)
+        self.backend_vulkan = False
+        self.device_expected = False
+        self.full_offload = False
+        self.architecture_qwen = False
+        self.quantisation_loaded = False
+        self.projector_loaded = False
+        self.mtp_enabled = False
+        self.draft_proposed = 0
+        self.draft_accepted = 0
+        self.acceptance_ratio: float | None = None
+        self.prompt_tokens_per_second: float | None = None
+        self.generated_tokens_per_second: float | None = None
+
+    def feed(self, line: str, *, quantisation: str) -> None:
+        self.lines.append(line)
+        lowered = line.casefold()
+        self.backend_vulkan |= "vulkan" in lowered
+        self.device_expected |= "vulkan0" in lowered and any(
+            marker in lowered for marker in ("radeon", "amd", "gfx1151")
+        )
+        self.full_offload |= bool(
+            re.search(r"offload(?:ed|ing).*(?:all|\d+\s*/\s*\d+).*layer", lowered)
+            or "all layers to gpu" in lowered
+        )
+        self.architecture_qwen |= "qwen35" in lowered or "qwen3.8" in lowered
+        self.quantisation_loaded |= quantisation.casefold() in lowered
+        self.projector_loaded |= "mmproj" in lowered and any(
+            marker in lowered for marker in ("load", "vision", "projector")
+        )
+        self.mtp_enabled |= "draft-mtp" in lowered or "spec_type" in lowered and "mtp" in lowered
+        if match := self._DRAFT.search(line):
+            self.acceptance_ratio = float(match.group(1))
+            self.draft_accepted = int(match.group(2))
+            self.draft_proposed = int(match.group(3))
+        if match := self._PROMPT.search(line):
+            self.prompt_tokens_per_second = float(match.group(1))
+        elif match := self._GENERATION.search(line):
+            self.generated_tokens_per_second = float(match.group(1))
+
+    def startup_errors(self) -> list[str]:
+        checks = {
+            "Vulkan backend": self.backend_vulkan,
+            "expected AMD Vulkan device": self.device_expected,
+            "complete GPU layer offload": self.full_offload,
+            "Qwen3.8 architecture": self.architecture_qwen,
+            "expected quantisation": self.quantisation_loaded,
+            "BF16 vision projector": self.projector_loaded,
+            "MTP speculative decoder": self.mtp_enabled,
+        }
+        return [name for name, passed in checks.items() if not passed]
+
+
 def remove_reasoning(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -77,6 +227,21 @@ def remove_reasoning(value: Any) -> Any:
     if isinstance(value, str):
         return REASONING_MARKERS.sub("", value)
     return value
+
+
+def qwen_request(body: Any, *, model_id: str, maximum_new_tokens: int) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    result = {key: value for key, value in body.items() if key in QWEN_OPENAI_REQUEST_FIELDS}
+    result["model"] = model_id
+    requested = result.get("max_completion_tokens", result.get("max_tokens"))
+    if isinstance(requested, bool) or (
+        requested is not None and (not isinstance(requested, int) or requested < 1)
+    ):
+        raise ValueError("max_tokens must be a positive integer")
+    if isinstance(requested, int) and requested > maximum_new_tokens:
+        raise ValueError("max_tokens exceeds the configured generation limit")
+    return result
 
 
 def amd_gpu_memory_metrics() -> dict[str, int]:
@@ -102,37 +267,66 @@ def amd_gpu_memory_metrics() -> dict[str, int]:
 class LlamaProcess:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.internal_port = args.port + 1000
+        # Allocated immediately before launch so constructing an app never reserves a port.
+        self.internal_port = 0
         # Keep the catalogue-approved snapshot filename for the strict GGUF allowlist.
         # Hugging Face snapshots are symlinks whose resolved blob names are opaque hashes.
         self.artifact_path = Path(args.artifact_path).absolute()
         self.process: asyncio.subprocess.Process | None = None
+        self.log_tasks: list[asyncio.Task[None]] = []
+        self.restart_lock = asyncio.Lock()
+        self.evidence = LlamaEvidence()
+        self.qwen_runtime: ValidatedQwenRuntime | None = None
         self.memory_task: asyncio.Task[None] | None = None
         self.peak_gtt_used_bytes: int | None = None
         self.started = time.monotonic()
         self.load_seconds: float | None = None
+        self.last_time_to_first_token_seconds: float | None = None
 
     async def start(self) -> None:
-        command = llama_command(
-            model=self.artifact_path,
-            port=self.internal_port,
-            context_length=self.args.context_length,
-            preset=self.args.execution_preset,
-        )
+        self.started = time.monotonic()
+        self.internal_port = allocate_private_port()
+        self.evidence = LlamaEvidence()
+        if getattr(self.args, "runtime_profile", None):
+            self.qwen_runtime = validate_qwen_runtime(self.args.runtime_profile, self.artifact_path.parent)
+            if self.args.context_length != self.qwen_runtime.manifest.context_length:
+                raise ValueError("Configured context length does not match the trusted Qwen manifest")
+            command = qwen_llama_command(runtime=self.qwen_runtime, port=self.internal_port)
+        else:
+            command = llama_command(
+                model=self.artifact_path,
+                port=self.internal_port,
+                context_length=self.args.context_length,
+                preset=self.args.execution_preset,
+            )
         environment = dict(os.environ)
         environment["GGML_VK_VISIBLE_DEVICES"] = "0"
-        self.process = await asyncio.create_subprocess_exec(*command, env=environment)
+        self.process = await asyncio.create_subprocess_exec(
+            *command,
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.log_tasks = [
+            asyncio.create_task(self._capture(self.process.stdout)),
+            asyncio.create_task(self._capture(self.process.stderr)),
+        ]
         self.memory_task = asyncio.create_task(self._sample_gpu_memory())
 
     async def stop(self) -> None:
         try:
             if self.process is None or self.process.returncode is not None:
                 return
-            self.process.send_signal(signal.SIGTERM)
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=8)
             except TimeoutError:
-                self.process.kill()
+                with suppress(ProcessLookupError):
+                    os.killpg(self.process.pid, signal.SIGKILL)
                 await self.process.wait()
         finally:
             if self.memory_task is not None:
@@ -140,6 +334,25 @@ class LlamaProcess:
                 with suppress(asyncio.CancelledError):
                     await self.memory_task
                 self.memory_task = None
+            for task in self.log_tasks:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            self.log_tasks.clear()
+
+    async def restart(self) -> None:
+        async with self.restart_lock:
+            await self.stop()
+            self.process = None
+            self.load_seconds = None
+            await self.start()
+
+    async def _capture(self, stream: asyncio.StreamReader | None) -> None:
+        if stream is None:
+            return
+        quantisation = self.qwen_runtime.manifest.quantisation if self.qwen_runtime else "mxfp4"
+        while line := await stream.readline():
+            self.evidence.feed(line.decode(errors="replace").rstrip(), quantisation=quantisation)
 
     def memory_metrics(self) -> dict[str, int]:
         metrics = amd_gpu_memory_metrics()
@@ -161,15 +374,17 @@ class LlamaProcess:
         try:
             async with httpx.AsyncClient(timeout=0.5) as client:
                 response = await client.get(f"http://127.0.0.1:{self.internal_port}/health")
-            if response.is_success and self.load_seconds is None:
+            verified = not self.qwen_runtime or not self.evidence.startup_errors()
+            if response.is_success and verified and self.load_seconds is None:
                 self.load_seconds = round(time.monotonic() - self.started, 4)
-            return response.is_success
+            return response.is_success and verified
         except httpx.HTTPError:
             return False
 
 
 def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
+    is_qwen = bool(getattr(args, "runtime_profile", None))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -177,12 +392,13 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         yield
         await runtime.stop()
 
-    app = FastAPI(title="ModelDeck GPT-OSS Vulkan worker", lifespan=lifespan)
+    app = FastAPI(title="ModelDeck llama.cpp Vulkan worker", lifespan=lifespan)
     app.state.shutdown_callback = None
 
     @app.get("/health")
     async def health():
         ready = await runtime.ready()
+        manifest = runtime.qwen_runtime.manifest if runtime.qwen_runtime else None
         return {
             "protocol_version": "1",
             "worker_id": args.worker_id,
@@ -192,19 +408,48 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "model_id": args.model_id,
             "model_revision": args.revision,
             "device": "vulkan:0",
-            "device_name": "AMD Vulkan",
+            "device_name": "AMD Radeon 8060S (Vulkan)" if manifest else "AMD Vulkan",
             "rocm_version": None,
             "ready": ready,
+            **(
+                {
+                    "runtime_profile": manifest.id,
+                    "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
+                    "verified_capabilities": (
+                        [
+                            "chat",
+                            "completions",
+                            "streaming",
+                            "cancellation",
+                            "image_input",
+                            "structured_output",
+                            "tool_calling",
+                            "reasoning",
+                            "mtp",
+                        ]
+                        if ready
+                        else []
+                    ),
+                }
+                if manifest
+                else {}
+            ),
         }
 
     @app.post("/warmup")
     async def warmup():
         if not await runtime.ready():
             return JSONResponse({"ready": False}, status_code=503)
-        payload = {"prompt": "Hello", "n_predict": 1, "temperature": 0}
+        payload = {
+            "prompt": "Continue the sequence with one number per token: 1 1 1 1 1 1 1 1",
+            "n_predict": 32 if is_qwen else 1,
+            "temperature": 0,
+        }
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(f"http://127.0.0.1:{runtime.internal_port}/completion", json=payload)
-        return JSONResponse({"ready": response.is_success}, status_code=200 if response.is_success else 503)
+        mtp_verified = not is_qwen or runtime.evidence.draft_accepted > 0
+        ready = response.is_success and mtp_verified
+        return JSONResponse({"ready": ready, "mtp_verified": mtp_verified}, status_code=200 if ready else 503)
 
     @app.get("/v1/models")
     async def models():
@@ -212,14 +457,37 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     @app.get("/model")
     async def model():
+        manifest = runtime.qwen_runtime.manifest if runtime.qwen_runtime else None
         return {
             "model_id": args.model_id,
             "revision": args.revision,
             "generation_family": GenerationFamily.AUTOREGRESSIVE,
             "local_files_only": True,
             "trust_remote_code": False,
-            "dtype": "mxfp4",
-            "quantization": "mxfp4",
+            "dtype": manifest.quantisation if manifest else "mxfp4",
+            "quantization": manifest.quantisation if manifest else "mxfp4",
+            **(
+                {
+                    "original_model_id": manifest.original_model_id,
+                    "original_model_revision": manifest.original_model_revision,
+                    "artefact_model_id": manifest.artefact_model_id,
+                    "artefact_revision": manifest.artefact_revision,
+                    "gguf_sha256": manifest.model.sha256,
+                    "projector_sha256": manifest.projector.sha256,
+                    "mtp_model_sha256": manifest.mtp_model.sha256,
+                    "llama_cpp_commit": manifest.llama_cpp_commit,
+                    "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
+                    "backend": manifest.backend,
+                    "context_length": manifest.context_length,
+                    "cache_type_k": manifest.cache_type_k,
+                    "cache_type_v": manifest.cache_type_v,
+                    "mtp_enabled": True,
+                    "mtp_draft_tokens": manifest.mtp_draft_tokens,
+                    "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
+                }
+                if manifest
+                else {}
+            ),
         }
 
     @app.get("/metrics")
@@ -228,13 +496,42 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "runtime": "llama-vulkan",
             "execution_preset": args.execution_preset,
             "load_seconds": runtime.load_seconds,
+            "mtp_enabled": bool(runtime.qwen_runtime),
+            "mtp_draft_tokens": (
+                runtime.qwen_runtime.manifest.mtp_draft_tokens if runtime.qwen_runtime else 0
+            ),
+            "draft_proposed_tokens": runtime.evidence.draft_proposed,
+            "draft_accepted_tokens": runtime.evidence.draft_accepted,
+            "draft_rejected_tokens": max(
+                0, runtime.evidence.draft_proposed - runtime.evidence.draft_accepted
+            ),
+            "mtp_acceptance_ratio": runtime.evidence.acceptance_ratio,
+            "prompt_tokens_per_second": runtime.evidence.prompt_tokens_per_second,
+            "generated_tokens_per_second": runtime.evidence.generated_tokens_per_second,
+            "time_to_first_token_seconds": runtime.last_time_to_first_token_seconds,
+            "throughput_basis": "effective_mtp" if runtime.qwen_runtime else "backend_reported",
             **runtime.memory_metrics(),
         }
 
     async def proxy(request: Request, path: str):
-        body = await request.json()
+        raw_body = await request.json()
+        try:
+            body = (
+                qwen_request(
+                    raw_body,
+                    model_id=args.model_id,
+                    maximum_new_tokens=args.maximum_new_tokens,
+                )
+                if is_qwen
+                else raw_body
+            )
+        except ValueError as error:
+            return JSONResponse(
+                {"error": {"code": "invalid_request", "message": str(error)}}, status_code=400
+            )
         body["model"] = args.model_id
-        client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=1))
+        request_started = time.monotonic()
+        client = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=1))
         try:
             response = await client.send(
                 client.build_request("POST", f"http://127.0.0.1:{runtime.internal_port}{path}", json=body),
@@ -242,25 +539,37 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             )
         except httpx.HTTPError:
             await client.aclose()
+            if runtime.process is None or runtime.process.returncode is not None:
+                await runtime.restart()
             return JSONResponse({"error": {"code": "llama_runtime_unavailable"}}, status_code=503)
         if body.get("stream"):
 
             async def filtered_stream():
                 try:
                     async for line in response.aiter_lines():
-                        if line.startswith("data: ") and line != "data: [DONE]":
+                        if runtime.last_time_to_first_token_seconds is None and line.startswith("data: "):
+                            runtime.last_time_to_first_token_seconds = round(
+                                time.monotonic() - request_started, 6
+                            )
+                        if not is_qwen and line.startswith("data: ") and line != "data: [DONE]":
                             try:
                                 line = "data: " + json.dumps(remove_reasoning(json.loads(line[6:])))
                             except json.JSONDecodeError:
                                 continue
                         yield (line + "\n").encode()
+                except asyncio.CancelledError:
+                    await runtime.restart()
+                    raise
                 finally:
                     await response.aclose()
                     await client.aclose()
 
             return StreamingResponse(filtered_stream(), media_type="text/event-stream")
         try:
-            return JSONResponse(remove_reasoning(response.json()), status_code=response.status_code)
+            payload = response.json()
+            return JSONResponse(
+                payload if is_qwen else remove_reasoning(payload), status_code=response.status_code
+            )
         finally:
             await response.aclose()
             await client.aclose()
@@ -275,7 +584,8 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
     @app.post("/cancel")
     async def cancel():
-        return {"ok": False, "reason": "Cancellation is driven by closing the streaming request"}
+        await runtime.restart()
+        return {"ok": True, "runtime_recreated": True}
 
     @app.post("/shutdown")
     async def shutdown():
@@ -293,6 +603,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--artifact-path", required=True)
+    parser.add_argument(
+        "--runtime-profile",
+        choices=("qwen38-q8-mtp-vulkan", "qwen38-q4-mtp-vulkan"),
+    )
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=256)
     parser.add_argument(

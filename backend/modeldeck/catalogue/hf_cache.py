@@ -59,6 +59,25 @@ def _weight_files_complete(paths: list[Path]) -> bool:
 
 
 def _artifacts(snapshot: Path, repo_id: str) -> list[dict[str, Any]]:
+    if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
+        shared = ["mmproj-Qwen3.8-27B-BF16.gguf"]
+        candidates = (
+            (
+                "qwen38-27b-q8-mtp",
+                "Q8_0",
+                ["Qwen3.8-27B-Q8_0.gguf", *shared, "mtp-Qwen3.8-27B-Q8_0.gguf"],
+            ),
+            (
+                "qwen38-27b-q4-k-m-mtp-experimental",
+                "Q4_K_M",
+                ["Qwen3.8-27B-Q4_K_M.gguf", *shared, "mtp-Qwen3.8-27B-Q4_0.gguf"],
+            ),
+        )
+        return [
+            {"artifact_id": artifact_id, "kind": "gguf", "format": format_name, "filenames": names}
+            for artifact_id, format_name, names in candidates
+            if all((snapshot / name).is_file() for name in names)
+        ]
     if repo_id != "ggml-org/gpt-oss-120b-GGUF":
         return []
     consolidated = snapshot / "gpt-oss-120b-MXFP4.gguf"
@@ -106,6 +125,8 @@ def _generation_family(snapshot: Path, repo_id: str = "") -> str | None:
     if repo_id == "kyutai/moshiko-pytorch-bf16":
         return "speech-conversation"
     if repo_id == "ggml-org/gpt-oss-120b-GGUF":
+        return "autoregressive"
+    if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
         return "autoregressive"
     if repo_id == "Qwen/Qwen3-Embedding-0.6B":
         return "embedding"
@@ -185,6 +206,16 @@ def _configuration_support(snapshot: Path, repo_id: str = "", revision: str = ""
             "The GPT-OSS MXFP4 GGUF snapshot must contain the official consolidated "
             "artefact or all three legacy shards."
         )
+    if repo_id == "ggml-org/Qwen3.8-27B-GGUF":
+        if revision != "97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827":
+            return None, "The Qwen3.8 GGUF snapshot revision is not the reviewed immutable revision."
+        artefacts = _artifacts(snapshot, repo_id)
+        if any(item["artifact_id"] == "qwen38-27b-q8-mtp" for item in artefacts):
+            return "qwen38-llamacpp-q8-mtp-vulkan", (
+                "Supported by the pinned Qwen3.8 llama.cpp Vulkan Q8 MTP candidate; "
+                "hardware qualification is required."
+            )
+        return None, "The reviewed Q8 model, BF16 projector and Q8 MTP artefacts must all be present."
     if repo_id == "Qwen/Qwen3-Embedding-0.6B":
         return "embedding-transformers", "Supported by the local 1024-dimensional embeddings ROCm worker."
     try:

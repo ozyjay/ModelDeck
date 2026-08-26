@@ -383,6 +383,46 @@ def test_gpt_oss_consolidated_gguf_is_configurable(tmp_path: Path) -> None:
     ]
 
 
+def test_qwen38_gguf_requires_exact_revision_and_complete_q8_companions(tmp_path: Path) -> None:
+    revision = "97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827"
+    snapshot = tmp_path / "models--ggml-org--Qwen3.8-27B-GGUF" / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    for filename in (
+        "Qwen3.8-27B-Q8_0.gguf",
+        "mmproj-Qwen3.8-27B-BF16.gguf",
+        "mtp-Qwen3.8-27B-Q8_0.gguf",
+    ):
+        (snapshot / filename).write_bytes(b"gguf")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["generation_family_hint"] == "autoregressive"
+    assert model["configuration_support"] == "qwen38-llamacpp-q8-mtp-vulkan"
+    assert model["artifacts"] == [
+        {
+            "artifact_id": "qwen38-27b-q8-mtp",
+            "kind": "gguf",
+            "format": "Q8_0",
+            "filenames": [
+                "Qwen3.8-27B-Q8_0.gguf",
+                "mmproj-Qwen3.8-27B-BF16.gguf",
+                "mtp-Qwen3.8-27B-Q8_0.gguf",
+            ],
+        }
+    ]
+
+
+def test_qwen38_gguf_mutable_or_incomplete_snapshot_is_not_allowlisted(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--ggml-org--Qwen3.8-27B-GGUF" / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "Qwen3.8-27B-Q8_0.gguf").write_bytes(b"gguf")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["configuration_support"] is None
+    assert "not the reviewed immutable revision" in model["configuration_support_reason"]
+
+
 def test_identifies_diffusiongemma_configuration_support(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--google--diffusiongemma" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)

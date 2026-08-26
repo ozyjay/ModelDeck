@@ -208,6 +208,35 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             cache_settings=frozenset({"artifact_path"}),
         ),
         TrustedRuntimeImplementation(
+            id="qwen38-llamacpp-vulkan",
+            display_name="Qwen3.8 llama.cpp Vulkan with MTP",
+            generation_family=GenerationFamily.AUTOREGRESSIVE,
+            capabilities=frozenset(
+                {
+                    "chat",
+                    "completions",
+                    "streaming",
+                    "cancellation",
+                    "image_input",
+                    "structured_output",
+                    "tool_calling",
+                    "reasoning",
+                    "mtp",
+                }
+            ),
+            template_settings=frozenset(
+                {
+                    "context_length",
+                    "maximum_new_tokens",
+                    "startup_timeout_seconds",
+                    "warmup_timeout_seconds",
+                    "runtime_profile",
+                    "hardware_verification_required",
+                }
+            ),
+            cache_settings=frozenset({"artifact_path"}),
+        ),
+        TrustedRuntimeImplementation(
             id="moshiko-rocm",
             display_name="Moshiko ROCm",
             generation_family=GenerationFamily.SPEECH_CONVERSATION,

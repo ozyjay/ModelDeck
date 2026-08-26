@@ -57,6 +57,9 @@ class CapabilitySet(BaseModel):
     seeded_generation: bool = False
     image_input: bool = False
     structured_output: bool = False
+    tool_calling: bool = False
+    reasoning: bool = False
+    mtp: bool = False
     audio_input: bool = False
     audio_output: bool = False
     full_duplex: bool = False

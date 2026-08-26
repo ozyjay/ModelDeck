@@ -447,7 +447,7 @@ class BenchmarkRunner:
         }
 
     def run_workload(self, profile: dict[str, Any]) -> dict[str, Any]:
-        if profile.get("runtime") == "llama-vulkan":
+        if profile.get("runtime") in {"llama-vulkan", "qwen38-llamacpp-vulkan"}:
             return self.run_llama_vulkan(profile)
         family = profile["generation_family"]
         if family == "autoregressive":
@@ -550,6 +550,14 @@ def build_fingerprint_fields(
         "quantisation": model.get("quantization", "none"),
         "dtype": model.get("dtype", profile.get("dtype")),
         "runtime": profile.get("runtime"),
+        "runtime_profile": model.get("runtime_profile"),
+        "configuration_fingerprint": model.get("configuration_fingerprint"),
+        "llama_cpp_commit": model.get("llama_cpp_commit"),
+        "gguf_sha256": model.get("gguf_sha256"),
+        "projector_sha256": model.get("projector_sha256"),
+        "mtp_model_sha256": model.get("mtp_model_sha256"),
+        "mtp_enabled": metrics.get("mtp_enabled"),
+        "mtp_draft_tokens": metrics.get("mtp_draft_tokens"),
         "environment_overrides": {
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",

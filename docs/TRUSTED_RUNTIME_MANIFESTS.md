@@ -63,3 +63,8 @@ Adding a genuinely new worker implementation still requires reviewed ModelDeck c
 constructs its argument array and bounded environment. Once that implementation exists,
 separately versioned template packages can safely expose supported presets without another
 browser feature or hard-wired deployment card.
+
+The Qwen3.8 llama.cpp worker adds a second, code-owned artefact manifest because a template
+digest alone cannot establish trust in a native executable or multi-file GGUF runtime. See
+`docs/QWEN38_LLAMACPP_VULKAN.md` for the fixed build receipt, model checks and qualification
+gate.
