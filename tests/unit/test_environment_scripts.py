@@ -9,6 +9,7 @@ HELPERS = PROJECT_ROOT / "scripts/lib/environment_helpers.psm1"
 MODELDECK_HELPERS = PROJECT_ROOT / "scripts/lib/modeldeck_helpers.psm1"
 RUN_SCRIPT = PROJECT_ROOT / "scripts/operations/run.ps1"
 STOP_SCRIPT = PROJECT_ROOT / "scripts/operations/stop.ps1"
+STOP_STALE_WORKERS_SCRIPT = PROJECT_ROOT / "scripts/operations/stop_stale_workers.ps1"
 CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts/operations/check_ports.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
@@ -127,6 +128,7 @@ def test_stop_script_reports_each_shutdown_stage_and_service_outcome() -> None:
     assert "did not stop gracefully; forcing process" in script
     assert "gateway-docker-bridge" in script
     assert "gateway-loopback" in script
+    assert "'stop_stale_workers.ps1')\n" in script
 
 
 def test_stop_script_recovers_project_local_services_without_pid_files() -> None:
@@ -136,6 +138,18 @@ def test_stop_script_recovers_project_local_services_without_pid_files() -> None
     assert ".venv/bin/modeldeck-gateway" in script
     assert "recovered untracked" in script
     assert "modeldeck.gateway.app" in script
+
+
+def test_stale_worker_cleanup_covers_all_managed_workers_and_private_llama_server() -> None:
+    script = STOP_STALE_WORKERS_SCRIPT.read_text(encoding="utf-8")
+
+    assert "@(8610..8624)" in script
+    assert "modeldeck.workers.llama_vulkan_worker" in script
+    assert "modeldeck.workers.qwen35_chat_worker" in script
+    assert "modeldeck.workers.scenechat_worker" in script
+    assert '"$Root/.runtime-tools/llama.cpp/bin/llama-server"' in script
+    assert "private llama-server" in script
+    assert "$Arguments[0] -eq $TrustedLlamaServer" in script
 
 
 def test_port_check_preserves_the_binding_details_in_its_error() -> None:

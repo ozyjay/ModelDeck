@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import socket
+import sys
+from contextlib import suppress
 
 import httpx
 import pytest
@@ -31,6 +35,7 @@ async def test_start_health_restart_and_stop_without_process_leak() -> None:
         started = await supervisor.start("integration-ar")
         assert started["state"] == WorkerState.READY
         first_pid = started["pid"]
+        assert os.getpgid(first_pid) == first_pid
         async with httpx.AsyncClient() as client:
             health = (await client.get(f"{started['endpoint']}/health")).json()
             assert health["generation_family"] == "autoregressive"
@@ -49,6 +54,41 @@ async def test_start_health_restart_and_stop_without_process_leak() -> None:
         assert [event["state"] for event in supervisor.event_history()].count("ready") == 2
     finally:
         await supervisor.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_fallback_termination_removes_worker_descendants() -> None:
+    supervisor = WorkerSupervisor([make_profile(free_port())])
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        (
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            "print(child.pid, flush=True); time.sleep(60)"
+        ),
+        stdout=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    child_pid = int((await asyncio.wait_for(process.stdout.readline(), timeout=2)).decode())
+    supervisor.workers["integration-ar"].process = process
+    try:
+        await supervisor._terminate(supervisor.workers["integration-ar"])
+        assert process.returncode is not None
+        for _ in range(40):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("Worker descendant survived process-group termination")
+    finally:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        if process.returncode is None:
+            await process.wait()
 
 
 @pytest.mark.asyncio

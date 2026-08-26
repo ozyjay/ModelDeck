@@ -106,6 +106,6 @@ foreach ($Name in @('gateway', 'management')) {
 }
 
 Write-Host '[3/4] Checking for stale ModelDeck Workers…'
-& (Join-Path $PSScriptRoot 'stop_stale_workers.ps1') -Quiet
+& (Join-Path $PSScriptRoot 'stop_stale_workers.ps1')
 Write-Host '  Stale Worker check complete.'
 Write-Host "[4/4] ModelDeck stopped: $StoppedServices service(s) stopped, $AbsentServices already absent, $ForcedServices forced."

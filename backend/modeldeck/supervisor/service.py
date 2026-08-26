@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import socket
 import sys
 import uuid
@@ -177,6 +178,7 @@ class WorkerSupervisor:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=launch.environment,
+                    start_new_session=True,
                 )
             except OSError as error:
                 worker.last_error = str(error)
@@ -347,14 +349,38 @@ class WorkerSupervisor:
 
     async def _terminate(self, worker: ManagedWorker) -> None:
         process = worker.process
-        if process is None or process.returncode is not None:
+        if process is None:
             return
-        process.terminate()
+        process_group_id = process.pid
         try:
-            await asyncio.wait_for(process.wait(), timeout=1.0)
+            os.killpg(process_group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            if process.returncode is None:
+                process.terminate()
+        try:
+            if process.returncode is None:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+            await self._wait_for_process_group_exit(process_group_id, wait_seconds=1.0)
         except TimeoutError:
-            process.kill()
-            await process.wait()
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                if process.returncode is None:
+                    process.kill()
+            if process.returncode is None:
+                await process.wait()
+
+    @staticmethod
+    async def _wait_for_process_group_exit(process_group_id: int, *, wait_seconds: float) -> None:
+        deadline = asyncio.get_running_loop().time() + wait_seconds
+        while True:
+            try:
+                os.killpg(process_group_id, 0)
+            except ProcessLookupError:
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError
+            await asyncio.sleep(0.05)
 
     async def _transition(self, worker: ManagedWorker, state: WorkerState, message: str) -> None:
         worker.state = state

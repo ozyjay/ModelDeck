@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import socket
 import time
 from collections import deque
@@ -342,7 +341,6 @@ class LlamaProcess:
             env=environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
         )
         self.log_tasks = [
             asyncio.create_task(self._capture(self.process.stdout)),
@@ -354,15 +352,11 @@ class LlamaProcess:
         try:
             if self.process is None or self.process.returncode is not None:
                 return
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
+            self.process.terminate()
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=8)
             except TimeoutError:
-                with suppress(ProcessLookupError):
-                    os.killpg(self.process.pid, signal.SIGKILL)
+                self.process.kill()
                 await self.process.wait()
         finally:
             if self.memory_task is not None:

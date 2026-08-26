@@ -68,6 +68,50 @@ def test_llama_process_preserves_hugging_face_snapshot_filename(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_llama_process_inherits_the_worker_process_group(monkeypatch, tmp_path) -> None:
+    model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
+    model.write_bytes(b"gguf")
+    args = argparse.Namespace(
+        artifact_path=str(model),
+        runtime_profile=None,
+        context_length=8192,
+        execution_preset="vulkan-full",
+    )
+    captured = {}
+
+    class FakeProcess:
+        returncode = None
+        stdout = None
+        stderr = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_subprocess(*command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(llama_vulkan_worker, "llama_command", lambda **_kwargs: ["llama-server"])
+    monkeypatch.setattr(llama_vulkan_worker, "allocate_private_port", lambda: 49152)
+    monkeypatch.setattr(llama_vulkan_worker.asyncio, "create_subprocess_exec", fake_subprocess)
+    runtime = llama_vulkan_worker.LlamaProcess(args)
+
+    await runtime.start()
+    try:
+        assert captured["command"] == ("llama-server",)
+        assert "start_new_session" not in captured["kwargs"]
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_llama_process_records_first_ready_time(monkeypatch, tmp_path) -> None:
     model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
     model.write_bytes(b"gguf")
