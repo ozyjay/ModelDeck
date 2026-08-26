@@ -3,7 +3,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
-from modeldeck.workers.autoregressive_worker import EngineConfig
+import pytest
+from modeldeck.workers.autoregressive_worker import EngineConfig, GenerationRequest
 from modeldeck.workers.qwen35_chat_worker import TransformersQwen35ChatEngine
 
 
@@ -70,3 +71,36 @@ def test_qwen35_chat_engine_uses_the_processor_text_tokenizer(monkeypatch) -> No
     engine.load()
 
     assert engine.tokenizer is processor.tokenizer
+    assert engine.runtime_details["thinking_mode"] == "disabled"
+
+
+def test_qwen35_chat_template_explicitly_disables_thinking() -> None:
+    calls = []
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            calls.append((messages, kwargs))
+            return "rendered"
+
+    engine = TransformersQwen35ChatEngine(
+        EngineConfig(model_id="Qwen/Qwen3.5-4B", revision="a" * 40, dtype="bfloat16")
+    )
+    engine.tokenizer = Tokenizer()
+    request = GenerationRequest(
+        messages=[{"role": "user", "content": "Be brief."}],
+        tools=[{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+        tool_choice="auto",
+    )
+
+    assert engine.build_prompt(request) == "rendered"
+    assert calls[0][1]["enable_thinking"] is False
+    assert calls[0][1]["tool_choice"] == "auto"
+    assert calls[0][1]["tools"][0]["name"] == "lookup"
+
+
+def test_qwen35_chat_engine_rejects_any_other_thinking_mode() -> None:
+    with pytest.raises(ValueError, match="thinking_mode=disabled"):
+        TransformersQwen35ChatEngine(
+            EngineConfig(model_id="Qwen/Qwen3.5-4B", revision="a" * 40, dtype="bfloat16"),
+            thinking_mode="adaptive",
+        )

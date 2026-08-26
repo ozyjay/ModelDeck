@@ -47,6 +47,12 @@ whole-device memory counters.
 The worker preserves llama.cpp's OpenAI-compatible chat, completion, streaming, image,
 tool-call, structured-output, finish-reason, usage and reasoning fields. GPT-OSS retains
 its existing reasoning-removal policy; that policy is deliberately not applied to Qwen.
+Its immutable `thinking_mode=adaptive` policy leaves `reasoning_effort` unset when a
+request omits it, allowing the pinned Qwen chat template to select its default. A request
+may instead select one of llama.cpp's reviewed effort values (`default`, `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh` or `max`); other values are rejected before
+they reach the private server. Health, model and metrics responses attest the policy, and
+qualification evidence includes it in the compatibility fingerprint.
 
 ## Physical qualification and acceptance
 

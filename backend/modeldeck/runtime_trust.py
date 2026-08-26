@@ -99,6 +99,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                 {
                     "context_length",
                     "maximum_new_tokens",
+                    "thinking_mode",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "hardware_verification_required",
@@ -133,6 +134,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                 {
                     "context_length",
                     "maximum_new_tokens",
+                    "thinking_mode",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "hardware_verification_required",
@@ -228,6 +230,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
                 {
                     "context_length",
                     "maximum_new_tokens",
+                    "thinking_mode",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "runtime_profile",

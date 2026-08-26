@@ -162,3 +162,17 @@ def test_qwen_request_drops_backend_parameters_and_enforces_generation_limit() -
     assert "slot_id" not in body
     with pytest.raises(ValueError, match="generation limit"):
         qwen_request({"max_tokens": 513}, model_id="model", maximum_new_tokens=512)
+
+
+def test_qwen_adaptive_thinking_uses_template_default_or_allowlisted_request_effort() -> None:
+    default_body = qwen_request({}, model_id="model", maximum_new_tokens=512)
+    disabled_body = qwen_request({"reasoning_effort": "none"}, model_id="model", maximum_new_tokens=512)
+
+    assert "reasoning_effort" not in default_body
+    assert disabled_body["reasoning_effort"] == "none"
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        qwen_request({"reasoning_effort": "unbounded"}, model_id="model", maximum_new_tokens=512)
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        qwen_request({"reasoning_effort": []}, model_id="model", maximum_new_tokens=512)
+    with pytest.raises(ValueError, match="thinking_mode=adaptive"):
+        qwen_request({}, model_id="model", maximum_new_tokens=512, thinking_mode="disabled")

@@ -37,7 +37,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "whisper-small-en-rocm",
     }
     assert registrations["autoregressive-transformers"].package.id == "modeldeck-core"
-    assert registrations["scenechat-qwen35"].package.version == "0.4.0"
+    assert registrations["scenechat-qwen35"].package.version == "0.5.0"
     assert registrations["autoregressive-transformers"].source == "packaged"
 
 
@@ -101,9 +101,10 @@ def test_qwen38_llamacpp_profile_keeps_quantised_identity_separate_from_fp8(tmp_
     )
 
     assert profile.preferred_runtime == "qwen38-llamacpp-vulkan"
-    assert profile.runtime_template_version == "0.4.0"
+    assert profile.runtime_template_version == "0.5.0"
     assert profile.dtype == "q8_0"
     assert profile.settings["runtime_profile"] == "qwen38-q8-mtp-vulkan"
+    assert profile.settings["thinking_mode"] == "adaptive"
 
 
 def test_local_profile_is_instantiated_from_runtime_template(tmp_path) -> None:
@@ -157,6 +158,7 @@ def test_qwen35_chat_runtime_is_dedicated_and_requires_hardware_verification() -
     assert template.generation_family.value == "autoregressive"
     assert template.capabilities.chat is True
     assert template.capabilities.completions is True
+    assert template.settings["thinking_mode"] == "disabled"
     assert template.settings["hardware_verification_required"] is True
 
 
@@ -169,6 +171,7 @@ def test_qwen38_native_fp8_runtimes_are_separate_and_hardware_gated() -> None:
     assert scene.dtype == chat.dtype == "bfloat16"
     assert scene.settings["hardware_verification_required"] is True
     assert chat.settings["hardware_verification_required"] is True
+    assert chat.settings["thinking_mode"] == "disabled"
 
 
 def test_speechshift_runtimes_are_allowlisted_with_bounded_defaults() -> None:

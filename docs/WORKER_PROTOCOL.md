@@ -63,6 +63,13 @@ cancellation, one active generation, first-token and total latency, tokens per s
 top-k trace events, prompt/generated token IDs, and optional hidden-state summaries.
 It advertises health while loading and becomes ready only after explicit warmup.
 
+The dedicated Qwen3.5 text-chat runtime has an immutable `thinking_mode=disabled`
+policy. Message prompts are rendered with the official tokenizer chat template and
+`enable_thinking=False`; startup rejects a Worker definition that attempts to change
+that policy. This runtime uses the official local Transformers BF16 snapshot. A Q8_0
+Qwen3.5 Worker requires a separately reviewed GGUF artefact and llama.cpp runtime and is
+not represented by the BF16 Worker.
+
 Autoregressive generation performs one cached prompt prefill followed by one-token forwards
 using `past_key_values`; it never recomputes the growing full sequence after prefill. Where
 the loaded Qwen forward signature supports `logits_to_keep`, the Worker requests only the

@@ -237,6 +237,31 @@ def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)
 
 
+def test_qwen38_llamacpp_launch_enforces_adaptive_thinking(tmp_path) -> None:
+    artefact = tmp_path / "Qwen3.8-27B-Q8_0.gguf"
+    artefact.write_bytes(b"gguf")
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="ggml-org/Qwen3.8-27B-GGUF",
+            revision="97c30c65c8d9a3e73f9fdfb50f1d1a669e9a2827",
+            alias="qwen38-deep",
+            runtime_template_id="qwen38-llamacpp-q8-mtp-vulkan",
+            context_length=8192,
+        ),
+        cache_root=tmp_path,
+        artifact_path=artefact,
+        port=8630,
+        configuration_support="qwen38-llamacpp-q8-mtp-vulkan",
+    )
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "adaptive"
+    profile.settings["thinking_mode"] = "disabled"
+    with pytest.raises(ValueError, match="thinking_mode=adaptive"):
+        build_worker_launch(profile)
+
+
 def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:
     profile = create_local_profile(
         LocalProfileRequest(
@@ -263,6 +288,7 @@ def test_qwen35_chat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path
     ]
     assert launch.command[launch.command.index("--model-id") + 1] == "Qwen/Qwen3.5-4B"
     assert launch.command[launch.command.index("--maximum-new-tokens") + 1] == "512"
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "disabled"
     assert launch.environment["HF_HUB_OFFLINE"] == "1"
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "1"
     assert launch.environment["HF_HUB_CACHE"] == str(tmp_path)

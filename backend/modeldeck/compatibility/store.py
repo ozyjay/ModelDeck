@@ -23,6 +23,7 @@ FINGERPRINT_FIELDS = (
     "kernel_manifest_sha256",
     "tuning_profile_sha256",
     "execution_mode",
+    "thinking_mode",
     "vllm_version",
     "model_id",
     "model_revision",

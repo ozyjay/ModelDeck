@@ -53,6 +53,7 @@ QWEN_OPENAI_REQUEST_FIELDS = frozenset(
         "user",
     }
 )
+QWEN_REASONING_EFFORTS = frozenset({"default", "none", "minimal", "low", "medium", "high", "xhigh", "max"})
 
 
 def fixed_llama_server() -> Path:
@@ -251,11 +252,24 @@ def remove_reasoning(value: Any) -> Any:
     return value
 
 
-def qwen_request(body: Any, *, model_id: str, maximum_new_tokens: int) -> dict[str, Any]:
+def qwen_request(
+    body: Any,
+    *,
+    model_id: str,
+    maximum_new_tokens: int,
+    thinking_mode: str = "adaptive",
+) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("Request body must be a JSON object")
+    if thinking_mode != "adaptive":
+        raise ValueError("The Qwen3.8 llama.cpp Worker requires thinking_mode=adaptive")
     result = {key: value for key, value in body.items() if key in QWEN_OPENAI_REQUEST_FIELDS}
     result["model"] = model_id
+    reasoning_effort = result.get("reasoning_effort")
+    if reasoning_effort is not None and (
+        not isinstance(reasoning_effort, str) or reasoning_effort not in QWEN_REASONING_EFFORTS
+    ):
+        raise ValueError("reasoning_effort is not supported by the trusted llama.cpp runtime")
     requested = result.get("max_completion_tokens", result.get("max_tokens"))
     if isinstance(requested, bool) or (
         requested is not None and (not isinstance(requested, int) or requested < 1)
@@ -407,6 +421,9 @@ class LlamaProcess:
 def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
+    thinking_mode = getattr(args, "thinking_mode", None)
+    if is_qwen and thinking_mode != "adaptive":
+        raise ValueError("The Qwen3.8 llama.cpp Worker requires thinking_mode=adaptive")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -436,6 +453,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             **(
                 {
                     "runtime_profile": manifest.id,
+                    "thinking_mode": thinking_mode,
                     "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
                     "verified_capabilities": (
                         [
@@ -507,6 +525,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     "cache_type_k": manifest.cache_type_k,
                     "cache_type_v": manifest.cache_type_v,
                     "mtp_enabled": True,
+                    "thinking_mode": thinking_mode,
                     "mtp_draft_tokens": manifest.mtp_draft_tokens,
                     "configuration_fingerprint": configuration_fingerprint(runtime.qwen_runtime),
                 }
@@ -523,6 +542,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "execution_preset": args.execution_preset,
             "load_seconds": runtime.load_seconds,
             "mtp_enabled": bool(runtime.qwen_runtime),
+            **({"thinking_mode": thinking_mode} if is_qwen else {}),
             "mtp_draft_tokens": (
                 runtime.qwen_runtime.manifest.mtp_draft_tokens if runtime.qwen_runtime else 0
             ),
@@ -549,6 +569,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     raw_body,
                     model_id=args.model_id,
                     maximum_new_tokens=args.maximum_new_tokens,
+                    thinking_mode=thinking_mode,
                 )
                 if is_qwen
                 else raw_body
@@ -637,6 +658,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=256)
+    parser.add_argument("--thinking-mode", choices=("adaptive",), default="adaptive")
     parser.add_argument(
         "--execution-preset",
         choices=("vulkan-full", "vulkan-cpu-moe"),

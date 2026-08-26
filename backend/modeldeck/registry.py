@@ -103,6 +103,8 @@ class RuntimeTemplate(BaseModel):
             "qwen38-q4-mtp-vulkan",
         }:
             raise ValueError("runtime template llama.cpp profile is not trusted")
+        if self.settings.get("thinking_mode") not in {None, "disabled", "adaptive"}:
+            raise ValueError("runtime template thinking_mode must be disabled or adaptive")
         for name in ("hardware_verification_required", "hsa_preload_evidence"):
             if name in self.settings and not isinstance(self.settings[name], bool):
                 raise ValueError(f"runtime template setting {name} must be boolean")

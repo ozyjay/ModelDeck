@@ -11,9 +11,12 @@ import uvicorn
 from modeldeck.reviewed_models import reviewed_model_spec
 from modeldeck.workers.autoregressive_worker import (
     EngineConfig,
+    GenerationRequest,
     TransformersAutoregressiveEngine,
     _configuration_fingerprint,
     _model_context_length,
+    _qwen_chat_messages,
+    _qwen_tool_schemas,
     create_app,
 )
 from modeldeck.workers.qwen35_worker import (
@@ -35,15 +38,31 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
         config: EngineConfig,
         *,
         execution_mode: str = "bf16_dequant",
+        thinking_mode: str = "disabled",
         cache_root: Path | None = None,
         data_dir: Path = Path(".modeldeck"),
     ) -> None:
         super().__init__(config)
         if execution_mode not in QWEN_EXECUTION_MODES:
             raise ValueError("Unsupported Qwen execution mode")
+        if thinking_mode != "disabled":
+            raise ValueError("The Qwen3.5 fast chat Worker requires thinking_mode=disabled")
         self.execution_mode = execution_mode
+        self.thinking_mode = thinking_mode
         self.cache_root = cache_root
         self.data_dir = data_dir
+
+    def build_prompt(self, body: GenerationRequest) -> str:
+        if not body.messages:
+            return body.prompt or ""
+        return self.tokenizer.apply_chat_template(
+            _qwen_chat_messages(body.messages),
+            tokenize=False,
+            add_generation_prompt=True,
+            tools=_qwen_tool_schemas(body.tools),
+            tool_choice=body.tool_choice,
+            enable_thinking=False,
+        )
 
     def load(self) -> None:
         import torch
@@ -157,6 +176,7 @@ class TransformersQwen35ChatEngine(TransformersAutoregressiveEngine):
             if spec.quantization
             else "none",
             "execution_mode": self.execution_mode,
+            "thinking_mode": self.thinking_mode,
             "model_max_context_tokens": supported_context_length,
             "configuration_fingerprint": self._configuration_fingerprint,
             "load_epoch": self._load_epoch,
@@ -180,6 +200,7 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path(".modeldeck"))
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=512)
+    parser.add_argument("--thinking-mode", choices=("disabled",), default="disabled")
     arguments = parser.parse_args()
     config = EngineConfig(
         model_id=arguments.model_id,
@@ -194,6 +215,7 @@ def main() -> None:
         engine=TransformersQwen35ChatEngine(
             config,
             execution_mode=arguments.execution_mode,
+            thinking_mode=arguments.thinking_mode,
             cache_root=arguments.cache_root,
             data_dir=arguments.data_dir,
         ),

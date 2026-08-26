@@ -576,6 +576,8 @@ def _qwen35_chat_launch(
     cache_root = profile.settings.get("cache_root")
     if not cache_root:
         raise ValueError("Qwen3.5 chat worker requires an allowlisted Hugging Face cache root")
+    if profile.settings.get("thinking_mode") != "disabled":
+        raise ValueError("Qwen3.5 chat worker requires thinking_mode=disabled")
     environment["HF_HUB_CACHE"] = str(cache_root)
     return WorkerLaunch(
         command=[
@@ -589,6 +591,8 @@ def _qwen35_chat_launch(
             str(profile.settings.get("context_length", 8192)),
             "--maximum-new-tokens",
             str(profile.settings.get("maximum_new_tokens", 512)),
+            "--thinking-mode",
+            "disabled",
         ],
         environment=environment,
     )
@@ -674,6 +678,8 @@ def _qwen38_llamacpp_launch(
         raise ValueError("Qwen3.8 llama.cpp requires an allowlisted GGUF profile and artefact")
     if int(profile.settings.get("context_length", 8192)) != 8192:
         raise ValueError("The reviewed Qwen3.8 llama.cpp candidate is limited to an 8,192-token context")
+    if profile.settings.get("thinking_mode") != "adaptive":
+        raise ValueError("Qwen3.8 llama.cpp requires thinking_mode=adaptive")
     return WorkerLaunch(
         command=[
             sys.executable,
@@ -688,6 +694,8 @@ def _qwen38_llamacpp_launch(
             str(profile.settings.get("maximum_new_tokens", 512)),
             "--runtime-profile",
             str(runtime_profile),
+            "--thinking-mode",
+            "adaptive",
         ],
         environment=environment,
     )
