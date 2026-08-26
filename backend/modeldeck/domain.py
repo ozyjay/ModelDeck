@@ -60,7 +60,16 @@ class WorkerDefinition(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def normalise_prefix_cache_capability(self) -> WorkerDefinition:
+    def normalise_legacy_settings(self) -> WorkerDefinition:
+        thinking_default = {
+            ("qwen38-llamacpp-vulkan", "qwen38-llamacpp-q8-mtp-vulkan"): "adaptive",
+            ("qwen35-llamacpp-vulkan", "qwen35-llamacpp-q8-vulkan"): "disabled",
+        }.get((self.runtime, self.runtime_template_id))
+        if thinking_default is not None and "thinking_mode" not in self.settings:
+            # Workers created before thinking policy became explicit retain the
+            # immutable default of their exact trusted runtime template.
+            self.settings["thinking_mode"] = thinking_default
+
         eligible = (
             self.generation_family == "autoregressive"
             and self.runtime == "transformers-rocm"

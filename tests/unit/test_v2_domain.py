@@ -45,6 +45,45 @@ def worker_definition() -> WorkerDefinition:
     )
 
 
+@pytest.mark.parametrize(
+    ("runtime", "runtime_template_id", "expected"),
+    [
+        ("qwen38-llamacpp-vulkan", "qwen38-llamacpp-q8-mtp-vulkan", "adaptive"),
+        ("qwen35-llamacpp-vulkan", "qwen35-llamacpp-q8-vulkan", "disabled"),
+    ],
+)
+def test_legacy_qwen_llamacpp_workers_receive_their_immutable_thinking_default(
+    runtime: str, runtime_template_id: str, expected: str
+) -> None:
+    document = worker_definition().model_dump(mode="json")
+    document.update(
+        {
+            "runtime": runtime,
+            "runtime_template_id": runtime_template_id,
+            "runtime_template_version": "0.4.0",
+        }
+    )
+
+    migrated = WorkerDefinition.model_validate(document)
+
+    assert migrated.settings["thinking_mode"] == expected
+
+
+def test_explicit_qwen_llamacpp_thinking_policy_is_not_rewritten() -> None:
+    document = worker_definition().model_dump(mode="json")
+    document.update(
+        {
+            "runtime": "qwen38-llamacpp-vulkan",
+            "runtime_template_id": "qwen38-llamacpp-q8-mtp-vulkan",
+            "settings": {"thinking_mode": "disabled"},
+        }
+    )
+
+    definition = WorkerDefinition.model_validate(document)
+
+    assert definition.settings["thinking_mode"] == "disabled"
+
+
 def test_image_chat_qualification_and_route_smokes_include_a_local_image() -> None:
     definition = worker_definition().model_copy(
         update={
