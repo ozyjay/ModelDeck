@@ -222,7 +222,7 @@ def create_app(
     @app.post("/v1/chat/completions")
     async def chat(body: CompletionRequest):
         _require_one_of(family, {GenerationFamily.AUTOREGRESSIVE, GenerationFamily.VISION_LANGUAGE})
-        _require_contract(contract_id, {"openai-chat-v1", "scene-analysis-v1"})
+        _require_contract(contract_id, {"openai-chat-v1", "openai-image-chat-v1", "scene-analysis-v1"})
         if family == GenerationFamily.VISION_LANGUAGE:
             if body.stream:
                 raise HTTPException(400, "Mock SceneChat does not stream")

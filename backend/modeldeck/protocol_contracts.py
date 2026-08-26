@@ -27,6 +27,13 @@ PROTOCOL_CONTRACTS = {
             surfaces=("POST /v1/chat/completions",),
         ),
         ProtocolContract(
+            id="openai-image-chat-v1",
+            display_name="OpenAI-compatible image chat",
+            generation_family=GenerationFamily.AUTOREGRESSIVE,
+            required_capabilities=("chat", "image_input"),
+            surfaces=("POST /v1/chat/completions",),
+        ),
+        ProtocolContract(
             id="openai-completions-v1",
             display_name="OpenAI-compatible completions",
             generation_family=GenerationFamily.AUTOREGRESSIVE,

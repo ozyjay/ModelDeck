@@ -315,7 +315,7 @@ def create_gateway_app(
     async def chat(request: Request):
         return await proxy_request(
             request,
-            active_routes({"openai-chat-v1", "scene-analysis-v1"}),
+            active_routes({"openai-chat-v1", "openai-image-chat-v1", "scene-analysis-v1"}),
             "/v1/chat/completions",
             None,
             timeout_seconds=configured.scenechat_timeout_seconds,
@@ -1537,6 +1537,8 @@ def model_discovery_record(
             "chat": True,
             "tool_calling": "verified" if tool_calling.get("supported") is True else "unverified",
         }
+        if legacy_profile.capabilities.image_input:
+            record["capabilities"]["image_input"] = True
     return record
 
 

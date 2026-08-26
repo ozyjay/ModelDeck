@@ -53,6 +53,17 @@ MOCK_WORKER_TEMPLATES = {
             {"chat": True, "streaming": True, "cancellation": True},
         ),
         MockWorkerTemplate(
+            "openai-image-chat-v1",
+            "modeldeck/mock-openai-image-chat",
+            "OpenAI image chat mock",
+            {
+                "chat": True,
+                "streaming": True,
+                "cancellation": True,
+                "image_input": True,
+            },
+        ),
+        MockWorkerTemplate(
             "openai-completions-v1",
             "modeldeck/mock-openai-completions",
             "OpenAI completions mock",

@@ -30,6 +30,13 @@ PROTOCOL_ADAPTERS = {
             True,
         ),
         ProtocolAdapter(
+            "openai-image-chat-v1",
+            ("POST /v1/chat/completions",),
+            "/v1/chat/completions",
+            "scenechat_timeout_seconds",
+            True,
+        ),
+        ProtocolAdapter(
             "openai-completions-v1", ("POST /v1/completions",), "/v1/completions", openai_model=True
         ),
         ProtocolAdapter(

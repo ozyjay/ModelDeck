@@ -70,7 +70,7 @@ CAPABILITY_DEFINITIONS = {
             "general-image-chat",
             "General image chat",
             "Open-ended conversation grounded in one or more images.",
-            None,
+            "openai-image-chat-v1",
             ("text-input", "image-input", "text-output", "chat"),
             ("qwen38-llamacpp-q8-mtp-vulkan",),
         ),
@@ -147,11 +147,15 @@ CAPABILITY_ID_BY_CONTRACT = {
     if definition.protocol_contract_id is not None
 }
 
-# Qwen3.5 is a vision-language architecture, but its official checkpoints also support
-# text-only conversation. These are intentionally narrow exceptions to the usual
-# generation-family matching rule below; the matcher still requires the exact official
-# Qwen3.5 snapshot and dedicated trusted adapter.
+# Reviewed Qwen snapshots can expose text and image capabilities through distinct trusted
+# adapters. These are intentionally narrow exceptions to the usual generation-family
+# matching rule below; the matcher still requires the exact snapshot and adapter.
 QWEN_TEXT_CAPABILITY_TEMPLATES = {
+    "qwen38-llamacpp-q8-mtp-vulkan": {
+        "general-chat": ("qwen38-llamacpp-q8-mtp-vulkan",),
+        "text-completion": ("qwen38-llamacpp-q8-mtp-vulkan",),
+        "general-image-chat": ("qwen38-llamacpp-q8-mtp-vulkan",),
+    },
     "scenechat-qwen35": {
         "general-chat": ("qwen35-chat-transformers-rocm",),
         "text-completion": ("qwen35-chat-transformers-rocm",),
@@ -418,6 +422,7 @@ def _required_worker_traits(capability_id: str) -> tuple[str, ...]:
         "text-completion": ("completions",),
         "autoregressive-trace": ("top_k_trace",),
         "embeddings": ("embeddings",),
+        "general-image-chat": ("chat", "image_input"),
         "scene-analysis": ("image_input", "structured_output"),
         "text-refinement": ("iterative_refinement", "intermediate_frames"),
         "speech-conversation": ("audio_input", "audio_output", "full_duplex"),

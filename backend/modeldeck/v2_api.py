@@ -1343,6 +1343,8 @@ def _capability_smoke_request(capability):
             "temperature": 0,
             "stream": False,
         }
+    if contract == "openai-image-chat-v1":
+        return "/v1/chat/completions", _image_chat_smoke_body(public_name)
     if contract == "openai-completions-v1":
         return "/v1/completions", {
             "model": public_name,
@@ -1444,6 +1446,8 @@ def _worker_capability_request(
             },
             None,
         )
+    if capability_id == "general-image-chat":
+        return "/v1/chat/completions", _image_chat_smoke_body(model), None
     if capability_id == "autoregressive-trace":
         return (
             "/native/autoregressive/trace",
@@ -1485,6 +1489,30 @@ def _worker_capability_request(
     if capability_id == "speech-recognition":
         return "/native/speech-recognition/smoke", None, None
     raise HTTPException(409, "This capability has no bounded qualification adapter")
+
+
+def _image_chat_smoke_body(model: str) -> dict[str, object]:
+    # A fixed, local 1x1 PNG keeps qualification bounded and requires no file or network access.
+    image_url = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+        "AAAAASUVORK5CYII="
+    )
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                    {"type": "text", "text": "Reply with the word ready."},
+                ],
+            }
+        ],
+        "max_tokens": 4,
+        "temperature": 0,
+        "stream": False,
+    }
 
 
 def _worker_smoke_request(definition: WorkerDefinition):

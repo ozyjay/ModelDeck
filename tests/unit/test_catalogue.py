@@ -398,6 +398,13 @@ def test_qwen38_gguf_requires_exact_revision_and_complete_q8_companions(tmp_path
 
     assert model["generation_family_hint"] == "autoregressive"
     assert model["configuration_support"] == "qwen38-llamacpp-q8-mtp-vulkan"
+    capabilities = {item["id"]: item for item in model["potential_capabilities"]}
+    assert capabilities["general-image-chat"]["protocol_contract_id"] == "openai-image-chat-v1"
+    assert compatible_runtime_template_ids(
+        "general-image-chat",
+        model["configuration_support"],
+        runtime_template_registrations(),
+    ) == ["qwen38-llamacpp-q8-mtp-vulkan"]
     assert model["artifacts"] == [
         {
             "artifact_id": "qwen38-27b-q8-mtp",

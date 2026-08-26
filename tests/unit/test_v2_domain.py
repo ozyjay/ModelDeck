@@ -14,10 +14,12 @@ from modeldeck.main import create_app
 from modeldeck.migrate_v2_to_v3 import migrate
 from modeldeck.migrate_v3_to_v4 import migrate as migrate_v3_to_v4
 from modeldeck.v2_api import (
+    _capability_smoke_request,
     _has_smoke_evidence,
     _rehearse_route_tool_calling,
     _valid_rehearsal_final_text,
     _valid_rehearsal_tool_call,
+    _worker_capability_request,
     _worker_smoke_request,
 )
 
@@ -38,6 +40,34 @@ def worker_definition() -> WorkerDefinition:
         capabilities={"chat": True, "completions": True, "top_k_trace": True},
         settings={},
     )
+
+
+def test_image_chat_qualification_and_route_smokes_include_a_local_image() -> None:
+    definition = worker_definition().model_copy(
+        update={
+            "runtime": "qwen38-llamacpp-vulkan",
+            "runtime_template_id": "qwen38-llamacpp-q8-mtp-vulkan",
+            "capabilities": {
+                "chat": True,
+                "completions": True,
+                "image_input": True,
+            },
+        }
+    )
+
+    worker_path, worker_body, headers = _worker_capability_request(definition, "general-image-chat")
+    route_path, route_body = _capability_smoke_request(
+        {"public_name": "qwen-image", "protocol_contract": "openai-image-chat-v1"}
+    )
+
+    assert worker_path == route_path == "/v1/chat/completions"
+    assert headers is None
+    assert worker_body is not None
+    assert route_body["model"] == "qwen-image"
+    for body in (worker_body, route_body):
+        content = body["messages"][0]["content"]
+        assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert content[1] == {"type": "text", "text": "Reply with the word ready."}
 
 
 def routing_profile(worker_id: str, *, qualification: str = "compatible") -> RoutingProfile:

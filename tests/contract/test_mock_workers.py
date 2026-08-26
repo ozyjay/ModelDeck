@@ -112,6 +112,43 @@ async def test_autoregressive_contract_includes_top_k_trace() -> None:
 
 
 @pytest.mark.asyncio
+async def test_image_chat_contract_accepts_openai_multimodal_content() -> None:
+    app = create_app(
+        worker_id="test-image-chat",
+        model_id="modeldeck/mock-openai-image-chat",
+        revision="fixture",
+        family=GenerationFamily.AUTOREGRESSIVE,
+        contract_id="openai-image-chat-v1",
+        startup_delay=0,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "image-chat",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,AA=="},
+                                },
+                                {"type": "text", "text": "Describe this image."},
+                            ],
+                        }
+                    ],
+                },
+            )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"]
+
+
+@pytest.mark.asyncio
 async def test_text_diffusion_contract_is_seeded_and_has_frames() -> None:
     app = create_app(
         worker_id="test-diffusion",
