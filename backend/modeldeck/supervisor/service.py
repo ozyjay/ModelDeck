@@ -568,6 +568,16 @@ def _vision_language_launch(
     )
 
 
+def _gemma4_general_chat_launch(
+    profile: ModelProfile, environment: dict[str, str], common: list[str]
+) -> WorkerLaunch:
+    launch = _vision_language_launch(profile, environment, common)
+    launch.command[launch.command.index("modeldeck.workers.scenechat_worker")] = (
+        "modeldeck.workers.gemma4_chat_worker"
+    )
+    return launch
+
+
 def _qwen35_vision_language_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
@@ -1003,6 +1013,7 @@ def _text_diffusion_launch(
 TRUSTED_LAUNCH_BUILDERS: dict[str, LaunchBuilder] = {
     "transformers-rocm": _transformers_rocm_launch,
     "vision-language-transformers-rocm": _vision_language_launch,
+    "gemma4-general-chat-transformers-rocm": _gemma4_general_chat_launch,
     "qwen35-vision-language-transformers-rocm": _qwen35_vision_language_launch,
     "qwen35-chat-transformers-rocm": _qwen35_chat_launch,
     "qwen38-fp8-vision-language-transformers-rocm": _qwen38_fp8_vision_language_launch,

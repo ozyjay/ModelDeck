@@ -39,6 +39,7 @@ CAPABILITY_DEFINITIONS = {
                 "qwen38-fp8-chat-transformers-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
+                "gemma4-general-chat-rocm",
             ),
         ),
         CapabilityDefinition(
@@ -83,6 +84,7 @@ CAPABILITY_DEFINITIONS = {
             "openai-image-chat-v1",
             ("text-input", "image-input", "text-output", "chat"),
             (
+                "gemma4-general-chat-rocm",
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
             ),
@@ -204,6 +206,11 @@ QWEN_TEXT_CAPABILITY_TEMPLATES = {
         "general-image-chat": ("scenechat-qwen35",),
         "scene-analysis": ("scenechat-qwen35",),
     },
+    "scenechat-gemma4": {
+        "general-chat": ("gemma4-general-chat-rocm",),
+        "general-image-chat": ("gemma4-general-chat-rocm",),
+        "scene-analysis": ("scenechat-gemma4",),
+    },
     "scenechat-qwen38-fp8": {
         "general-chat": ("qwen35-chat-transformers-rocm", "qwen38-fp8-chat-transformers-rocm"),
         "text-completion": ("qwen35-chat-transformers-rocm", "qwen38-fp8-chat-transformers-rocm"),
@@ -311,6 +318,15 @@ def capability_candidates(
                         "detail": f"The local snapshot matches {configuration_support}.",
                     }
                 )
+        for capability_id in QWEN_TEXT_CAPABILITY_TEMPLATES.get(configuration_support, {}):
+            candidates.setdefault(capability_id, []).append(
+                {
+                    "kind": "detected",
+                    "confidence": "direct",
+                    "source": "trusted-runtime-matcher",
+                    "detail": f"The local snapshot matches {configuration_support}.",
+                }
+            )
 
     reviewed = reviewed_model_spec(model_id)
     if reviewed is not None:

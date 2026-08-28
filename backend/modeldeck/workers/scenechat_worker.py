@@ -78,6 +78,7 @@ class EngineConfig:
     maximum_new_tokens: int = DEFAULT_MAXIMUM_NEW_TOKENS
     generation_timeout_seconds: float = 60.0
     visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
+    general_chat: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.maximum_new_tokens <= SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT:
@@ -167,7 +168,7 @@ class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["user"]
-    content: list[dict[str, Any]] = Field(min_length=2, max_length=2)
+    content: str | list[dict[str, Any]]
 
 
 class ChatCompletionRequest(BaseModel):
@@ -175,9 +176,9 @@ class ChatCompletionRequest(BaseModel):
 
     model: str
     messages: list[ChatMessage] = Field(min_length=1, max_length=1)
-    temperature: Literal[0.1]
+    temperature: Literal[0, 0.1]
     max_tokens: int = Field(ge=1, le=SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT)
-    response_format: ResponseFormat
+    response_format: ResponseFormat | None = None
     stream: Literal[False] = False
 
 
@@ -191,7 +192,7 @@ class VisionLanguageEngine(Protocol):
     def generate(
         self,
         *,
-        image: Image.Image,
+        image: Image.Image | None,
         question: str,
         max_tokens: int,
         cancellation: threading.Event,
@@ -379,7 +380,17 @@ class TransformersSceneChatEngine:
             def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
                 return cancellation.is_set()
 
-        messages = system_messages(question)
+        messages = (
+            [
+                {
+                    "role": "user",
+                    "content": ([{"type": "image", "image": image}] if image else [])
+                    + [{"type": "text", "text": question}],
+                }
+            ]
+            if self.config.general_chat
+            else system_messages(question)
+        )
         rendered = self.processor.apply_chat_template(
             messages,
             tokenize=False,
@@ -387,7 +398,11 @@ class TransformersSceneChatEngine:
             enable_thinking=False,
         )
         preprocessing_started = time.perf_counter()
-        inputs = self.processor(text=rendered, images=[image], return_tensors="pt")
+        inputs = self.processor(
+            text=rendered,
+            **({"images": [image]} if image is not None else {}),
+            return_tensors="pt",
+        )
         preprocessing_seconds = time.perf_counter() - preprocessing_started
         prompt_tokens = int(inputs["input_ids"].shape[-1])
         visual_tokens = _visual_token_count(inputs)
@@ -622,11 +637,11 @@ def create_app(
     @app.get("/capabilities")
     async def capabilities() -> dict[str, Any]:
         result = CapabilitySet(
-            chat="compatibility-only",
+            chat=True if config.general_chat else "compatibility-only",
             streaming=False,
             cancellation=True,
             image_input=True,
-            structured_output=True,
+            structured_output=not config.general_chat,
         )
         return {
             "protocol_version": "1",
@@ -734,8 +749,15 @@ def create_app(
         _ensure_ready(request)
         if body.model != config.model_id:
             raise SceneChatRequestError(422, "invalid_model", "The model identifier is not allowlisted.")
-        image_data_url, prompt = _validate_message(body.messages[0])
-        question = _approved_question(prompt)
+        if config.general_chat:
+            image_data_url, question = _validate_general_chat_message(body.messages[0])
+        else:
+            if body.response_format is None:
+                raise SceneChatRequestError(
+                    422, "invalid_request", "SceneChat requires response_format=json_object."
+                )
+            image_data_url, prompt = _validate_message(body.messages[0])
+            question = _approved_question(prompt)
         supplied_request_id = request.headers.get("x-request-id")
         if supplied_request_id and not SAFE_REQUEST_ID.fullmatch(supplied_request_id):
             raise SceneChatRequestError(
@@ -783,11 +805,14 @@ def create_app(
         effective_token_limit = min(body.max_tokens, config.maximum_new_tokens)
         try:
             decode_started = time.perf_counter()
-            image, encoded_bytes = _decode_image_with_metadata(image_data_url)
+            if image_data_url is not None:
+                image, encoded_bytes = _decode_image_with_metadata(image_data_url)
+            else:
+                encoded_bytes = 0
             diagnostic.update(
                 {
-                    "input_width": image.width,
-                    "input_height": image.height,
+                    "input_width": image.width if image else None,
+                    "input_height": image.height if image else None,
                     "input_bytes": encoded_bytes,
                     "decode_seconds": round(time.perf_counter() - decode_started, 6),
                 }
@@ -823,7 +848,9 @@ def create_app(
             )
             validation_started = time.perf_counter()
             try:
-                content, _analysis = canonicalise_model_output(result.text)
+                content = (
+                    result.text.strip() if config.general_chat else canonicalise_model_output(result.text)[0]
+                )
             except ModelOutputValidationError as error:
                 diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
                 diagnostic["output_failure_category"] = _output_failure_category(
@@ -848,7 +875,7 @@ def create_app(
                 raise SceneChatRequestError(
                     502,
                     "invalid_model_output",
-                    "The model returned output that did not satisfy the SceneChat contract.",
+                    "The model returned output that did not satisfy the response contract.",
                     reason=failure_reason,
                     retryable=retryable,
                 ) from error
@@ -873,7 +900,7 @@ def create_app(
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": config.model_id,
-                "scenechat_contract": CONTRACT_VERSION,
+                **({"scenechat_contract": CONTRACT_VERSION} if not config.general_chat else {}),
                 "choices": [
                     {
                         "index": 0,
@@ -1002,6 +1029,14 @@ def _ensure_ready(request: Request) -> None:
 
 
 def _validate_message(message: ChatMessage) -> tuple[str, str]:
+    if not isinstance(message.content, list):
+        raise SceneChatRequestError(
+            422, "invalid_prompt", "The SceneChat prompt must include one image and text."
+        )
+    if len(message.content) != 2:
+        raise SceneChatRequestError(
+            422, "invalid_request", "The SceneChat request must contain one image and one text prompt."
+        )
     image_part, text_part = message.content
     if set(image_part) != {"type", "image_url"} or image_part.get("type") != "image_url":
         raise SceneChatRequestError(422, "invalid_image", "The first content part must be one image_url.")
@@ -1014,6 +1049,18 @@ def _validate_message(message: ChatMessage) -> tuple[str, str]:
     if not isinstance(prompt, str):
         raise SceneChatRequestError(422, "invalid_prompt", "The SceneChat prompt must be text.")
     return image_url["url"], prompt
+
+
+def _validate_general_chat_message(message: ChatMessage) -> tuple[str | None, str]:
+    if isinstance(message.content, str):
+        prompt = message.content.strip()
+        if not prompt:
+            raise SceneChatRequestError(422, "invalid_prompt", "The chat prompt must not be empty.")
+        return None, prompt
+    if len(message.content) != 2:
+        raise SceneChatRequestError(422, "invalid_request", "Provide one image and one text prompt.")
+    image_url, prompt = _validate_message(ChatMessage(role="user", content=message.content))
+    return image_url, prompt
 
 
 def _approved_question(prompt: str) -> str:
@@ -1173,7 +1220,7 @@ async def _run_generation(
     request: Request,
     engine: VisionLanguageEngine,
     *,
-    image: Image.Image,
+    image: Image.Image | None,
     question: str,
     max_tokens: int,
     cancellation: threading.Event,

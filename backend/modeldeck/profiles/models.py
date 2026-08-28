@@ -72,12 +72,8 @@ class ModelProfile(BaseModel):
             and not self.capabilities.iterative_refinement
         ):
             raise ValueError("text-diffusion profiles must advertise iterative refinement")
-        if self.generation_family == GenerationFamily.VISION_LANGUAGE and not (
-            self.capabilities.image_input and self.capabilities.structured_output
-        ):
-            raise ValueError(
-                "Scene-compatible vision-language profiles must advertise image input and structured output"
-            )
+        if self.generation_family == GenerationFamily.VISION_LANGUAGE and not self.capabilities.image_input:
+            raise ValueError("vision-language profiles must advertise image input")
         if self.generation_family == GenerationFamily.SPEECH_CONVERSATION and not (
             self.capabilities.audio_input and self.capabilities.audio_output and self.capabilities.full_duplex
         ):

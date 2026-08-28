@@ -73,6 +73,24 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             cache_settings=frozenset({"cache_root"}),
         ),
         TrustedRuntimeImplementation(
+            id="gemma4-general-chat-transformers-rocm",
+            display_name="Gemma 4 general chat Transformers ROCm",
+            generation_family=GenerationFamily.VISION_LANGUAGE,
+            capabilities=frozenset({"chat", "streaming", "cancellation", "image_input"}),
+            template_settings=frozenset(
+                {
+                    "context_length",
+                    "maximum_new_tokens",
+                    "generation_timeout_seconds",
+                    "visual_token_budget",
+                    "startup_timeout_seconds",
+                    "warmup_timeout_seconds",
+                    "hardware_verification_required",
+                }
+            ),
+            cache_settings=frozenset({"cache_root"}),
+        ),
+        TrustedRuntimeImplementation(
             id="qwen35-vision-language-transformers-rocm",
             display_name="Qwen3.5 vision-language Transformers ROCm",
             generation_family=GenerationFamily.VISION_LANGUAGE,

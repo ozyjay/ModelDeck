@@ -23,6 +23,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "autoregressive-transformers",
         "embedding-transformers",
         "scenechat-gemma4",
+        "gemma4-general-chat-rocm",
         "scenechat-qwen35",
         "qwen35-chat-transformers-rocm",
         "scenechat-qwen38-fp8",

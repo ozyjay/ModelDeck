@@ -37,6 +37,16 @@
       "dtype": "bfloat16"
     },
     {
+      "id": "gemma4-general-chat-rocm",
+      "display_name": "Gemma 4 general chat ROCm",
+      "runtime": "gemma4-general-chat-transformers-rocm",
+      "generation_family": "vision-language",
+      "capabilities": {"chat": true, "streaming": false, "cancellation": true, "image_input": true, "structured_output": false},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 512, "visual_token_budget": 280, "generation_timeout_seconds": 60, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180, "hardware_verification_required": true},
+      "cache_setting": "cache_root",
+      "dtype": "bfloat16"
+    },
+    {
       "id": "scenechat-qwen35",
       "display_name": "SceneChat Qwen3.5 ROCm",
       "runtime": "qwen35-vision-language-transformers-rocm",
