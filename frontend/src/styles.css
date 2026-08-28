@@ -310,9 +310,14 @@ summary { color: var(--muted); cursor: pointer; font-size: 0.8rem; }
 .potential-capability-list { display: grid; gap: 0.55rem; margin-top: 0.75rem; }
 .potential-capability { padding: 0.75rem; border: 1px solid var(--line-soft); border-radius: 0.65rem; background: #0b121b; }
 .potential-capability.allowed { border-color: #315744; background: #101e1a; }
+.potential-capability.runnable { border-color: #315744; }
+.potential-capability.unavailable { border-style: dashed; }
 .potential-capability-heading > span { min-width: 0; }
 .potential-capability-heading > div { display: flex; align-items: center; gap: 0.5rem; }
 .capability-reason { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.78rem; }
+.capability-reason strong { color: var(--text); }
+.capability-policy { margin-top: 0.6rem; color: var(--muted); font-size: 0.76rem; }
+.capability-policy p { margin: 0.45rem 0; line-height: 1.45; }
 .potential-capability a { color: var(--accent); }
 .worker-capability-list { display: grid; gap: 0.45rem; margin-top: 0.75rem; padding: 0.7rem; border: 1px solid var(--line-soft); border-radius: 0.6rem; background: #0b121b; }
 .worker-capability-list > div { padding-top: 0.45rem; border-top: 1px solid var(--line-soft); }

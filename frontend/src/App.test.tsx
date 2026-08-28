@@ -120,7 +120,7 @@ describe("ModelDeck routing profile operator console", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/routing-profiles")).toBe(true);
   });
 
-  it("shows potential capability policy, provenance and missing-runtime state", async () => {
+  it("explains missing runtimes without presenting capability policy as a Worker action", async () => {
     const payloads = responses();
     payloads["/api/catalogue"] = { downloads_started: false, models: [{
       model_id: "Qwen/Qwen3.5-4B", revision: "revision-1", cache_location: "/cache/model",
@@ -147,9 +147,40 @@ describe("ModelDeck routing profile operator console", () => {
     fireEvent.click(await screen.findByRole("link", { name: "Models" }));
 
     expect(await screen.findByText("Video understanding")).toBeInTheDocument();
-    expect(screen.getByText("Allowed; a trusted runtime is required.")).toBeInTheDocument();
+    expect(screen.getByText(/No Worker is available yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Allowed for a future runtime/)).toBeInTheDocument();
     expect(screen.getByText("Evidence and provenance")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disallow" })).toBeInTheDocument();
+  });
+
+  it("sets up a supported Worker directly while leaving unavailable capabilities non-actionable", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { downloads_started: false, models: [{
+      model_id: "google/gemma-4-E2B-it", revision: "revision-1", cache_location: "/cache/model",
+      snapshot_location: "/cache/model/snapshots/revision-1", physical_size_bytes: 1,
+      download_state: "installed-untested", generation_family_hint: "vision-language",
+      capability_hints: ["text-generation", "chat", "image-input", "structured-output"],
+      configuration_support: "scenechat-gemma4", configuration_support_reason: "SceneChat available",
+      modeldeck_allowed: true, base_model_id: null, base_model_revision: null, runnable: false,
+      runnable_reason: "Allow at least one runnable capability before creating a Worker.", worker_count: 0, artifacts: [],
+      potential_capabilities: [
+        { id: "general-image-chat", display_name: "General image chat", description: "Open-ended image conversation.", protocol_contract_id: "openai-image-chat-v1", traits: ["image-input", "chat"], evidence: [], runtime_template_ids: [], available_runtime_template_ids: [], policy_allowed: true, effective_allowed: true, runtime_status: "missing", qualification_status: "not-tested", qualifying_workers: [], published: false, creatable: false, reason: "Allowed; a trusted runtime is required." },
+        { id: "scene-analysis", display_name: "Scene analysis", description: "Bounded structured analysis.", protocol_contract_id: "scene-analysis-v1", traits: ["image-input", "structured-output"], evidence: [], runtime_template_ids: ["scenechat-gemma4"], available_runtime_template_ids: ["scenechat-gemma4"], policy_allowed: false, effective_allowed: false, runtime_status: "available", qualification_status: "not-tested", qualifying_workers: [], published: false, creatable: false, reason: "Allow this capability before creating a Worker or publishing a route." },
+      ],
+    }] };
+    payloads["/api/runtime-templates"] = { templates: [{ id: "scenechat-gemma4", version: "1", display_name: "SceneChat Gemma 4 ROCm", runtime: "vision-language-transformers-rocm", generation_family: "vision-language", capabilities: { image_input: true, structured_output: true, cancellation: true }, settings: { context_length: 8192, maximum_new_tokens: 512, visual_token_budget: 280 }, cache_setting: "cache_root", include_cache_root: false, lifecycle: "on-demand", dtype: "bfloat16", uses_base_model_identity: false, package_id: "modeldeck-core", package_version: "1", package_display_name: "ModelDeck", publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64) }] };
+    payloads["/api/catalogue/capabilities/policy"] = { ok: true };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+
+    expect(await screen.findByRole("button", { name: "Set up Worker" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Worker" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set up Worker" }));
+
+    expect(await screen.findByRole("heading", { name: "Create a Worker" })).toBeInTheDocument();
+    const policyCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/catalogue/capabilities/policy");
+    expect(policyCall?.[1]).toMatchObject({ method: "POST" });
   });
 
   it("offers explicit checksum approval for eligible local Qwen3.5 candidates", async () => {
