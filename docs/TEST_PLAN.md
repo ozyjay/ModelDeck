@@ -5,6 +5,15 @@ network, model download, container runtime, or cached model. It runs frontend Ty
 checking and Vitest tests, proves the committed production bundle matches `frontend/`,
 then runs Ruff and the GPU-free pytest suite.
 
+## New runtime integration rule
+
+Every new trusted Worker runtime must add or explicitly reuse a matching smoke and
+qualification probe before it is exposed in the Model library. The probe must exercise the
+Worker's actual request path, payload shape, and required local authentication headers. A
+runtime is incomplete if its Worker can start but the management **Check Worker** action or
+capability qualification cannot make an authenticated request successfully. Keep the probe
+code-owned in `backend/modeldeck/smoke_probes.py`; do not rely on a browser-only manual check.
+
 The GPU-free suite exercises sequential load, warm-up, inference and shutdown for each
 Worker family. It also runs the embedding and autoregressive contracts with the asyncio
 default executor unavailable, verifies isolated blocking operations use distinct threads,
