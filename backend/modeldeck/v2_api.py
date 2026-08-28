@@ -1415,7 +1415,10 @@ def _worker_capability_request(
         )
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    return probe_request.path, probe_request.body, probe_request.headers
+    headers = probe_request.headers
+    if definition.runtime == "gemma4-general-chat-transformers-rocm":
+        headers = {"Authorization": f"Bearer {os.environ.get('MODELDECK_SCENECHAT_API_KEY', 'local')}"}
+    return probe_request.path, probe_request.body, headers
 
 
 def _image_chat_smoke_body(model: str) -> dict[str, object]:
