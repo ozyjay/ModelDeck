@@ -160,6 +160,24 @@ class FailingWarmupEngine(FakeVisionEngine):
         raise RuntimeError("synthetic warm-up failed")
 
 
+class ToolCallingVisionEngine(FakeVisionEngine):
+    def generate_chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        image: Image.Image | None,
+        max_tokens: int,
+        cancellation: threading.Event,
+    ) -> GenerationResult:
+        self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens})
+        return GenerationResult(
+            '<|tool_call>call:read_workspace_text_file{path:<|"|>Readme.md<|"|>}<tool_call|>',
+            prompt_tokens=17,
+            completion_tokens=9,
+        )
+
+
 def image_data_url(image_format: str = "PNG", *, size: tuple[int, int] = (32, 24)) -> str:
     image = Image.new("RGBA" if image_format == "PNG" else "RGB", size, color="navy")
     output = io.BytesIO()
@@ -192,6 +210,69 @@ def request_payload(
         "response_format": {"type": "json_object"},
         "stream": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_general_gemma_chat_returns_openai_tool_calls() -> None:
+    engine = ToolCallingVisionEngine()
+    app = create_app(
+        worker_id="gemma-tools",
+        config=EngineConfig(
+            model_id="google/gemma-4-E2B-it",
+            revision="pinned",
+            general_chat=True,
+        ),
+        engine=engine,
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_workspace_text_file",
+                "description": "Read one workspace text file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        await _ready(app)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json={
+                    "model": "google/gemma-4-E2B-it",
+                    "messages": [{"role": "user", "content": "Read Readme.md."}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                    "temperature": 0,
+                    "max_tokens": 64,
+                    "stream": False,
+                },
+            )
+
+    assert response.status_code == 200
+    choice = response.json()["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    message = choice["message"]
+    assert message["role"] == "assistant"
+    assert message["content"] is None
+    assert len(message["tool_calls"]) == 1
+    call = message["tool_calls"][0]
+    assert call["id"].startswith("call_")
+    assert call["type"] == "function"
+    assert call["function"] == {
+        "name": "read_workspace_text_file",
+        "arguments": '{"path":"Readme.md"}',
+    }
+    assert engine.calls[0]["tools"] == tools
 
 
 @pytest.mark.asyncio

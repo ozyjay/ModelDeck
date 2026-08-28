@@ -7,6 +7,7 @@ import binascii
 import hmac
 import importlib.metadata
 import io
+import json
 import logging
 import os
 import re
@@ -99,6 +100,7 @@ class GenerationResult:
     preprocessing_seconds: float = 0.0
     inference_seconds: float = 0.0
     visual_tokens: int | None = None
+    tool_calls: tuple[dict[str, Any], ...] = ()
 
 
 def _log_output_validation_failure(
@@ -175,11 +177,13 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str
-    messages: list[ChatMessage] = Field(min_length=1, max_length=1)
+    messages: list[dict[str, Any]] = Field(min_length=1, max_length=32)
     temperature: Literal[0, 0.1]
     max_tokens: int = Field(ge=1, le=SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT)
     response_format: ResponseFormat | None = None
     stream: Literal[False] = False
+    tools: list[dict[str, Any]] | None = Field(default=None, max_length=16)
+    tool_choice: Literal["auto", "required", "none"] | None = None
 
 
 class VisionLanguageEngine(Protocol):
@@ -374,12 +378,6 @@ class TransformersSceneChatEngine:
         max_tokens: int,
         cancellation: threading.Event,
     ) -> GenerationResult:
-        from transformers import StoppingCriteria, StoppingCriteriaList
-
-        class CancellationCriteria(StoppingCriteria):
-            def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
-                return cancellation.is_set()
-
         messages = (
             [
                 {
@@ -391,11 +389,35 @@ class TransformersSceneChatEngine:
             if self.config.general_chat
             else system_messages(question)
         )
+        return self.generate_chat(
+            messages=messages,
+            tools=None,
+            image=image,
+            max_tokens=max_tokens,
+            cancellation=cancellation,
+        )
+
+    def generate_chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        image: Image.Image | None,
+        max_tokens: int,
+        cancellation: threading.Event,
+    ) -> GenerationResult:
+        from transformers import StoppingCriteria, StoppingCriteriaList
+
+        class CancellationCriteria(StoppingCriteria):
+            def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+                return cancellation.is_set()
+
         rendered = self.processor.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=False,
+            **({"tools": tools} if tools else {}),
         )
         preprocessing_started = time.perf_counter()
         inputs = self.processor(
@@ -427,19 +449,23 @@ class TransformersSceneChatEngine:
             completion_tokens = int(generated.shape[-1])
             decoded = self.processor.decode(
                 generated,
-                skip_special_tokens=True,
+                skip_special_tokens=not tools,
                 clean_up_tokenization_spaces=False,
             )
-            if any(marker in decoded.casefold() for marker in ("<think>", "</think>", "<|channel>")):
+            tool_calls, content = _gemma_tool_calls(decoded, tools or [])
+            if not tool_calls and any(
+                marker in content.casefold() for marker in ("<think>", "</think>", "<|channel>")
+            ):
                 raise ValueError("Model output exposed a reasoning channel")
             return GenerationResult(
-                text=decoded,
+                text=content,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cancelled=cancellation.is_set(),
                 preprocessing_seconds=preprocessing_seconds,
                 inference_seconds=inference_seconds,
                 visual_tokens=visual_tokens,
+                tool_calls=tuple(tool_calls),
             )
         finally:
             del inputs
@@ -642,6 +668,7 @@ def create_app(
             cancellation=True,
             image_input=True,
             structured_output=not config.general_chat,
+            tool_calling=config.general_chat,
         )
         return {
             "protocol_version": "1",
@@ -750,14 +777,22 @@ def create_app(
         if body.model != config.model_id:
             raise SceneChatRequestError(422, "invalid_model", "The model identifier is not allowlisted.")
         if config.general_chat:
-            image_data_url, question = _validate_general_chat_message(body.messages[0])
+            image_data_url, question, messages, tools = _validate_general_chat_request(
+                body.messages, body.tools
+            )
         else:
+            if len(body.messages) != 1:
+                raise SceneChatRequestError(
+                    422, "invalid_request", "The SceneChat request must contain exactly one message."
+                )
             if body.response_format is None:
                 raise SceneChatRequestError(
                     422, "invalid_request", "SceneChat requires response_format=json_object."
                 )
-            image_data_url, prompt = _validate_message(body.messages[0])
+            image_data_url, prompt = _validate_message(ChatMessage.model_validate(body.messages[0]))
             question = _approved_question(prompt)
+            messages = []
+            tools = None
         supplied_request_id = request.headers.get("x-request-id")
         if supplied_request_id and not SAFE_REQUEST_ID.fullmatch(supplied_request_id):
             raise SceneChatRequestError(
@@ -817,14 +852,28 @@ def create_app(
                     "decode_seconds": round(time.perf_counter() - decode_started, 6),
                 }
             )
-            result = await _run_generation(
-                request,
-                runtime,
-                image=image,
-                question=question,
-                max_tokens=effective_token_limit,
-                cancellation=cancellation,
-                timeout_seconds=config.generation_timeout_seconds,
+            result = (
+                await _run_generation(
+                    request,
+                    runtime,
+                    image=image,
+                    question=question,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=effective_token_limit,
+                    cancellation=cancellation,
+                    timeout_seconds=config.generation_timeout_seconds,
+                )
+                if config.general_chat
+                else await _run_generation(
+                    request,
+                    runtime,
+                    image=image,
+                    question=question,
+                    max_tokens=effective_token_limit,
+                    cancellation=cancellation,
+                    timeout_seconds=config.generation_timeout_seconds,
+                )
             )
             if result.cancelled:
                 raise SceneChatRequestError(504, "request_cancelled", "The local generation was cancelled.")
@@ -848,8 +897,13 @@ def create_app(
             )
             validation_started = time.perf_counter()
             try:
+                tool_calls = result.tool_calls
+                output_text = result.text
+                if config.general_chat and tools and not tool_calls:
+                    parsed_calls, output_text = _gemma_tool_calls(output_text, tools)
+                    tool_calls = tuple(parsed_calls)
                 content = (
-                    result.text.strip() if config.general_chat else canonicalise_model_output(result.text)[0]
+                    output_text.strip() if config.general_chat else canonicalise_model_output(output_text)[0]
                 )
             except ModelOutputValidationError as error:
                 diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
@@ -904,8 +958,12 @@ def create_app(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": content},
-                        "finish_reason": diagnostic["finish_reason"],
+                        "message": {
+                            "role": "assistant",
+                            "content": content or None,
+                            **({"tool_calls": list(tool_calls)} if tool_calls else {}),
+                        },
+                        "finish_reason": "tool_calls" if tool_calls else diagnostic["finish_reason"],
                     }
                 ],
             }
@@ -1051,16 +1109,152 @@ def _validate_message(message: ChatMessage) -> tuple[str, str]:
     return image_url["url"], prompt
 
 
-def _validate_general_chat_message(message: ChatMessage) -> tuple[str | None, str]:
-    if isinstance(message.content, str):
-        prompt = message.content.strip()
-        if not prompt:
-            raise SceneChatRequestError(422, "invalid_prompt", "The chat prompt must not be empty.")
-        return None, prompt
-    if len(message.content) != 2:
-        raise SceneChatRequestError(422, "invalid_request", "Provide one image and one text prompt.")
-    image_url, prompt = _validate_message(ChatMessage(role="user", content=message.content))
-    return image_url, prompt
+def _validate_general_chat_request(
+    supplied_messages: list[dict[str, Any]], supplied_tools: list[dict[str, Any]] | None
+) -> tuple[str | None, str, list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """Bound the OpenAI tool loop before passing it to Gemma's local chat template."""
+
+    messages: list[dict[str, Any]] = []
+    image_url: str | None = None
+    latest_question: str | None = None
+    for supplied in supplied_messages:
+        role = supplied.get("role") if isinstance(supplied, dict) else None
+        if role not in {"system", "developer", "user", "assistant", "tool"}:
+            raise SceneChatRequestError(422, "invalid_request", "Each chat message needs a supported role.")
+        content = supplied.get("content")
+        if role == "assistant" and content is None:
+            pass
+        elif isinstance(content, str):
+            if not content.strip() and role != "assistant":
+                raise SceneChatRequestError(422, "invalid_prompt", "Chat message text must not be empty.")
+        elif isinstance(content, list):
+            text_parts = [
+                part.get("text") for part in content if isinstance(part, dict) and part.get("type") == "text"
+            ]
+            if not text_parts or not all(isinstance(part, str) and part.strip() for part in text_parts):
+                raise SceneChatRequestError(
+                    422, "invalid_prompt", "Content parts must include non-empty text."
+                )
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") not in {"text", "image_url"}:
+                    raise SceneChatRequestError(422, "invalid_request", "Unsupported chat content part.")
+                if part.get("type") == "image_url":
+                    if role != "user" or image_url is not None:
+                        raise SceneChatRequestError(
+                            422, "invalid_request", "Provide at most one image in a user message."
+                        )
+                    image_url, _ = _validate_message(
+                        ChatMessage(role="user", content=[part, {"type": "text", "text": text_parts[0]}])
+                    )
+        else:
+            raise SceneChatRequestError(
+                422, "invalid_request", "Chat message content must be text or content parts."
+            )
+
+        message: dict[str, Any] = {"role": role, "content": content}
+        if role == "assistant" and "tool_calls" in supplied:
+            message["tool_calls"] = _normalise_tool_calls(supplied["tool_calls"])
+        if role == "tool":
+            tool_call_id = supplied.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not SAFE_REQUEST_ID.fullmatch(tool_call_id):
+                raise SceneChatRequestError(
+                    422, "invalid_request", "Tool messages require a safe tool_call_id."
+                )
+            message["tool_call_id"] = tool_call_id
+            if isinstance(supplied.get("name"), str):
+                message["name"] = supplied["name"]
+        messages.append(message)
+        if role == "user":
+            latest_question = (
+                content.strip()
+                if isinstance(content, str)
+                else " ".join(part for part in text_parts if isinstance(part, str)).strip()
+            )
+    if latest_question is None:
+        raise SceneChatRequestError(422, "invalid_prompt", "The chat request needs a user message.")
+    return image_url, latest_question, messages, _normalise_tools(supplied_tools)
+
+
+def _normalise_tools(supplied_tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    if supplied_tools is None:
+        return None
+    tools: list[dict[str, Any]] = []
+    for tool in supplied_tools:
+        function = tool.get("function") if isinstance(tool, dict) and tool.get("type") == "function" else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or not SAFE_REQUEST_ID.fullmatch(name):
+            raise SceneChatRequestError(422, "invalid_tools", "Tools must define a safe function name.")
+        parameters = function.get("parameters", {"type": "object", "properties": {}})
+        if not isinstance(parameters, dict) or parameters.get("type") != "object":
+            raise SceneChatRequestError(422, "invalid_tools", "Tool parameters must be an object schema.")
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": str(function.get("description", "")),
+                    "parameters": parameters,
+                },
+            }
+        )
+    return tools
+
+
+def _normalise_tool_calls(supplied_calls: Any) -> list[dict[str, Any]]:
+    if not isinstance(supplied_calls, list) or not supplied_calls:
+        raise SceneChatRequestError(422, "invalid_request", "assistant tool_calls must be a non-empty list.")
+    calls: list[dict[str, Any]] = []
+    for call in supplied_calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        identifier = call.get("id") if isinstance(call, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        arguments = function.get("arguments") if isinstance(function, dict) else None
+        if not isinstance(identifier, str) or not SAFE_REQUEST_ID.fullmatch(identifier):
+            raise SceneChatRequestError(422, "invalid_request", "Tool calls require a safe identifier.")
+        if not isinstance(name, str) or not SAFE_REQUEST_ID.fullmatch(name):
+            raise SceneChatRequestError(422, "invalid_request", "Tool calls require a safe function name.")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError as error:
+                raise SceneChatRequestError(422, "invalid_request", "Tool arguments must be JSON.") from error
+        if not isinstance(arguments, dict):
+            raise SceneChatRequestError(422, "invalid_request", "Tool arguments must be a JSON object.")
+        calls.append(
+            {"id": identifier, "type": "function", "function": {"name": name, "arguments": arguments}}
+        )
+    return calls
+
+
+_GEMMA_TOOL_CALL = re.compile(
+    r"<\|tool_call\>\s*call:(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<arguments>\{.*?\})\s*<tool_call\|>",
+    re.DOTALL,
+)
+_GEMMA_ARGUMENT_KEY = re.compile(r"([,{]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:")
+
+
+def _gemma_tool_calls(text: str, tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    allowed_names = {tool["function"]["name"] for tool in tools}
+    calls: list[dict[str, Any]] = []
+    for match in _GEMMA_TOOL_CALL.finditer(text):
+        name = match.group("name")
+        if name not in allowed_names:
+            continue
+        candidate = _GEMMA_ARGUMENT_KEY.sub(r'\1"\2":', match.group("arguments").replace('<|"|>', '"'))
+        try:
+            arguments = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(arguments, dict):
+            calls.append(
+                {
+                    "id": f"call_{uuid.uuid4().hex}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments, separators=(",", ":"))},
+                }
+            )
+    content = _GEMMA_TOOL_CALL.sub("", text).strip()
+    return calls, content
 
 
 def _approved_question(prompt: str) -> str:
@@ -1225,16 +1419,33 @@ async def _run_generation(
     max_tokens: int,
     cancellation: threading.Event,
     timeout_seconds: float,
+    messages: list[dict[str, Any]] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> GenerationResult:
-    task = asyncio.create_task(
-        run_in_isolated_thread(
-            engine.generate,
-            image=image,
-            question=question,
-            max_tokens=max_tokens,
-            cancellation=cancellation,
-        )
-    )
+    if messages is None:
+        method = engine.generate
+        arguments: dict[str, Any] = {
+            "image": image,
+            "question": question,
+            "max_tokens": max_tokens,
+            "cancellation": cancellation,
+        }
+    else:
+        method = getattr(engine, "generate_chat", None)
+        if method is None:
+            raise SceneChatRequestError(
+                501,
+                "tool_calling_unsupported",
+                "This local Gemma runtime does not implement the requested chat history or tools.",
+            )
+        arguments = {
+            "messages": messages,
+            "tools": tools,
+            "image": image,
+            "max_tokens": max_tokens,
+            "cancellation": cancellation,
+        }
+    task = asyncio.create_task(run_in_isolated_thread(method, **arguments))
     started = time.monotonic()
     timed_out = False
     disconnected = False
