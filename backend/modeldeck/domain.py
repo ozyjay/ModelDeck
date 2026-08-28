@@ -222,10 +222,10 @@ def validate_routing_profile(
             if worker is None:
                 messages.append("Unknown or archived Worker")
             else:
-                if worker.generation_family != contract.generation_family.value:
-                    messages.append(
-                        f"Requires {contract.generation_family.value}, got {worker.generation_family}"
-                    )
+                compatible_families = contract.compatible_generation_families or (contract.generation_family,)
+                if worker.generation_family not in {family.value for family in compatible_families}:
+                    expected_families = ", ".join(family.value for family in compatible_families)
+                    messages.append(f"Requires one of: {expected_families}; got {worker.generation_family}")
                 missing = [
                     capability
                     for capability in contract.required_capabilities

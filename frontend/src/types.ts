@@ -70,6 +70,7 @@ export interface ProtocolContract {
   id: string;
   display_name: string;
   generation_family: string;
+  compatible_generation_families: string[];
   required_capabilities: string[];
   required_worker_settings: Record<string, string | number>;
   surfaces: string[];

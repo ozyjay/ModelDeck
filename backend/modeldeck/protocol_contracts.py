@@ -11,6 +11,7 @@ class ProtocolContract(BaseModel):
     id: str
     display_name: str
     generation_family: GenerationFamily
+    compatible_generation_families: tuple[GenerationFamily, ...] = ()
     required_capabilities: tuple[str, ...] = ()
     required_worker_settings: dict[str, str | int] = Field(default_factory=dict)
     surfaces: tuple[str, ...]
@@ -23,6 +24,10 @@ PROTOCOL_CONTRACTS = {
             id="openai-chat-v1",
             display_name="OpenAI-compatible chat",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
+            compatible_generation_families=(
+                GenerationFamily.AUTOREGRESSIVE,
+                GenerationFamily.VISION_LANGUAGE,
+            ),
             required_capabilities=("chat",),
             surfaces=("POST /v1/chat/completions",),
         ),
@@ -30,6 +35,10 @@ PROTOCOL_CONTRACTS = {
             id="openai-image-chat-v1",
             display_name="OpenAI-compatible image chat",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
+            compatible_generation_families=(
+                GenerationFamily.AUTOREGRESSIVE,
+                GenerationFamily.VISION_LANGUAGE,
+            ),
             required_capabilities=("chat", "image_input"),
             surfaces=("POST /v1/chat/completions",),
         ),

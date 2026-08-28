@@ -221,6 +221,9 @@ def create_v3_router() -> APIRouter:
                     "id": contract.id,
                     "display_name": contract.display_name,
                     "generation_family": contract.generation_family,
+                    "compatible_generation_families": list(
+                        contract.compatible_generation_families or (contract.generation_family,)
+                    ),
                     "required_capabilities": list(contract.required_capabilities),
                     "required_worker_settings": contract.required_worker_settings,
                     "surfaces": list(contract.surfaces),

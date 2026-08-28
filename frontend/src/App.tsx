@@ -396,7 +396,7 @@ function capabilityNameConflicts(capabilities: RoutingProfile["capabilities"]) {
 function workerSupportsContract(worker: Worker, contractId: string, contracts: ProtocolContract[]) {
   const contract = contracts.find((item) => item.id === contractId);
   return Boolean(contract
-    && worker.generation_family === contract.generation_family
+    && (contract.compatible_generation_families ?? [contract.generation_family]).includes(worker.generation_family)
     && contract.required_capabilities.every((capability) => worker.capabilities[capability] === true));
 }
 
@@ -406,9 +406,10 @@ function contractRequirement(contractId: string, contracts: ProtocolContract[]) 
   const capabilities = contract.required_capabilities.length
     ? ` with ${contract.required_capabilities.map(humanise).join(" and ")}`
     : "";
-  const family = humanise(contract.generation_family);
-  const article = /^[aeiou]/i.test(family) ? "an" : "a";
-  return `${contract.display_name} requires ${article} ${family} Worker${capabilities}. Incompatible Workers are hidden; an existing mismatch must be replaced with a compatible Worker.`;
+  const families = contract.compatible_generation_families ?? [contract.generation_family];
+  const familyDescription = families.map(humanise).join(" or ");
+  const article = /^[aeiou]/i.test(familyDescription) ? "an" : "a";
+  return `${contract.display_name} requires ${article} ${familyDescription} Worker${capabilities}. Incompatible Workers are hidden; an existing mismatch must be replaced with a compatible Worker.`;
 }
 
 function CollapsibleEditorSection({ sectionId, title, description, accessory, children }: { sectionId: string; title: string; description: string; accessory: ReactNode; children: ReactNode }) {

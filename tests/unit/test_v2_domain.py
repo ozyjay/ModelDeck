@@ -214,8 +214,34 @@ def test_embedding_contract_rejects_autoregressive_chat_workers() -> None:
 
     assert validation["valid"] is False
     messages = [error["message"] for error in validation["errors"]]
-    assert "Requires embedding, got autoregressive" in messages
+    assert "Requires one of: embedding; got autoregressive" in messages
     assert "Missing capabilities: embeddings" in messages
+
+
+def test_openai_chat_contract_accepts_a_vision_language_chat_worker() -> None:
+    gemma_worker = worker_definition().model_copy(
+        update={
+            "generation_family": "vision-language",
+            "capabilities": {"chat": True, "image_input": True},
+        }
+    )
+    profile = RoutingProfile(
+        id=str(uuid4()),
+        name="Local applications",
+        capabilities=[
+            {
+                "id": str(uuid4()),
+                "display_name": "Fast local",
+                "public_name": "fast-local",
+                "protocol_contract": "openai-chat-v1",
+                "worker_ids": [gemma_worker.id],
+            }
+        ],
+    )
+
+    validation = validate_routing_profile(profile, [gemma_worker], [])
+
+    assert validation["valid"] is True
 
 
 def test_tested_working_profile_requires_matching_evidence() -> None:
