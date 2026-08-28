@@ -1405,7 +1405,11 @@ def _capability_smoke_timeout(contract: str, request: Request) -> float:
 def _worker_capability_request(
     definition: WorkerDefinition, capability_id: str
 ) -> tuple[str, dict[str, object] | None, dict[str, str] | None]:
-    model = definition.to_profile().alias
+    model = (
+        definition.model_id
+        if definition.runtime == "gemma4-general-chat-transformers-rocm"
+        else definition.to_profile().alias
+    )
     try:
         probe_request = build_probe_request(
             probe_for_capability(capability_id),
