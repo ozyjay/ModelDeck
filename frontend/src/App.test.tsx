@@ -147,6 +147,7 @@ describe("ModelDeck routing profile operator console", () => {
     fireEvent.click(await screen.findByRole("link", { name: "Models" }));
 
     expect(await screen.findByText("Video understanding")).toBeInTheDocument();
+    expect(screen.getByText("runtime unavailable")).toBeInTheDocument();
     expect(screen.getByText(/No Worker is available yet/)).toBeInTheDocument();
     expect(screen.getByText(/Allowed for a future runtime/)).toBeInTheDocument();
     expect(screen.getByText("Evidence and provenance")).toBeInTheDocument();
