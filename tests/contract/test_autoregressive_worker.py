@@ -15,6 +15,7 @@ from modeldeck.workers.autoregressive_worker import (
     ToolCallProtocolError,
     TransformersAutoregressiveEngine,
     _AcceleratorOutOfMemory,
+    _normalise_qwen_tool_arguments,
     _openai_tool_calls,
     _qwen_chat_messages,
     _qwen_tool_schemas,
@@ -601,6 +602,24 @@ def test_worker_parses_qwen_function_tags_and_hides_its_reasoning_channel() -> N
         "name": "read_workspace_text_file",
         "arguments": '{"path": "Readme.md"}',
     }
+
+
+def test_worker_unwraps_qwen_json_parameter_for_an_argument_free_tool() -> None:
+    calls, _ = _openai_tool_calls(
+        "<tool_call><function=ready><parameter=json>{}</parameter></function></tool_call>"
+    )
+
+    _normalise_qwen_tool_arguments(
+        calls,
+        [
+            {
+                "type": "function",
+                "function": {"name": "ready", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
+    )
+
+    assert calls[0]["function"]["arguments"] == "{}"
 
 
 @pytest.mark.asyncio

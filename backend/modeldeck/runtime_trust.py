@@ -112,7 +112,7 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             id="qwen35-chat-transformers-rocm",
             display_name="Qwen3.5 text chat Transformers ROCm",
             generation_family=GenerationFamily.AUTOREGRESSIVE,
-            capabilities=frozenset({"chat", "completions", "streaming", "cancellation"}),
+            capabilities=frozenset({"chat", "completions", "streaming", "cancellation", "tool_calling"}),
             template_settings=frozenset(
                 {
                     "context_length",

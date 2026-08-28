@@ -61,7 +61,7 @@
       "display_name": "Qwen3.5 text chat ROCm",
       "runtime": "qwen35-chat-transformers-rocm",
       "generation_family": "autoregressive",
-      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
+      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "tool_calling": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 512, "thinking_mode": "disabled", "startup_timeout_seconds": 600, "warmup_timeout_seconds": 180, "hardware_verification_required": true},
       "cache_setting": "cache_root",
       "dtype": "bfloat16"

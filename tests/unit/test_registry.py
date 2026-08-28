@@ -273,6 +273,7 @@ def test_qwen35_chat_runtime_is_dedicated_and_requires_hardware_verification() -
     assert template.generation_family.value == "autoregressive"
     assert template.capabilities.chat is True
     assert template.capabilities.completions is True
+    assert template.capabilities.tool_calling is True
     assert template.settings["thinking_mode"] == "disabled"
     assert template.settings["hardware_verification_required"] is True
 

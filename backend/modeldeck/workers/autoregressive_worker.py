@@ -1206,6 +1206,7 @@ async def _generate_response(
     text = events[-1].get("text_so_far", "") if events else ""
     try:
         tool_calls, content = _openai_tool_calls(text)
+        _normalise_qwen_tool_arguments(tool_calls, body.tools)
         _enforce_tool_choice(body, tool_calls)
     except ToolCallProtocolError as error:
         return _error_response(422, error.code, error.message)
@@ -1445,6 +1446,38 @@ def _openai_tool_calls(text: str) -> tuple[list[dict[str, Any]], str | None]:
         calls.append(_openai_tool_call(call, index))
     content = _TOOL_CALL.sub("", text).strip()
     return calls, content or None
+
+
+def _normalise_qwen_tool_arguments(calls: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> None:
+    """Unwrap Qwen's occasional XML ``json`` parameter for argument-free tools."""
+
+    schemas = {
+        function["name"]: function.get("parameters", {})
+        for tool in tools or []
+        if isinstance(tool, dict)
+        and isinstance((function := tool.get("function")), dict)
+        and isinstance(function.get("name"), str)
+    }
+    for call in calls:
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        parameters = schemas.get(function.get("name"))
+        if not isinstance(parameters, dict):
+            continue
+        properties = parameters.get("properties", {})
+        if not isinstance(properties, dict) or "json" in properties:
+            continue
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str):
+            continue
+        try:
+            decoded = json.loads(arguments)
+            inner = json.loads(decoded["json"]) if set(decoded) == {"json"} else None
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(inner, dict):
+            function["arguments"] = json.dumps(inner)
 
 
 def _openai_tool_call(call: Any, index: int) -> dict[str, Any]:
