@@ -26,7 +26,7 @@ from modeldeck.async_execution import iterate_in_isolated_thread, run_in_isolate
 from modeldeck.prefix_cache import (
     PREFIX_CACHE_MAX_BYTES,
     PREFIX_CACHE_MAX_TOKENS,
-    supports_wayfinder_prefix_cache,
+    supports_application_managed_prefix_cache,
 )
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
@@ -47,8 +47,8 @@ class EngineConfig:
     def __post_init__(self) -> None:
         if self.context_length > 32_768:
             raise ValueError("Autoregressive worker context length cannot exceed 32,768 tokens")
-        if self.prefix_cache_enabled and not supports_wayfinder_prefix_cache(self.model_id):
-            raise ValueError("Prefix caching is allowlisted only for the dedicated WayFinder Qwen2.5 models")
+        if self.prefix_cache_enabled and not supports_application_managed_prefix_cache(self.model_id):
+            raise ValueError("Application-managed prefix caching is not qualified for this Worker")
 
 
 @dataclass(frozen=True)
@@ -259,7 +259,7 @@ class TransformersAutoregressiveEngine:
             "load_epoch": self._load_epoch,
             "prefix_caching": (
                 "application-managed"
-                if supports_wayfinder_prefix_cache(self.config.model_id)
+                if supports_application_managed_prefix_cache(self.config.model_id)
                 else "unsupported"
             ),
             "prefix_cache_enabled": self.config.prefix_cache_enabled,
@@ -295,7 +295,7 @@ class TransformersAutoregressiveEngine:
         bypass_reason = "hint_absent"
         if hint is not None and not self.config.prefix_cache_enabled:
             bypass_reason = "disabled"
-        elif hint is not None and not supports_wayfinder_prefix_cache(self.config.model_id):
+        elif hint is not None and not supports_application_managed_prefix_cache(self.config.model_id):
             bypass_reason = "unsupported_model"
         elif hint is not None and body.messages:
             stable_messages = _qwen_chat_messages(body.messages[: hint.stable_message_count])
@@ -355,7 +355,7 @@ class TransformersAutoregressiveEngine:
         return {
             "prefix_caching": (
                 "application-managed"
-                if supports_wayfinder_prefix_cache(self.config.model_id)
+                if supports_application_managed_prefix_cache(self.config.model_id)
                 else "unsupported"
             ),
             "prefix_cache_enabled": self.config.prefix_cache_enabled,
@@ -1018,7 +1018,9 @@ def create_app(
             hidden_states="optional",
             seeded_generation=True,
             prefix_caching=(
-                "application-managed" if supports_wayfinder_prefix_cache(config.model_id) else "unsupported"
+                "application-managed"
+                if supports_application_managed_prefix_cache(config.model_id)
+                else "unsupported"
             ),
             prefix_cache_enabled=config.prefix_cache_enabled,
         )

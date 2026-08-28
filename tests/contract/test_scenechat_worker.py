@@ -172,7 +172,7 @@ class ToolCallingVisionEngine(FakeVisionEngine):
     ) -> GenerationResult:
         self.calls.append({"messages": messages, "tools": tools, "max_tokens": max_tokens})
         return GenerationResult(
-            '<|tool_call>call:read_workspace_text_file{path:<|"|>Readme.md<|"|>}<tool_call|>',
+            '<|tool_call>call:read_workspace_text_file{path:<|"|>Readme.md<|"|>}<tool_call|><|tool_response>',
             prompt_tokens=17,
             completion_tokens=9,
         )

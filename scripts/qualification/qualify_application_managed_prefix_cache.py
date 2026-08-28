@@ -338,7 +338,7 @@ def main() -> int:
                 for worker in selected
             ]
         report = {
-            "format": "modeldeck-wayfinder-prefix-cache-qualification",
+            "format": "modeldeck-application-managed-prefix-cache-qualification",
             "version": 1,
             "results": results,
         }
@@ -348,7 +348,7 @@ def main() -> int:
         print(rendered, end="")
         return 0
     except (httpx.HTTPError, ValueError, QualificationError) as error:
-        print(f"WayFinder prefix-cache qualification failed: {error}")
+        print(f"Application-managed prefix-cache qualification failed: {error}")
         return 1
 
 

@@ -152,13 +152,13 @@ SHA-256 digest for deterministic-run comparison.
 Physical benchmark runs require the target GPU, pinned local snapshots, the relevant
 ROCm environments, substantial memory, and time. They are not part of normal CI.
 
-For application-managed WayFinder prefix-cache qualification, use the separate focused
+For application-managed prefix-cache qualification, use the separate focused
 runner after enabling an allowlisted replacement Worker:
 
 ```powershell
-pwsh -NoProfile -File scripts/qualification/qualify_wayfinder_prefix_cache.ps1 `
+pwsh -NoProfile -File scripts/qualification/qualify_application_managed_prefix_cache.ps1 `
     -Workers '<worker-id>' -Repetitions 5 `
-    -Output 'var/benchmarks/wayfinder-prefix-cache.json'
+    -Output 'var/benchmarks/application-managed-prefix-cache.json'
 ```
 
 It clears the one-entry cache before each cold case, then runs the identical rendered request

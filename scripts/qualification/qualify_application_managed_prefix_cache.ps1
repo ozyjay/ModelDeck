@@ -17,7 +17,7 @@ if (-not (Test-Path '.venv/bin/python')) {
 }
 
 $Arguments = @(
-    './scripts/qualification/qualify_wayfinder_prefix_cache.py',
+    './scripts/qualification/qualify_application_managed_prefix_cache.py',
     '--workers'
 ) + $Workers + @('--repetitions', $Repetitions)
 if ($Output) {
@@ -26,5 +26,5 @@ if ($Output) {
 
 & .venv/bin/python @Arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "WayFinder prefix-cache qualification failed with exit code $LASTEXITCODE."
+    throw "Application-managed prefix-cache qualification failed with exit code $LASTEXITCODE."
 }

@@ -32,7 +32,7 @@ from modeldeck.domain import (
 )
 from modeldeck.gemma4_settings import DEFAULT_VISUAL_TOKEN_BUDGET, VisualTokenBudget
 from modeldeck.hardware import probe_environment
-from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
+from modeldeck.prefix_cache import supports_application_managed_prefix_cache
 from modeldeck.profiles import LOCAL_PORT_RANGE, LocalProfileRequest, create_local_profile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 from modeldeck.q4_release import Q4ReleaseError, verify_modeldeck_q4_release
@@ -239,10 +239,10 @@ def create_v3_router() -> APIRouter:
     @router.post("/workers", status_code=201)
     async def create_worker(payload: WorkerCreateRequest, request: Request):
         _require_mutable(request)
-        if payload.prefix_cache_enabled and not supports_wayfinder_prefix_cache(payload.model_id):
+        if payload.prefix_cache_enabled and not supports_application_managed_prefix_cache(payload.model_id):
             raise HTTPException(
                 409,
-                "Prefix caching is allowlisted only for the dedicated WayFinder Qwen2.5 models",
+                "Application-managed prefix caching is not qualified for this Worker",
             )
         clean_name = " ".join(payload.name.split())
         if any(

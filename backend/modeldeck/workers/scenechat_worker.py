@@ -1253,7 +1253,8 @@ def _gemma_tool_calls(text: str, tools: list[dict[str, Any]]) -> tuple[list[dict
                     "function": {"name": name, "arguments": json.dumps(arguments, separators=(",", ":"))},
                 }
             )
-    content = _GEMMA_TOOL_CALL.sub("", text).strip()
+    content = _GEMMA_TOOL_CALL.sub("", text)
+    content = re.sub(r"<\|(?:tool_response|turn)(?:\|)?>", "", content).strip()
     return calls, content
 
 

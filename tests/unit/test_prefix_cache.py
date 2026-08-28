@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 from modeldeck.prefix_cache import (
+    APPLICATION_MANAGED_PREFIX_CACHE_MODEL_IDS,
     PREFIX_CACHE_MAX_BYTES,
     PREFIX_CACHE_MAX_TOKENS,
-    WAYFINDER_PREFIX_CACHE_MODEL_IDS,
     stable_model_configuration_fingerprint,
-    supports_wayfinder_prefix_cache,
+    supports_application_managed_prefix_cache,
 )
 from modeldeck.workers.autoregressive_worker import (
     EngineConfig,
@@ -112,11 +112,11 @@ def _engine(tokenizer: PrefixTokenizer | None = None) -> TransformersAutoregress
     return engine
 
 
-@pytest.mark.parametrize("model_id", sorted(WAYFINDER_PREFIX_CACHE_MODEL_IDS))
-def test_only_dedicated_wayfinder_models_are_allowlisted(model_id: str) -> None:
-    assert supports_wayfinder_prefix_cache(model_id)
-    assert not supports_wayfinder_prefix_cache("Qwen/Qwen2.5-1.5B-Instruct")
-    with pytest.raises(ValueError, match="allowlisted only"):
+@pytest.mark.parametrize("model_id", sorted(APPLICATION_MANAGED_PREFIX_CACHE_MODEL_IDS))
+def test_only_qualified_models_support_application_managed_prefix_cache(model_id: str) -> None:
+    assert supports_application_managed_prefix_cache(model_id)
+    assert not supports_application_managed_prefix_cache("Qwen/Qwen2.5-1.5B-Instruct")
+    with pytest.raises(ValueError, match="not qualified"):
         EngineConfig(
             model_id="Qwen/Qwen2.5-1.5B-Instruct",
             revision="pinned",

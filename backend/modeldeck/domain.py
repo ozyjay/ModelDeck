@@ -11,7 +11,7 @@ from modeldeck.capabilities import (
     capability_id_for_contract,
     worker_cache_identity,
 )
-from modeldeck.prefix_cache import supports_wayfinder_prefix_cache
+from modeldeck.prefix_cache import supports_application_managed_prefix_cache
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
 
@@ -86,7 +86,7 @@ class WorkerDefinition(BaseModel):
         eligible = (
             self.generation_family == "autoregressive"
             and self.runtime == "transformers-rocm"
-            and supports_wayfinder_prefix_cache(self.model_id)
+            and supports_application_managed_prefix_cache(self.model_id)
         )
         enabled = self.settings.get("prefix_cache_enabled") is True
         if enabled and not eligible:

@@ -105,7 +105,7 @@ load epoch is not part of that public identity.
 Qualify the 0.5B and 3B Workers independently after enabling their replacement Workers:
 
 ```powershell
-pwsh -NoProfile -File scripts/qualification/qualify_wayfinder_prefix_cache.ps1 `
+pwsh -NoProfile -File scripts/qualification/qualify_application_managed_prefix_cache.ps1 `
     -Workers '<0.5B-worker-id>','<3B-worker-id>' `
     -Repetitions 5 `
     -Output 'var/benchmarks/wayfinder-prefix-cache.json'

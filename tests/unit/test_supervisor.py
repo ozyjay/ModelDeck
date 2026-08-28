@@ -145,7 +145,7 @@ def test_qwen_launches_are_allowlisted_offline_and_cache_pinned(monkeypatch, tmp
     assert launch.environment["HF_HUB_CACHE"] == "/mnt/work/models/huggingface/hub"
 
 
-def test_wayfinder_prefix_cache_launch_flag_is_opt_in(monkeypatch, tmp_path) -> None:
+def test_application_managed_prefix_cache_launch_flag_is_opt_in(monkeypatch, tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
     runtime_python = tmp_path / "bin/python"
     runtime_python.parent.mkdir(parents=True)

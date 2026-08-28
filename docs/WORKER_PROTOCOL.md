@@ -80,10 +80,10 @@ hard ceiling remains 32,768 tokens.
 
 `CapabilitySet.prefix_caching` is `unsupported`, `backend-managed`, or
 `application-managed`, and `prefix_cache_enabled` reports the immutable Worker setting.
-Only the dedicated Qwen2.5 0.5B and 3B WayFinder Workers advertise
+Only physically-qualified dedicated Qwen2.5 0.5B and 3B Workers currently advertise
 `application-managed`; other autoregressive and embedding Workers report `unsupported`.
-Enabled Workers accept the optional `modeldeck.prefix_cache` request hint described in
-`docs/WAYFINDER_GATE0.md`. The hint is advisory and never replaces prompt content. A direct
+Enabled Workers accept the optional `modeldeck.prefix_cache` request hint documented in
+the [benchmark and qualification guide](BENCHMARKS.md). The hint is advisory and never replaces prompt content. A direct
 `POST /prefix-cache/clear` is available only while generation is idle and returns the number
 of entries cleared and measured bytes released.
 
