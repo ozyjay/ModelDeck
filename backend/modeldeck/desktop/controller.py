@@ -7,6 +7,7 @@ import subprocess
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -32,18 +33,22 @@ class ServiceController:
         self,
         *,
         run: Callable[[Sequence[str]], None] | None = None,
+        prepare: Callable[[], None] | None = None,
         read_health: Callable[[], ServiceHealth] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._run = run or _run_systemctl
+        self._prepare = prepare or prepare_service_directories
         self._read_health = read_health or read_management_health
         self._sleep = sleep
 
     def start(self) -> None:
+        self._prepare()
         self._run((SYSTEMCTL, "--user", "daemon-reload"))
         self._run((SYSTEMCTL, "--user", "start", TARGET))
 
     def restart(self) -> None:
+        self._prepare()
         self._run((SYSTEMCTL, "--user", "daemon-reload"))
         self._run((SYSTEMCTL, "--user", "restart", TARGET))
 
@@ -75,6 +80,21 @@ def should_prompt_for_restart(*, installed_build_id: str, running_build_id: str 
     """True only when an already-running service predates the installed package."""
 
     return bool(running_build_id and running_build_id != installed_build_id)
+
+
+def prepare_service_directories(*, home: Path | None = None) -> None:
+    """Create the fixed writable paths required by the packaged systemd sandbox."""
+
+    user_home = home or Path.home()
+    directories = (
+        user_home / ".local" / "share" / "modeldeck",
+        user_home / ".local" / "state" / "modeldeck",
+    )
+    try:
+        for directory in directories:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        raise DesktopServiceError("Could not prepare the ModelDeck data directories") from error
 
 
 def _run_systemctl(command: Sequence[str]) -> None:

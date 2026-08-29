@@ -16,6 +16,7 @@ from modeldeck.desktop.controller import (
     DesktopServiceError,
     ServiceController,
     ServiceHealth,
+    prepare_service_directories,
     should_prompt_for_restart,
 )
 from modeldeck.state_import import StateImportError, import_state_directory, validate_state_directory
@@ -48,7 +49,11 @@ def test_desktop_settings_use_xdg_paths_only_when_packaged(monkeypatch, tmp_path
 
 def test_service_controller_uses_only_fixed_user_systemd_commands() -> None:
     commands: list[tuple[str, ...]] = []
-    controller = ServiceController(run=lambda command: commands.append(tuple(command)))
+    preparations: list[None] = []
+    controller = ServiceController(
+        run=lambda command: commands.append(tuple(command)),
+        prepare=lambda: preparations.append(None),
+    )
 
     controller.start()
     controller.restart()
@@ -61,6 +66,14 @@ def test_service_controller_uses_only_fixed_user_systemd_commands() -> None:
         (SYSTEMCTL, "--user", "restart", TARGET),
         (SYSTEMCTL, "--user", "stop", TARGET),
     ]
+    assert preparations == [None, None]
+
+
+def test_service_controller_prepares_packaged_writable_directories(tmp_path: Path) -> None:
+    prepare_service_directories(home=tmp_path)
+
+    assert (tmp_path / ".local/share/modeldeck").is_dir()
+    assert (tmp_path / ".local/state/modeldeck").is_dir()
 
 
 def test_service_controller_waits_for_a_ready_management_service() -> None:
