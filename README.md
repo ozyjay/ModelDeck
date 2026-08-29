@@ -289,18 +289,36 @@ empty directory. To replace an incomplete wheelhouse, add `-ReplaceWheelhouse`; 
 the old directory to a timestamped backup rather than deleting it. Review its generated SHA-256
 inventory before signing or distributing an RPM.
 
-Sign a release RPM separately, then verify and install it:
+Sign a release RPM separately, then verify and install it. The release wrapper selects the
+only local secret key automatically. For a fresh signing workstation, it can create a protected
+key and proceed in one command (GPG opens pinentry for its passphrase):
 
 ```powershell
-pwsh -NoProfile -File scripts/packaging/sign_fedora_rpm.ps1 `
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
   -RpmPath dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm `
-  -KeyId <public-key-id>
+  -CreateKey -SigningName 'ModelDeck Release' -SigningEmail 'release@example.com'
+```
+
+When the key already exists, supply its key ID if more than one secret key is present:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
+  -RpmPath dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm `
+  -KeyId <private-key-id-or-fingerprint>
 ```
 
 ```bash
 rpm --checksig --verbose dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
 sudo dnf install ./dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
 modeldeck-desktop
+```
+
+On a machine that has not yet trusted the release key, import its public key before verifying or
+installing the RPM. Publish the resulting `.asc` file with the release, never the private key:
+
+```bash
+gpg --armor --export <private-key-id-or-fingerprint> > modeldeck-release-signing-key.asc
+sudo rpm --import modeldeck-release-signing-key.asc
 ```
 
 The RPM installs program files system-wide under `/usr`; its per-user state is stored in

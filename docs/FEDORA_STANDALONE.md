@@ -47,15 +47,34 @@ during the build.
 ## Sign, install, and launch
 
 Signing is separate from building. Install Fedora's `rpm-sign` package and make the release GPG
-private key available to the local signing agent; never add a key to this repository.
+private key available to the local signing agent; never add a key to this repository. The release
+wrapper uses the only available private key, requires an explicit key ID if several are available,
+and can create a new protected key on a fresh signing workstation.
 
 ```powershell
-pwsh -NoProfile -File scripts/packaging/sign_fedora_rpm.ps1 `
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
   -RpmPath dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm `
-  -KeyId <public-key-id>
+  -CreateKey -SigningName 'ModelDeck Release' -SigningEmail 'release@example.com'
+```
+
+For an existing key, use its long ID or fingerprint:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
+  -RpmPath dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm `
+  -KeyId <private-key-id-or-fingerprint>
 rpm --checksig --verbose dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm
 sudo dnf install dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm
 modeldeck-desktop
+```
+
+The signing wrapper verifies its work in an isolated temporary RPM database, so it does not add a
+key to the release workstation's system RPM database. Before another machine can verify or install
+the RPM, distribute the public key and import it there:
+
+```bash
+gpg --armor --export <private-key-id-or-fingerprint> > modeldeck-release-signing-key.asc
+sudo rpm --import modeldeck-release-signing-key.asc
 ```
 
 Launching the window starts `modeldeck.target` with `systemctl --user start`. Closing the window

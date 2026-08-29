@@ -199,6 +199,21 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "modeldeck-*.x86_64.rpm" in wrapper
 
 
+def test_fedora_release_signing_wrapper_handles_key_selection_and_creation() -> None:
+    wrapper = (PROJECT_ROOT / "scripts/packaging/release_fedora_rpm.ps1").read_text(encoding="utf-8")
+    signer = (PROJECT_ROOT / "scripts/packaging/sign_fedora_rpm.ps1").read_text(encoding="utf-8")
+
+    assert "sign_fedora_rpm.ps1" in wrapper
+    assert "Get-SecretKeyFingerprints" in wrapper
+    assert "--quick-generate-key" in wrapper
+    assert "-CreateKey" in wrapper
+    assert "Multiple secret GPG keys" in wrapper
+    assert "AwaitingPrimaryFingerprint" in wrapper
+    assert "-VerifyOnly" in wrapper
+    assert "--dbpath $VerificationDatabase --import $PublicKeyPath" in signer
+    assert "modeldeck-rpm-signing-" in signer
+
+
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
