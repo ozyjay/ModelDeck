@@ -257,7 +257,9 @@ def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
     assert 'connect("load-failed", self._on_console_load_failed)' in source
     assert 'connect("load-changed", self._on_console_load_changed)' in source
     assert "rootChildren" in source
-    assert "WebKit.WebView(settings=settings)" in source
+    assert "WebKit.UserScriptInjectionTime.START" in source
+    assert "ModelDeck page error" in source
+    assert "WebKit.WebView(settings=settings, user_content_manager=content_manager)" in source
 
 
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:

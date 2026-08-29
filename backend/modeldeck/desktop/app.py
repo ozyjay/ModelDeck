@@ -194,7 +194,28 @@ def main() -> None:
             settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)
             settings.set_enable_write_console_messages_to_stdout(self.development_mode)
             settings.set_enable_developer_extras(self.development_mode)
-            self.webview = WebKit.WebView(settings=settings)
+            content_manager = WebKit.UserContentManager()
+            if self.development_mode:
+                error_capture = WebKit.UserScript.new(
+                    """
+                    window.addEventListener('error', event => {
+                        console.error(
+                            `[ModelDeck page error] ${event.message} at ` +
+                                `${event.filename}:${event.lineno}:${event.colno}`,
+                            event.error?.stack ?? ''
+                        );
+                    }, true);
+                    window.addEventListener('unhandledrejection', event => {
+                        console.error('[ModelDeck unhandled rejection]', event.reason?.stack ?? event.reason);
+                    });
+                    """,
+                    WebKit.UserContentInjectedFrames.TOP_FRAME,
+                    WebKit.UserScriptInjectionTime.START,
+                    None,
+                    None,
+                )
+                content_manager.add_script(error_capture)
+            self.webview = WebKit.WebView(settings=settings, user_content_manager=content_manager)
             self.webview.connect("load-failed", self._on_console_load_failed)
             if self.development_mode:
                 self.webview.connect("load-changed", self._on_console_load_changed)
