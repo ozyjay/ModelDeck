@@ -4,6 +4,7 @@ param(
     [string]$WheelhouseManifest = 'packaging/fedora/wheelhouse.sha256',
     [string]$OutputDirectory = 'dist/fedora',
     [string]$Python = '',
+    [string]$RpmRelease = '1',
     [switch]$PrepareWheelhouse,
     [switch]$ReplaceWheelhouse
 )
@@ -176,6 +177,7 @@ $BuildParameters = @{
     WheelhouseManifest = $WheelhouseManifest
     OutputDirectory = $OutputDirectory
     Python = $ResolvedPython
+    RpmRelease = $RpmRelease
 }
 & (Join-Path $PSScriptRoot 'build_fedora_rpm.ps1') @BuildParameters
 if ($LASTEXITCODE -ne 0) { throw 'Fedora standalone RPM build failed.' }

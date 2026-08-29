@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,10 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "absolute symbolic links" in build_script
     assert "direct_url.json" in build_script
     assert "__pycache__" in build_script
+    assert "backend/modeldeck/__init__.py" in build_script
+    assert "modeldeck_version $Version" in build_script
+    assert "modeldeck_release $RpmRelease" in build_script
+    assert "RpmRelease must be a positive integer" in build_script
     cleanup_position = build_script.index("Get-ChildItem $Libexec -Recurse -Directory -Filter '__pycache__'")
     desktop_copy_position = build_script.index("Copy-Item 'backend/modeldeck/desktop'")
     assert cleanup_position > desktop_copy_position
@@ -196,7 +201,18 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "modeldeck-wheelhouse-" in wrapper
     assert "-ReplaceWheelhouse" in wrapper
     assert "$BuildParameters" in wrapper
+    assert "RpmRelease = $RpmRelease" in wrapper
     assert "modeldeck-*.x86_64.rpm" in wrapper
+
+
+def test_fedora_packaging_uses_the_hatch_version_source() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    spec = (PROJECT_ROOT / "packaging/fedora/modeldeck.spec").read_text(encoding="utf-8")
+
+    assert project["project"]["dynamic"] == ["version"]
+    assert project["tool"]["hatch"]["version"]["path"] == "backend/modeldeck/__init__.py"
+    assert "Version:        %{modeldeck_version}" in spec
+    assert "Release:        %{modeldeck_release}%{?dist}" in spec
 
 
 def test_fedora_release_signing_wrapper_handles_key_selection_and_creation() -> None:

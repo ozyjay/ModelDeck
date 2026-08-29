@@ -1,6 +1,6 @@
 Name:           modeldeck
-Version:        0.1.0
-Release:        1%{?dist}
+Version:        %{modeldeck_version}
+Release:        %{modeldeck_release}%{?dist}
 Summary:        Local-first model runtime manager and stable capability gateway
 License:        Apache-2.0
 BuildArch:      x86_64

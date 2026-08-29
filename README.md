@@ -289,6 +289,10 @@ empty directory. To replace an incomplete wheelhouse, add `-ReplaceWheelhouse`; 
 the old directory to a timestamped backup rather than deleting it. Review its generated SHA-256
 inventory before signing or distributing an RPM.
 
+RPM builds read the application version from `backend/modeldeck/__init__.py`. The RPM release
+number defaults to `1`; pass `-RpmRelease 2` for a packaging-only rebuild of the same application
+version. A new application release changes only `__version__` and starts again at RPM release `1`.
+
 Sign a release RPM separately, then verify and install it. The release wrapper selects the
 only local secret key automatically. For a fresh signing workstation, it can create a protected
 key and proceed in one command (GPG opens pinentry for its passphrase):

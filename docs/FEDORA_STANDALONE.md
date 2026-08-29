@@ -44,6 +44,11 @@ uses `pip --no-index` and rejects the live ROCm URLs in the source requirements 
 them with their pinned package versions. No model download or package-manager installation occurs
 during the build.
 
+The application version is read from `backend/modeldeck/__init__.py`; the spec receives that value
+only from the build script. For a packaging-only rebuild, keep the application version and pass a
+new RPM release number, for example `-RpmRelease 2`. For a new application release, change
+`__version__` and build with the default RPM release `1`.
+
 ## Sign, install, and launch
 
 Signing is separate from building. Install Fedora's `rpm-sign` package and make the release GPG

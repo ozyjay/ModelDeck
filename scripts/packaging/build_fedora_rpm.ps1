@@ -3,7 +3,8 @@ param(
     [string]$Wheelhouse = 'packaging/fedora/wheelhouse',
     [string]$WheelhouseManifest = 'packaging/fedora/wheelhouse.sha256',
     [string]$OutputDirectory = 'dist/fedora',
-    [string]$Python = 'python3.12'
+    [string]$Python = 'python3.12',
+    [string]$RpmRelease = '1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,9 +159,11 @@ if (-not (Get-Command patchelf -ErrorAction SilentlyContinue)) { throw 'patchelf
 & $Python --version
 if ($LASTEXITCODE -ne 0) { throw "Python interpreter is unavailable: $Python" }
 
-$Version = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+$Version = (Select-String -Path backend/modeldeck/__init__.py -Pattern '^__version__ = "([^"]+)"').Matches[0].Groups[1].Value
 if (-not $Version) { throw 'Could not determine the ModelDeck package version.' }
-$BuildId = "$Version-1"
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:[A-Za-z0-9.+~_-]+)?$') { throw "Invalid ModelDeck package version: $Version" }
+if ($RpmRelease -notmatch '^[1-9]\d*$') { throw "RpmRelease must be a positive integer, not: $RpmRelease" }
+$BuildId = "$Version-$RpmRelease"
 $Stage = Join-Path ([System.IO.Path]::GetTempPath()) "modeldeck-rpm-stage-$([guid]::NewGuid().ToString('N'))"
 $RpmTop = Join-Path ([System.IO.Path]::GetTempPath()) "modeldeck-rpmbuild-$([guid]::NewGuid().ToString('N'))"
 
@@ -234,7 +237,7 @@ exec /usr/bin/python3 -m modeldeck.desktop.app "`$@"
     & tar -C $Stage -czf "$RpmTop/SOURCES/modeldeck-payload.tar.gz" usr
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the RPM payload archive.' }
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-    & rpmbuild --quiet -bb packaging/fedora/modeldeck.spec --define "_topdir $RpmTop" --define "_tmppath $RpmTop/TMP" --define "_rpmdir $((Resolve-Path $OutputDirectory).Path)"
+    & rpmbuild --quiet -bb packaging/fedora/modeldeck.spec --define "_topdir $RpmTop" --define "_tmppath $RpmTop/TMP" --define "_rpmdir $((Resolve-Path $OutputDirectory).Path)" --define "modeldeck_version $Version" --define "modeldeck_release $RpmRelease"
     if ($LASTEXITCODE -ne 0) { throw 'RPM build failed.' }
     Write-Host "Built unsigned ModelDeck RPMs in $OutputDirectory. Sign them separately with scripts/packaging/sign_fedora_rpm.ps1."
 }
