@@ -215,6 +215,12 @@ def test_fedora_release_signing_wrapper_handles_key_selection_and_creation() -> 
     assert "$global:LASTEXITCODE = 0" in signer
 
 
+def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
+    source = (PROJECT_ROOT / "backend/modeldeck/desktop/app.py").read_text(encoding="utf-8")
+
+    assert 'if __name__ == "__main__":\n    main()' in source
+
+
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()

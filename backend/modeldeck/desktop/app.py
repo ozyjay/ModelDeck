@@ -287,3 +287,7 @@ def main() -> None:
 
     app = ModelDeckDesktop()
     raise SystemExit(app.run(sys.argv))
+
+
+if __name__ == "__main__":
+    main()
