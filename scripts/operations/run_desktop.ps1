@@ -10,7 +10,20 @@ if (-not (Test-Path '/usr/bin/python3' -PathType Leaf)) { throw '/usr/bin/python
 & /usr/bin/python3 -c 'import gi; gi.require_version("Adw", "1"); gi.require_version("Gtk", "4.0"); gi.require_version("WebKit", "6.0")'
 if ($LASTEXITCODE -ne 0) { throw '/usr/bin/python3 requires GTK4, libadwaita, and WebKitGTK 6.0 support to launch the ModelDeck desktop shell.' }
 
-& (Join-Path $PSScriptRoot 'run.ps1') -LockConfiguration:$LockConfiguration
+$ServicesReady = $false
+try {
+    $Health = Invoke-RestMethod -Uri 'http://127.0.0.1:3600/api/health' -TimeoutSec 2
+    $ServicesReady = $Health.status -eq 'ok'
+}
+catch {
+    $ServicesReady = $false
+}
+if ($ServicesReady) {
+    Write-Host 'Reusing the healthy local ModelDeck services already running on loopback.'
+}
+else {
+    & (Join-Path $PSScriptRoot 'run.ps1') -LockConfiguration:$LockConfiguration
+}
 
 $Version = (Select-String -Path 'backend/modeldeck/__init__.py' -Pattern '^__version__ = "([^"]+)"').Matches[0].Groups[1].Value
 if (-not $Version) { throw 'Could not determine the ModelDeck development build version.' }

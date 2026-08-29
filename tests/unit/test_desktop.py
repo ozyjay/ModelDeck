@@ -218,6 +218,8 @@ def test_development_desktop_launcher_uses_checkout_services() -> None:
     assert "MODELDECK_DESKTOP_DEVELOPMENT" in launcher
     assert "MODELDECK_DESKTOP_BUILD_ID" in launcher
     assert "/usr/bin/python3 -m modeldeck.desktop.app" in launcher
+    assert "Invoke-RestMethod -Uri 'http://127.0.0.1:3600/api/health'" in launcher
+    assert "Reusing the healthy local ModelDeck services" in launcher
 
 
 def test_fedora_packaging_uses_the_hatch_version_source() -> None:
@@ -250,6 +252,7 @@ def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
     source = (PROJECT_ROOT / "backend/modeldeck/desktop/app.py").read_text(encoding="utf-8")
 
     assert 'if __name__ == "__main__":\n    main()' in source
+    assert "set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)" in source
 
 
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
