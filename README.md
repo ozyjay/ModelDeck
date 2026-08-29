@@ -245,9 +245,53 @@ After changing `frontend/`, rebuild with
 `pwsh -NoProfile -File scripts/operations/build_frontend.ps1`. Verification rejects a stale
 committed bundle.
 
-For a native Fedora 44 desktop package with a GTK/WebKit window and user-service lifecycle,
-see [Fedora standalone ModelDeck](docs/FEDORA_STANDALONE.md). The package contains core runtime
-environments but never Model weights; HuggingFacePull remains the only acquisition path.
+## Build a Fedora standalone distribution
+
+The native Fedora 44 desktop package includes the GTK/WebKit desktop window, management service,
+gateway, and core isolated runtimes. It never includes Model weights; HuggingFacePull remains the
+only acquisition path.
+
+Before building, create `packaging/fedora/wheelhouse/` and populate it with every reviewed wheel
+listed in `packaging/fedora/wheelhouse.sha256`. The build is deliberately offline: it verifies
+each wheel's SHA-256 and stops if a required wheel is missing or differs from the manifest. It
+does not download packages, Models, or ROCm components.
+
+On Fedora 44 x86_64 with `rpmbuild`, Python 3.12, Node.js, npm, and the frontend dependencies
+already installed, create an unsigned RPM distribution from the repository root with:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1
+```
+
+The package is written beneath `dist/fedora/`, normally as
+`dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm`. To use a wheelhouse stored elsewhere,
+pass its directory and matching manifest explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
+  -Wheelhouse /path/to/wheelhouse `
+  -WheelhouseManifest /path/to/wheelhouse.sha256 `
+  -OutputDirectory dist/fedora
+```
+
+Sign a release RPM separately, then verify and install it:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/sign_fedora_rpm.ps1 `
+  -RpmPath dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm `
+  -KeyId <public-key-id>
+```
+
+```bash
+rpm --checksig --verbose dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
+sudo dnf install ./dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
+modeldeck-desktop
+```
+
+The RPM installs program files system-wide under `/usr`; its per-user state is stored in
+`~/.local/share/modeldeck` and Worker logs in `~/.local/state/modeldeck/logs/workers`. See
+[Fedora standalone ModelDeck](docs/FEDORA_STANDALONE.md) for the full packaging and lifecycle
+details.
 
 Test fixtures are not available in the operator UI or gateway as fallback choices. Stop all
 ModelDeck workers and services with `pwsh -NoProfile -File scripts/operations/stop.ps1`. See
