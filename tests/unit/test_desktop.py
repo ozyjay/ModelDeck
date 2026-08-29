@@ -141,6 +141,12 @@ def test_release_metadata_requires_a_build_identifier(tmp_path: Path) -> None:
         read_installed_build_id(release)
 
 
+def test_desktop_development_build_id_overrides_packaged_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MODELDECK_DESKTOP_BUILD_ID", "development")
+
+    assert read_installed_build_id(tmp_path / "missing-release.json") == "development"
+
+
 def test_fedora_assets_keep_services_loopback_only_and_package_models_externally() -> None:
     management_path = PROJECT_ROOT / "packaging/fedora/modeldeck-management.service.in"
     gateway_path = PROJECT_ROOT / "packaging/fedora/modeldeck-gateway.service.in"
@@ -203,6 +209,15 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "$BuildParameters" in wrapper
     assert "RpmRelease = $RpmRelease" in wrapper
     assert "modeldeck-*.x86_64.rpm" in wrapper
+
+
+def test_development_desktop_launcher_uses_checkout_services() -> None:
+    launcher = (PROJECT_ROOT / "scripts/operations/run_desktop.ps1").read_text(encoding="utf-8")
+
+    assert "run.ps1" in launcher
+    assert "MODELDECK_DESKTOP_DEVELOPMENT" in launcher
+    assert "MODELDECK_DESKTOP_BUILD_ID" in launcher
+    assert "python3 -m modeldeck.desktop.app" in launcher
 
 
 def test_fedora_packaging_uses_the_hatch_version_source() -> None:

@@ -1,4 +1,4 @@
-"""GTK4/libadwaita shell for the packaged Fedora desktop application.
+"""GTK4/libadwaita shell for packaged and development ModelDeck sessions.
 
 Imports of GI are intentionally delayed until ``main`` so control-plane tests and
 headless service use do not require a graphical stack.
@@ -20,6 +20,8 @@ APP_ID = "com.modeldeck.ModelDeck"
 CONSOLE_URI = "http://127.0.0.1:3600/"
 RELEASE_METADATA = Path("/usr/share/modeldeck/release.json")
 IMPORTER = Path("/usr/libexec/modeldeck/control/bin/modeldeck-import-state")
+DEVELOPMENT_MODE_ENV = "MODELDECK_DESKTOP_DEVELOPMENT"
+BUILD_ID_ENV = "MODELDECK_DESKTOP_BUILD_ID"
 
 
 def _desktop_data_dir() -> Path:
@@ -28,6 +30,9 @@ def _desktop_data_dir() -> Path:
 
 
 def read_installed_build_id(path: Path = RELEASE_METADATA) -> str:
+    development_build_id = os.environ.get(BUILD_ID_ENV)
+    if development_build_id:
+        return development_build_id
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -53,6 +58,7 @@ def main() -> None:
         def __init__(self) -> None:
             super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
             self.controller = ServiceController()
+            self.development_mode = os.environ.get(DEVELOPMENT_MODE_ENV) == "1"
             self.window: Any | None = None
             self.content: Any | None = None
             self.webview: Any | None = None
@@ -82,16 +88,17 @@ def main() -> None:
             )
             toolbar = Adw.ToolbarView()
             header = Adw.HeaderBar()
-            menu = Gio.Menu()
-            menu.append("Restart services", "app.restart")
-            menu.append("Import existing state…", "app.import")
-            menu.append("Stop ModelDeck services…", "app.stop")
-            menu_button = Gtk.MenuButton(
-                icon_name="open-menu-symbolic",
-                menu_model=menu,
-                tooltip_text="ModelDeck services",
-            )
-            header.pack_end(menu_button)
+            if not self.development_mode:
+                menu = Gio.Menu()
+                menu.append("Restart services", "app.restart")
+                menu.append("Import existing state…", "app.import")
+                menu.append("Stop ModelDeck services…", "app.stop")
+                menu_button = Gtk.MenuButton(
+                    icon_name="open-menu-symbolic",
+                    menu_model=menu,
+                    tooltip_text="ModelDeck services",
+                )
+                header.pack_end(menu_button)
             toolbar.add_top_bar(header)
             self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             toolbar.set_content(self.content)
@@ -127,13 +134,16 @@ def main() -> None:
             self._set_content(page)
 
         def _start_in_background(self, *, restart: bool) -> None:
-            self._show_status("Starting ModelDeck", "Starting local management and gateway services…")
+            if self.development_mode:
+                self._show_status("Connecting to ModelDeck", "Waiting for local development services…")
+            else:
+                self._show_status("Starting ModelDeck", "Starting local management and gateway services…")
 
             def work() -> None:
                 try:
                     if restart:
                         self.controller.restart()
-                    else:
+                    elif not self.development_mode:
                         self.controller.start()
                     health = self.controller.wait_until_ready()
                 except DesktopServiceError as error:
