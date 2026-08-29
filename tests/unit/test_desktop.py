@@ -164,5 +164,7 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     )
 
     assert "build_fedora_rpm.ps1" in wrapper
-    assert "@PSBoundParameters" in wrapper
+    assert "Prepare-OfflineWheelhouse" in wrapper
+    assert "--only-binary=:all:" in wrapper
+    assert "$BuildParameters" in wrapper
     assert "modeldeck-*.x86_64.rpm" in wrapper

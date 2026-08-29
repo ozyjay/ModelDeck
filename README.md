@@ -251,16 +251,16 @@ The native Fedora 44 desktop package includes the GTK/WebKit desktop window, man
 gateway, and core isolated runtimes. It never includes Model weights; HuggingFacePull remains the
 only acquisition path.
 
-Before building, create `packaging/fedora/wheelhouse/` and populate it with every reviewed wheel
-listed in `packaging/fedora/wheelhouse.sha256`. The build is deliberately offline: it verifies
-each wheel's SHA-256 and stops if a required wheel is missing or differs from the manifest. It
-does not download packages, Models, or ROCm components.
+The wrapper has two modes. `-PrepareWheelhouse` downloads the pinned binary wheels, writes their
+SHA-256 inventory, and then creates the RPM. It requires a connected release machine and an empty
+wheelhouse directory. The default mode performs only the offline verification and build; it stops
+if a required wheel is missing or differs from the inventory. Neither mode downloads Models.
 
 On Fedora 44 x86_64 with `rpmbuild`, Python 3.12, Node.js, npm, and the frontend dependencies
 already installed, create an unsigned RPM distribution from the repository root with:
 
 ```powershell
-pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 -PrepareWheelhouse
 ```
 
 The package is written beneath `dist/fedora/`, normally as
@@ -273,6 +273,9 @@ pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
   -WheelhouseManifest /path/to/wheelhouse.sha256 `
   -OutputDirectory dist/fedora
 ```
+
+Add `-PrepareWheelhouse` to that command only when deliberately refreshing a wheelhouse in a new,
+empty directory. Review its generated SHA-256 inventory before signing or distributing an RPM.
 
 Sign a release RPM separately, then verify and install it:
 
