@@ -253,6 +253,8 @@ def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
 
     assert 'if __name__ == "__main__":\n    main()' in source
     assert "set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)" in source
+    assert "set_enable_write_console_messages_to_stdout(True)" in source
+    assert 'connect("load-failed", self._on_console_load_failed)' in source
     assert "WebKit.WebView(settings=settings)" in source
 
 
