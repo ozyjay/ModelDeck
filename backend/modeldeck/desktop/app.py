@@ -192,7 +192,7 @@ def main() -> None:
             # so software compositing is the reliable default and does not affect
             # ModelDeck's ROCm Workers.
             settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)
-            self.webview = WebKit.WebView.new_with_settings(settings)
+            self.webview = WebKit.WebView(settings=settings)
             self.webview.load_uri(CONSOLE_URI)
             self._set_content(self.webview)
 
