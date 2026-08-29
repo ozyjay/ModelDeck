@@ -252,7 +252,8 @@ def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
     source = (PROJECT_ROOT / "backend/modeldeck/desktop/app.py").read_text(encoding="utf-8")
 
     assert 'if __name__ == "__main__":\n    main()' in source
-    assert "set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)" in source
+    assert "self.webview.set_hexpand(True)" in source
+    assert "self.webview.set_vexpand(True)" in source
     assert "set_enable_write_console_messages_to_stdout(self.development_mode)" in source
     assert 'connect("load-failed", self._on_console_load_failed)' in source
     assert 'connect("load-changed", self._on_console_load_changed)' in source

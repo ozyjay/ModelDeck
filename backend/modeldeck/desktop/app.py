@@ -192,11 +192,6 @@ def main() -> None:
 
         def _show_console(self) -> None:
             settings = WebKit.Settings()
-            # WebKitGTK's accelerated Wayland path can present a blank surface on
-            # supported AMD desktops. The management console is not graphics-heavy,
-            # so software compositing is the reliable default and does not affect
-            # ModelDeck's ROCm Workers.
-            settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)
             settings.set_enable_write_console_messages_to_stdout(self.development_mode)
             settings.set_enable_developer_extras(self.development_mode)
             content_manager = WebKit.UserContentManager()
@@ -221,6 +216,8 @@ def main() -> None:
                 )
                 content_manager.add_script(error_capture)
             self.webview = WebKit.WebView(settings=settings, user_content_manager=content_manager)
+            self.webview.set_hexpand(True)
+            self.webview.set_vexpand(True)
             self.webview.connect("load-failed", self._on_console_load_failed)
             if self.development_mode:
                 self.webview.connect("load-changed", self._on_console_load_changed)
