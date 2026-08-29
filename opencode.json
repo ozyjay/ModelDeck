@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "modeldeck/code-local",
+  "small_model": "modeldeck/code-fast",
+  "provider": {
+    "modeldeck": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ModelDeck Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:8600/v1"
+      },
+      "models": {
+        "code-local": {
+          "name": "Qwen3.8 27B local coding",
+          "limit": {
+            "context": 8192,
+            "output": 512
+          }
+        },
+        "code-fast": {
+          "name": "Qwen3.5 9B fast local coding",
+          "limit": {
+            "context": 8192,
+            "output": 512
+          }
+        }
+      }
+    }
+  }
+}

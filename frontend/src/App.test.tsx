@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
-import type { RoutingProfileRecord, Worker } from "./types";
+import type { LiveState, RoutingProfileRecord, Worker } from "./types";
 
 const worker: Worker = {
   id: "b6a39318-6528-4448-9ec8-a2109029697f",
@@ -87,6 +87,44 @@ describe("ModelDeck routing profile operator console", () => {
     expect(within(status).getByText("Not serving")).toBeInTheDocument();
     expect(screen.getByLabelText("Primary Worker Qwen token trace")).toBeInTheDocument();
     expect(screen.getByText("No ready Worker")).toHaveClass("unavailable");
+  });
+
+  it("starts primary and backup Workers directly from the Live tab", async () => {
+    const payloads = responses(true);
+    const backup: Worker = { ...worker, id: "233d105c-9f80-4750-a2d5-7ed0fe8fe559", name: "Qwen backup", port: 8631 };
+    payloads["/api/workers"] = [worker, backup];
+    const live = payloads["/api/live"] as LiveState;
+    live.capabilities[0].worker_ids = [worker.id, backup.id];
+    live.capabilities[0].workers = [worker, backup];
+    payloads[`/api/workers/${backup.id}/start`] = { state: "starting" };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: `Start Worker ${worker.name}` })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: `Start Worker ${backup.name}` }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/workers/${backup.id}/start` && init?.method === "POST"
+    )).toBe(true));
+  });
+
+  it("stops the effective Worker directly from the Live tab", async () => {
+    const payloads = responses(true);
+    const readyWorker: Worker = { ...worker, state: "ready", pid: 1234, started_at: "2026-08-29T00:00:00Z" };
+    payloads["/api/workers"] = [readyWorker];
+    const live = payloads["/api/live"] as LiveState;
+    live.capabilities[0].workers = [readyWorker];
+    live.capabilities[0].effective_worker = readyWorker;
+    live.capabilities[0].ready = true;
+    payloads[`/api/workers/${readyWorker.id}/stop`] = { state: "stopping" };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: `Stop Worker ${readyWorker.name}` }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/workers/${readyWorker.id}/stop` && init?.method === "POST"
+    )).toBe(true));
   });
 
   it("disables Worker starts while thermal telemetry is stabilising", async () => {

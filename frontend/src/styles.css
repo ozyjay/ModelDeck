@@ -170,6 +170,8 @@ nav { display: grid; gap: 0.3rem; }
 .active-worker-item small, .active-worker-item strong { display: block; }
 .active-worker-item small { color: var(--muted); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .active-worker-item strong { margin-top: 0.15rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.active-worker-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 0.4rem; }
+.active-worker-controls button { min-width: 3.65rem; }
 .effective-worker { font-weight: 700; }
 .effective-worker.unavailable { color: #ffe0ac; }
 .demo-route-list, .route-editor-list { display: grid; gap: 0.8rem; }

@@ -89,10 +89,17 @@ configuration.
 
 Use **Models** to create a Worker from a recognised cached revision. Use **Routing profiles** to
 define published capabilities, assign primary and ordered backup Workers, validate the
-draft and publish it. Use **Workers** for lifecycle control and real generation smoke tests.
-Use **Live** to see only the published routing snapshot and rehearse a capability
-end-to-end through the gateway. A local deployment policy can lock configuration
-changes server-side while leaving explicit Worker lifecycle controls available.
+draft and publish it. Use **Workers** for detailed lifecycle control and real generation
+smoke tests.
+Use **Live** to see only the published routing snapshot, start or stop any primary or backup
+Worker in that snapshot, and rehearse a capability end-to-end through the gateway. A local
+deployment policy can lock configuration changes server-side while leaving explicit Worker
+lifecycle controls available.
+
+The checked-in `opencode.json` connects OpenCode to the loopback gateway and selects the
+`code-local` and `code-fast` public model IDs from the **OpenCode local coding** Routing
+Profile. Start the desired Worker from **Live** before opening OpenCode. The configuration
+does not grant OpenCode access to model files and does not start or download a model.
 
 Routing Profile edits autosave to a mutable draft. Publishing creates an immutable revision;
 historical revisions can be made live again without reconstructing them. A profile can
