@@ -156,3 +156,13 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "never includes model weights" in spec
     assert "--no-index" in build_script
     assert "Assert-OfflineWheelhouse" in build_script
+
+
+def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
+    wrapper = (PROJECT_ROOT / "scripts/packaging/build_fedora_standalone.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build_fedora_rpm.ps1" in wrapper
+    assert "@PSBoundParameters" in wrapper
+    assert "modeldeck-*.x86_64.rpm" in wrapper
