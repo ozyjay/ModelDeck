@@ -1,0 +1,4 @@
+[Unit]
+Description=ModelDeck local services
+Wants=modeldeck-management.service modeldeck-gateway.service
+

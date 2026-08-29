@@ -1,0 +1,24 @@
+[Unit]
+Description=ModelDeck management service
+PartOf=modeldeck.target
+
+[Service]
+Type=simple
+Environment=MODELDECK_BUILD_ID=@BUILD_ID@
+Environment=MODELDECK_DESKTOP=1
+Environment=XDG_DATA_HOME=%h/.local/share
+Environment=XDG_STATE_HOME=%h/.local/state
+Environment=MODELDECK_HOST=127.0.0.1
+Environment=MODELDECK_MANAGEMENT_PORT=3600
+Environment=MODELDECK_GATEWAY_HOST=127.0.0.1
+Environment=MODELDECK_GATEWAY_PORT=8600
+Environment=MODELDECK_ROCM72_PYTHON=/usr/libexec/modeldeck/rocm72/bin/python
+Environment=MODELDECK_ROCM72_Q4_PYTHON=/usr/libexec/modeldeck/rocm72-q4/bin/python
+ExecStart=/usr/libexec/modeldeck/control/bin/modeldeck
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/modeldeck %h/.local/state/modeldeck

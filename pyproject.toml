@@ -29,6 +29,8 @@ dev = [
 modeldeck = "modeldeck.__main__:main"
 modeldeck-gateway = "modeldeck.gateway.app:main"
 modeldeck-probe = "modeldeck.hardware.probe:main"
+modeldeck-import-state = "modeldeck.state_import:main"
+modeldeck-desktop = "modeldeck.desktop.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend/modeldeck"]

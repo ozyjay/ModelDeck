@@ -1,0 +1,3 @@
+# SHA-256 inventory for the untracked offline wheelhouse used by build_fedora_rpm.ps1.
+# One entry per wheel: "<lowercase SHA-256>  <filename>". Generate and review this
+# inventory before a release; the build refuses an empty or mismatched inventory.

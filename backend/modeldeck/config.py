@@ -24,6 +24,28 @@ def _int_env(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _desktop_path(kind: str) -> Path:
+    """Return the XDG location used by the packaged Fedora user services."""
+
+    if kind == "data":
+        root = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    elif kind == "state":
+        root = Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    else:  # pragma: no cover - defensive guard for fixed internal callers
+        raise ValueError(f"Unsupported XDG location: {kind}")
+    return root / "modeldeck"
+
+
+def _default_data_dir() -> Path:
+    return _desktop_path("data") if _bool_env("MODELDECK_DESKTOP") else Path(".modeldeck")
+
+
+def _default_log_dir() -> Path:
+    if _bool_env("MODELDECK_DESKTOP"):
+        return _desktop_path("state") / "logs" / "workers"
+    return Path("var/log/workers")
+
+
 def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
     """Return a gateway bind address permitted by the local-only policy."""
 
@@ -145,8 +167,8 @@ class Settings:
             docker_bridge_enabled=docker_bridge_enabled,
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
-            data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),
-            log_dir=Path(os.getenv("MODELDECK_LOG_DIR", "var/log/workers")),
+            data_dir=Path(os.getenv("MODELDECK_DATA_DIR", str(_default_data_dir()))),
+            log_dir=Path(os.getenv("MODELDECK_LOG_DIR", str(_default_log_dir()))),
             configuration_locked=configuration_locked,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
             diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),

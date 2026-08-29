@@ -128,6 +128,7 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
             live = await client.get("/api/live")
 
     assert health.json()["schema_version"] == 4
+    assert isinstance(health.json()["build_id"], str)
     assert health.json()["configuration_locked"] is False
     assert health.json()["offline_only"] is True
     assert workers.json() == []

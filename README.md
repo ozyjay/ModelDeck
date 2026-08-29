@@ -245,6 +245,10 @@ After changing `frontend/`, rebuild with
 `pwsh -NoProfile -File scripts/operations/build_frontend.ps1`. Verification rejects a stale
 committed bundle.
 
+For a native Fedora 44 desktop package with a GTK/WebKit window and user-service lifecycle,
+see [Fedora standalone ModelDeck](docs/FEDORA_STANDALONE.md). The package contains core runtime
+environments but never Model weights; HuggingFacePull remains the only acquisition path.
+
 Test fixtures are not available in the operator UI or gateway as fallback choices. Stop all
 ModelDeck workers and services with `pwsh -NoProfile -File scripts/operations/stop.ps1`. See
 [Start here](docs/START_HERE.md) and the [build plan](docs/BUILD_PLAN.md) for current scope

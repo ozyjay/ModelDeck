@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from modeldeck.async_execution import run_in_isolated_thread
+from modeldeck.build_info import BUILD_ID
 from modeldeck.capabilities import (
     capability_evidence_status,
     compatible_runtime_template_ids,
@@ -154,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "service": "modeldeck-management",
+            "build_id": BUILD_ID,
             "schema_version": 4,
             "configuration_locked": configured.configuration_locked,
             "offline_only": True,
