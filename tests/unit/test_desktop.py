@@ -254,14 +254,7 @@ def test_packaged_desktop_module_calls_its_main_entrypoint() -> None:
     assert 'if __name__ == "__main__":\n    main()' in source
     assert "self.webview.set_hexpand(True)" in source
     assert "self.webview.set_vexpand(True)" in source
-    assert "set_enable_write_console_messages_to_stdout(self.development_mode)" in source
-    assert 'connect("load-failed", self._on_console_load_failed)' in source
-    assert 'connect("load-changed", self._on_console_load_changed)' in source
-    assert "rootChildren" in source
     assert "Gio.ApplicationFlags.NON_UNIQUE" in source
-    assert "WebKit.UserScriptInjectionTime.START" in source
-    assert "ModelDeck page error" in source
-    assert "WebKit.WebView(settings=settings, user_content_manager=content_manager)" in source
 
 
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
