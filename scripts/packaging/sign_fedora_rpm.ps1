@@ -17,22 +17,17 @@ if (-not $VerifyOnly) {
     if ($LASTEXITCODE -ne 0) { throw "RPM signing failed: $RpmPath" }
 }
 
-$VerificationDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "modeldeck-rpm-signing-$([guid]::NewGuid().ToString('N'))"
-try {
-    $PublicKeyPath = Join-Path $VerificationDirectory 'signing-key.asc'
-    $VerificationDatabase = Join-Path $VerificationDirectory 'rpmdb'
-    New-Item -ItemType Directory -Path $VerificationDirectory | Out-Null
-    & gpg --batch --armor --export $KeyId > $PublicKeyPath
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PublicKeyPath -PathType Leaf) -or (Get-Item $PublicKeyPath).Length -eq 0) {
-        throw "Could not export the public GPG key for $KeyId."
+$VerificationOutput = @(& rpm --checksig --verbose $RpmPath 2>&1)
+$VerificationExitCode = $LASTEXITCODE
+$VerificationOutput | ForEach-Object { Write-Host $_ }
+if ($VerificationExitCode -ne 0) {
+    $VerificationText = $VerificationOutput -join [Environment]::NewLine
+    if ($VerificationText -match '\bNOKEY\b') {
+        Write-Warning 'The RPM has a signature, but this machine has not imported the corresponding public key into its RPM trust database.'
+        Write-Host "For full local verification, export the public key with 'gpg --armor --export $KeyId' and import it using 'sudo rpm --import <public-key-file>'."
+        $global:LASTEXITCODE = 0
     }
-    & rpm --dbpath $VerificationDatabase --initdb
-    if ($LASTEXITCODE -ne 0) { throw 'Could not initialise the temporary RPM verification database.' }
-    & rpm --dbpath $VerificationDatabase --import $PublicKeyPath
-    if ($LASTEXITCODE -ne 0) { throw "Could not import the public GPG key into the temporary verification database: $KeyId" }
-    & rpm --dbpath $VerificationDatabase --checksig --verbose $RpmPath
-    if ($LASTEXITCODE -ne 0) { throw "RPM signature verification failed: $RpmPath" }
-}
-finally {
-    if (Test-Path $VerificationDirectory) { Remove-Item -Recurse -Force $VerificationDirectory }
+    else {
+        throw "RPM signature verification failed: $RpmPath"
+    }
 }

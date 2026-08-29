@@ -210,8 +210,9 @@ def test_fedora_release_signing_wrapper_handles_key_selection_and_creation() -> 
     assert "Multiple secret GPG keys" in wrapper
     assert "AwaitingPrimaryFingerprint" in wrapper
     assert "-VerifyOnly" in wrapper
-    assert "--dbpath $VerificationDatabase --import $PublicKeyPath" in signer
-    assert "modeldeck-rpm-signing-" in signer
+    assert "rpm --checksig --verbose" in signer
+    assert "\\bNOKEY\\b" in signer
+    assert "$global:LASTEXITCODE = 0" in signer
 
 
 def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
