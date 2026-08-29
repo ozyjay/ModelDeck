@@ -56,9 +56,14 @@ def main() -> None:
 
     class ModelDeckDesktop(Adw.Application):
         def __init__(self) -> None:
-            super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
-            self.controller = ServiceController()
             self.development_mode = os.environ.get(DEVELOPMENT_MODE_ENV) == "1"
+            application_flags = (
+                Gio.ApplicationFlags.NON_UNIQUE
+                if self.development_mode
+                else Gio.ApplicationFlags.DEFAULT_FLAGS
+            )
+            super().__init__(application_id=APP_ID, flags=application_flags)
+            self.controller = ServiceController()
             self.window: Any | None = None
             self.content: Any | None = None
             self.webview: Any | None = None
