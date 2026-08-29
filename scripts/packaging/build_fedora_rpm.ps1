@@ -19,10 +19,12 @@ function Assert-OfflineWheelhouse {
     )
     if (-not $Entries.Count) { throw 'Wheelhouse SHA-256 manifest has no entries.' }
     $WheelhouseRoot = [System.IO.Path]::GetFullPath($Path)
+    $ManifestNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($Entry in $Entries) {
         if ($Entry -notmatch '^([a-f0-9]{64})\s{2,}(.+)$') { throw "Invalid wheelhouse SHA-256 entry: $Entry" }
         $Expected = $Matches[1]
         $Name = $Matches[2]
+        if (-not $ManifestNames.Add($Name)) { throw "Duplicate wheelhouse SHA-256 entry: $Name" }
         $Candidate = [System.IO.Path]::GetFullPath((Join-Path $WheelhouseRoot $Name))
         if (-not $Candidate.StartsWith($WheelhouseRoot + [System.IO.Path]::DirectorySeparatorChar)) {
             throw "Unsafe wheelhouse filename: $Name"
@@ -30,6 +32,13 @@ function Assert-OfflineWheelhouse {
         if (-not (Test-Path $Candidate -PathType Leaf)) { throw "Missing wheelhouse file: $Name" }
         $Actual = (Get-FileHash $Candidate -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($Actual -ne $Expected) { throw "Wheelhouse SHA-256 mismatch: $Name" }
+    }
+    $UnlistedFiles = @(
+        Get-ChildItem -Path $WheelhouseRoot -File |
+            Where-Object { -not $ManifestNames.Contains($_.Name) }
+    )
+    if ($UnlistedFiles.Count) {
+        throw "Wheelhouse contains unlisted files: $($UnlistedFiles.Name -join ', ')"
     }
 }
 

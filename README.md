@@ -252,15 +252,24 @@ gateway, and core isolated runtimes. It never includes Model weights; HuggingFac
 only acquisition path.
 
 The wrapper has two modes. `-PrepareWheelhouse` downloads the pinned binary wheels, writes their
-SHA-256 inventory, and then creates the RPM. It requires a connected release machine and an empty
-wheelhouse directory. The default mode performs only the offline verification and build; it stops
-if a required wheel is missing or differs from the inventory. Neither mode downloads Models.
+SHA-256 inventory, and then creates the RPM. It requires a connected release machine, Python 3.12,
+and an empty wheelhouse directory. The default mode performs only the offline verification and
+build; it stops if a required wheel is missing or differs from the inventory. Neither mode
+downloads Models.
 
 On Fedora 44 x86_64 with `rpmbuild`, Python 3.12, Node.js, npm, and the frontend dependencies
 already installed, create an unsigned RPM distribution from the repository root with:
 
 ```powershell
 pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 -PrepareWheelhouse
+```
+
+The wrapper automatically finds an installed Python 3.12, including pyenv-managed versions. If
+automatic discovery is unsuitable, pass the complete path explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
+  -Python /path/to/python3.12 -PrepareWheelhouse
 ```
 
 The package is written beneath `dist/fedora/`, normally as
@@ -275,7 +284,9 @@ pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
 ```
 
 Add `-PrepareWheelhouse` to that command only when deliberately refreshing a wheelhouse in a new,
-empty directory. Review its generated SHA-256 inventory before signing or distributing an RPM.
+empty directory. To replace an incomplete wheelhouse, add `-ReplaceWheelhouse`; the script moves
+the old directory to a timestamped backup rather than deleting it. Review its generated SHA-256
+inventory before signing or distributing an RPM.
 
 Sign a release RPM separately, then verify and install it:
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -156,15 +158,52 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "never includes model weights" in spec
     assert "--no-index" in build_script
     assert "Assert-OfflineWheelhouse" in build_script
+    assert "Duplicate wheelhouse SHA-256 entry" in build_script
+    assert "Wheelhouse contains unlisted files" in build_script
 
 
 def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
-    wrapper = (PROJECT_ROOT / "scripts/packaging/build_fedora_standalone.ps1").read_text(
-        encoding="utf-8"
-    )
+    wrapper = (PROJECT_ROOT / "scripts/packaging/build_fedora_standalone.ps1").read_text(encoding="utf-8")
 
     assert "build_fedora_rpm.ps1" in wrapper
+    assert "Assert-Python312" in wrapper
+    assert "Resolve-Python312" in wrapper
     assert "Prepare-OfflineWheelhouse" in wrapper
     assert "--only-binary=:all:" in wrapper
+    assert "modeldeck-wheelhouse-" in wrapper
+    assert "-ReplaceWheelhouse" in wrapper
     assert "$BuildParameters" in wrapper
     assert "modeldeck-*.x86_64.rpm" in wrapper
+
+
+def test_fedora_offline_builder_rejects_unlisted_wheelhouse_files(tmp_path: Path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    listed = wheelhouse / "listed.whl"
+    listed.write_bytes(b"listed")
+    (wheelhouse / "unlisted.whl").write_bytes(b"unlisted")
+    manifest = tmp_path / "wheelhouse.sha256"
+    manifest.write_text(
+        f"{hashlib.sha256(listed.read_bytes()).hexdigest()}  {listed.name}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "pwsh",
+            "-NoProfile",
+            "-File",
+            str(PROJECT_ROOT / "scripts/packaging/build_fedora_rpm.ps1"),
+            "-Wheelhouse",
+            str(wheelhouse),
+            "-WheelhouseManifest",
+            str(manifest),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Wheelhouse contains unlisted files: unlisted.whl" in result.stderr
