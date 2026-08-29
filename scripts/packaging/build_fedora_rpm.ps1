@@ -44,14 +44,16 @@ function Assert-OfflineWheelhouse {
 
 function Install-OfflineRequirements {
     param([string]$RuntimePython, [string]$Requirements)
-    & $RuntimePython -m pip install --no-index --find-links $Wheelhouse -r $Requirements
+    Write-Host "Installing offline runtime requirements: $Requirements"
+    & $RuntimePython -m pip install --quiet --disable-pip-version-check --no-cache-dir --progress-bar off --no-index --find-links $Wheelhouse -r $Requirements
     if ($LASTEXITCODE -ne 0) { throw "Offline dependency installation failed: $Requirements" }
 }
 
 function Install-ModelDeckCode {
     param([string]$RuntimePython, [switch]$BuildEntrypoints)
     if ($BuildEntrypoints) {
-        & $RuntimePython -m pip install --no-index --no-deps --no-build-isolation .
+        Write-Host 'Installing ModelDeck into the packaged control runtime.'
+        & $RuntimePython -m pip install --quiet --disable-pip-version-check --no-cache-dir --progress-bar off --no-index --no-deps --no-build-isolation .
         if ($LASTEXITCODE -ne 0) { throw 'Could not install ModelDeck into the control runtime.' }
         return
     }
@@ -73,8 +75,85 @@ function New-OfflineRequirements {
     Set-Content -Path $Destination -Value $Lines
 }
 
+function New-BundledPythonRuntime {
+    param([string]$SourcePython, [string]$Destination)
+
+    $PythonPrefix = & $SourcePython -c 'import sys; print(sys.base_prefix)'
+    if ($LASTEXITCODE -ne 0 -or -not $PythonPrefix) { throw 'Could not locate the Python 3.12 base runtime.' }
+    $PythonVersion = & $SourcePython -c 'import platform; print(platform.python_version())'
+    if ($LASTEXITCODE -ne 0 -or -not $PythonVersion) { throw 'Could not determine the Python 3.12 runtime version.' }
+    $PythonPrefix = $PythonPrefix.Trim()
+    $PythonVersion = $PythonVersion.Trim()
+    New-Item -ItemType Directory -Force -Path "$Destination/bin", "$Destination/lib" | Out-Null
+    Copy-Item "$PythonPrefix/bin/python3.12" "$Destination/bin/python3.12"
+    Get-ChildItem "$PythonPrefix/lib" -File -Filter 'libpython3.12.so*' | Copy-Item -Destination "$Destination/lib/"
+    Copy-Item "$PythonPrefix/lib/python3.12" -Destination "$Destination/lib/" -Recurse
+    Remove-Item "$Destination/lib/python3.12/site-packages" -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path "$PythonPrefix/LICENSE" -PathType Leaf) { Copy-Item "$PythonPrefix/LICENSE" "$Destination/LICENSE.python" }
+    $BundledElves = @(
+        Get-Item "$Destination/bin/python3.12"
+        Get-ChildItem "$Destination/lib" -File -Filter 'libpython3.12.so*'
+        Get-ChildItem "$Destination/lib/python3.12/lib-dynload" -File -Filter '*.so'
+    )
+    foreach ($Elf in $BundledElves) {
+        & patchelf --remove-rpath $Elf.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Could not remove the build-host RPATH from: $($Elf.FullName)" }
+    }
+    return $PythonVersion
+}
+
+function Set-PackagedRuntimeLauncher {
+    param(
+        [string]$Runtime,
+        [string]$InstalledRuntime,
+        [string]$PythonVersion
+    )
+
+    $Bin = Join-Path $Runtime 'bin'
+    Get-ChildItem $Bin -Force | Remove-Item -Recurse -Force
+    $PythonLauncher = @'
+#!/usr/bin/sh
+export PYTHONHOME=/usr/libexec/modeldeck/python312
+export PYTHONPATH=@INSTALLED_RUNTIME@/lib/python3.12/site-packages
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    export LD_LIBRARY_PATH=/usr/libexec/modeldeck/python312/lib:$LD_LIBRARY_PATH
+else
+    export LD_LIBRARY_PATH=/usr/libexec/modeldeck/python312/lib
+fi
+exec /usr/libexec/modeldeck/python312/bin/python3.12 "$@"
+'@.Replace('@INSTALLED_RUNTIME@', $InstalledRuntime)
+    Set-Content -Path "$Bin/python" -Value $PythonLauncher -NoNewline
+    & chmod 0755 "$Bin/python"
+    if ($LASTEXITCODE -ne 0) { throw "Could not create the packaged Python launcher: $InstalledRuntime" }
+    New-Item -ItemType SymbolicLink -Path "$Bin/python3" -Target 'python' | Out-Null
+    New-Item -ItemType SymbolicLink -Path "$Bin/python3.12" -Target 'python' | Out-Null
+    @(
+        'home = /usr/libexec/modeldeck/python312/bin',
+        'include-system-site-packages = false',
+        "version = $PythonVersion",
+        "executable = $InstalledRuntime/bin/python"
+    ) | Set-Content -Path (Join-Path $Runtime 'pyvenv.cfg')
+}
+
+function New-PythonModuleLauncher {
+    param(
+        [string]$Path,
+        [string]$Runtime,
+        [string]$Module
+    )
+
+    $Launcher = @'
+#!/usr/bin/sh
+exec @RUNTIME@/bin/python -m @MODULE@ "$@"
+'@.Replace('@RUNTIME@', $Runtime).Replace('@MODULE@', $Module)
+    Set-Content -Path $Path -Value $Launcher -NoNewline
+    & chmod 0755 $Path
+    if ($LASTEXITCODE -ne 0) { throw "Could not create packaged launcher: $Path" }
+}
+
 Assert-OfflineWheelhouse -Path $Wheelhouse -Manifest $WheelhouseManifest
 if (-not (Get-Command rpmbuild -ErrorAction SilentlyContinue)) { throw 'rpmbuild is required to create the Fedora package.' }
+if (-not (Get-Command patchelf -ErrorAction SilentlyContinue)) { throw 'patchelf is required to create a relocatable Python runtime.' }
 & (Join-Path $PSScriptRoot '../operations/build_frontend.ps1') -Check
 & $Python --version
 if ($LASTEXITCODE -ne 0) { throw "Python interpreter is unavailable: $Python" }
@@ -111,6 +190,15 @@ try {
     Install-ModelDeckCode -RuntimePython "$Rocm/bin/python"
     Install-ModelDeckCode -RuntimePython "$Q4/bin/python"
 
+    $BundledPythonVersion = New-BundledPythonRuntime -SourcePython $Python -Destination (Join-Path $Libexec 'python312')
+    Set-PackagedRuntimeLauncher -Runtime $Control -InstalledRuntime '/usr/libexec/modeldeck/control' -PythonVersion $BundledPythonVersion
+    Set-PackagedRuntimeLauncher -Runtime $Rocm -InstalledRuntime '/usr/libexec/modeldeck/rocm72' -PythonVersion $BundledPythonVersion
+    Set-PackagedRuntimeLauncher -Runtime $Q4 -InstalledRuntime '/usr/libexec/modeldeck/rocm72-q4' -PythonVersion $BundledPythonVersion
+    New-PythonModuleLauncher -Path "$Control/bin/modeldeck" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck'
+    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-gateway" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.gateway.app'
+    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-import-state" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.state_import'
+    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-probe" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.hardware.probe'
+
     New-Item -ItemType Directory -Force -Path "$PayloadRoot/bin", "$PayloadRoot/lib/systemd/user", "$PayloadRoot/share/applications", "$PayloadRoot/share/icons/hicolor/scalable/apps", "$PayloadRoot/share/modeldeck", "$PayloadRoot/share/doc/modeldeck" | Out-Null
     Copy-Item 'packaging/fedora/com.modeldeck.ModelDeck.desktop' "$PayloadRoot/share/applications/"
     Copy-Item 'packaging/fedora/modeldeck.svg' "$PayloadRoot/share/icons/hicolor/scalable/apps/"
@@ -119,19 +207,34 @@ try {
     foreach ($Service in @('modeldeck-management.service', 'modeldeck-gateway.service')) {
         (Get-Content "packaging/fedora/$Service.in" -Raw).Replace('@BUILD_ID@', $BuildId) | Set-Content "$PayloadRoot/lib/systemd/user/$Service"
     }
+    $DesktopPythonPath = Join-Path $Libexec 'desktop-python'
+    New-Item -ItemType Directory -Force -Path "$DesktopPythonPath/modeldeck" | Out-Null
+    Copy-Item 'backend/modeldeck/__init__.py' "$DesktopPythonPath/modeldeck/"
+    Copy-Item 'backend/modeldeck/desktop' "$DesktopPythonPath/modeldeck/" -Recurse
     @{ build_id = $BuildId; package_version = $Version; architecture = 'x86_64'; models_included = $false } | ConvertTo-Json | Set-Content "$PayloadRoot/share/modeldeck/release.json"
     @"
 #!/usr/bin/sh
-exec /usr/libexec/modeldeck/control/bin/modeldeck-desktop "`$@"
+export PYTHONPATH=/usr/libexec/modeldeck/desktop-python
+exec /usr/bin/python3 -m modeldeck.desktop.app "`$@"
 "@ | Set-Content "$PayloadRoot/bin/modeldeck-desktop" -NoNewline
     & chmod 0755 "$PayloadRoot/bin/modeldeck-desktop"
     if ($LASTEXITCODE -ne 0) { throw 'Could not mark the desktop launcher executable.' }
 
-    New-Item -ItemType Directory -Force -Path "$RpmTop/SOURCES", "$RpmTop/BUILD", "$RpmTop/BUILDROOT", "$RpmTop/RPMS", "$RpmTop/SRPMS" | Out-Null
+    Get-ChildItem $Libexec -Recurse -File -Filter 'direct_url.json' | Remove-Item -Force
+    Get-ChildItem $Libexec -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
+    $AbsoluteRuntimeLinks = @(
+        Get-ChildItem $Libexec -Recurse -Force |
+            Where-Object { $_.LinkType -and [System.IO.Path]::IsPathRooted($_.Target) }
+    )
+    if ($AbsoluteRuntimeLinks.Count) {
+        throw "Packaged runtime contains absolute symbolic links: $($AbsoluteRuntimeLinks.FullName -join ', ')"
+    }
+
+    New-Item -ItemType Directory -Force -Path "$RpmTop/SOURCES", "$RpmTop/BUILD", "$RpmTop/BUILDROOT", "$RpmTop/RPMS", "$RpmTop/SRPMS", "$RpmTop/TMP" | Out-Null
     & tar -C $Stage -czf "$RpmTop/SOURCES/modeldeck-payload.tar.gz" usr
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the RPM payload archive.' }
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-    & rpmbuild -bb packaging/fedora/modeldeck.spec --define "_topdir $RpmTop" --define "_rpmdir $((Resolve-Path $OutputDirectory).Path)"
+    & rpmbuild --quiet -bb packaging/fedora/modeldeck.spec --define "_topdir $RpmTop" --define "_tmppath $RpmTop/TMP" --define "_rpmdir $((Resolve-Path $OutputDirectory).Path)"
     if ($LASTEXITCODE -ne 0) { throw 'RPM build failed.' }
     Write-Host "Built unsigned ModelDeck RPMs in $OutputDirectory. Sign them separately with scripts/packaging/sign_fedora_rpm.ps1."
 }

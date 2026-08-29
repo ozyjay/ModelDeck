@@ -25,11 +25,14 @@ ports 3600 and 8600 respectively.
 ## Build an unsigned RPM
 
 The default build is intentionally offline. The standalone wrapper can also prepare an empty
-wheelhouse on a connected release machine with Python 3.12: it downloads every pinned binary
-wheel, creates `packaging/fedora/wheelhouse.sha256`, and then builds the RPM. Review the generated
-manifest before signing or distributing the result. The manifest has one lower-case SHA-256 and
-filename per wheel. The wrapper automatically discovers installed Python 3.12 interpreters,
-including pyenv-managed versions; `-Python /path/to/python3.12` overrides that discovery.
+wheelhouse on a connected release machine with Python 3.12: it downloads pinned package releases,
+builds wheels for Q4 dependencies that are published only as source archives, creates
+`packaging/fedora/wheelhouse.sha256`, and then builds the RPM. Review the generated manifest before
+signing or distributing the result. The manifest has one lower-case SHA-256 and filename per
+wheel. The wrapper automatically discovers installed Python 3.12 interpreters, including
+pyenv-managed versions; `-Python /path/to/python3.12` overrides that discovery. The build host
+also needs `rpmbuild` and `patchelf`; the latter removes build-host RPATHs from the bundled Python
+runtime before packaging.
 
 ```powershell
 pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 -PrepareWheelhouse

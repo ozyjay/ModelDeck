@@ -251,13 +251,14 @@ The native Fedora 44 desktop package includes the GTK/WebKit desktop window, man
 gateway, and core isolated runtimes. It never includes Model weights; HuggingFacePull remains the
 only acquisition path.
 
-The wrapper has two modes. `-PrepareWheelhouse` downloads the pinned binary wheels, writes their
+The wrapper has two modes. `-PrepareWheelhouse` downloads pinned package releases, builds wheels
+for the six Q4 dependencies published only as source archives, writes the complete wheelhouse
 SHA-256 inventory, and then creates the RPM. It requires a connected release machine, Python 3.12,
 and an empty wheelhouse directory. The default mode performs only the offline verification and
 build; it stops if a required wheel is missing or differs from the inventory. Neither mode
 downloads Models.
 
-On Fedora 44 x86_64 with `rpmbuild`, Python 3.12, Node.js, npm, and the frontend dependencies
+On Fedora 44 x86_64 with `rpmbuild`, `patchelf`, Python 3.12, Node.js, npm, and the frontend dependencies
 already installed, create an unsigned RPM distribution from the repository root with:
 
 ```powershell

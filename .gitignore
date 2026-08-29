@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 packaging/fedora/wheelhouse/
+packaging/fedora/wheelhouse.backup-*/
 var/
 .modeldeck/
 *.log

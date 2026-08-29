@@ -5,6 +5,16 @@ Summary:        Local-first model runtime manager and stable capability gateway
 License:        Apache-2.0
 BuildArch:      x86_64
 Source0:        modeldeck-payload.tar.gz
+AutoReqProv:    no
+
+# The payload contains reviewed, prebuilt Python and ROCm wheel binaries. Preserve those
+# artefacts exactly instead of attempting Fedora debuginfo extraction, ELF stripping,
+# shebang rewriting, or deterministic archive rewriting within installed packages.
+%global debug_package %{nil}
+%global __strip /bin/true
+%global __brp_mangle_shebangs %{nil}
+%global __os_install_post_build_reproducibility %{nil}
+%global __brp_check_rpaths %{nil}
 
 Requires:       gtk4
 Requires:       libadwaita

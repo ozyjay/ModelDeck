@@ -116,10 +116,10 @@ function Prepare-OfflineWheelhouse {
             'runtime/requirements-rocm72.txt',
             'requirements-rocm72-q4-gptqmodel.txt'
         )) {
-            Write-Host "Downloading pinned wheels for $Requirements..."
-            & $RuntimePython -m pip download --disable-pip-version-check --only-binary=:all: --dest $StagingPath -r $Requirements
+            Write-Host "Preparing pinned wheels for $Requirements..."
+            & $RuntimePython -m pip wheel --quiet --disable-pip-version-check --no-cache-dir --progress-bar off --wheel-dir $StagingPath -r $Requirements
             if ($LASTEXITCODE -ne 0) {
-                throw "Could not download required binary wheels for $Requirements. The existing wheelhouse was not changed."
+                throw "Could not prepare required wheels for $Requirements. The existing wheelhouse was not changed."
             }
         }
 

@@ -156,10 +156,31 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
         assert "XDG_STATE_HOME=%h/.local/state" in service
         assert "MODELDECK_ROCM72_PYTHON=/usr/libexec/modeldeck/rocm72/bin/python" in service
     assert "never includes model weights" in spec
+    assert "AutoReqProv:    no" in spec
+    assert "%global debug_package %{nil}" in spec
+    assert "%global __strip /bin/true" in spec
+    assert "%global __brp_mangle_shebangs %{nil}" in spec
+    assert "%global __os_install_post_build_reproducibility %{nil}" in spec
+    assert "%global __brp_check_rpaths %{nil}" in spec
     assert "--no-index" in build_script
+    assert "--progress-bar off" in build_script
+    assert "--no-cache-dir" in build_script
+    assert '"_tmppath $RpmTop/TMP"' in build_script
+    assert "rpmbuild --quiet" in build_script
+    assert "patchelf --remove-rpath" in build_script
+    assert "patchelf is required" in build_script
     assert "Assert-OfflineWheelhouse" in build_script
     assert "Duplicate wheelhouse SHA-256 entry" in build_script
     assert "Wheelhouse contains unlisted files" in build_script
+    assert "New-BundledPythonRuntime" in build_script
+    assert "Set-PackagedRuntimeLauncher" in build_script
+    assert "desktop-python" in build_script
+    assert "absolute symbolic links" in build_script
+    assert "direct_url.json" in build_script
+    assert "__pycache__" in build_script
+    cleanup_position = build_script.index("Get-ChildItem $Libexec -Recurse -Directory -Filter '__pycache__'")
+    desktop_copy_position = build_script.index("Copy-Item 'backend/modeldeck/desktop'")
+    assert cleanup_position > desktop_copy_position
 
 
 def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
@@ -169,7 +190,9 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "Assert-Python312" in wrapper
     assert "Resolve-Python312" in wrapper
     assert "Prepare-OfflineWheelhouse" in wrapper
-    assert "--only-binary=:all:" in wrapper
+    assert "-m pip wheel" in wrapper
+    assert "--wheel-dir" in wrapper
+    assert "--no-cache-dir" in wrapper
     assert "modeldeck-wheelhouse-" in wrapper
     assert "-ReplaceWheelhouse" in wrapper
     assert "$BuildParameters" in wrapper
