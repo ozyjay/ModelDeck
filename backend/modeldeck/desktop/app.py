@@ -192,16 +192,40 @@ def main() -> None:
             # so software compositing is the reliable default and does not affect
             # ModelDeck's ROCm Workers.
             settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.NEVER)
-            settings.set_enable_write_console_messages_to_stdout(True)
+            settings.set_enable_write_console_messages_to_stdout(self.development_mode)
             settings.set_enable_developer_extras(self.development_mode)
             self.webview = WebKit.WebView(settings=settings)
             self.webview.connect("load-failed", self._on_console_load_failed)
+            if self.development_mode:
+                self.webview.connect("load-changed", self._on_console_load_changed)
             self.webview.load_uri(CONSOLE_URI)
             self._set_content(self.webview)
 
         def _on_console_load_failed(self, _webview: Any, *details: Any) -> bool:
             print(f"ModelDeck console load failed: {details!r}", file=sys.stderr, flush=True)
             return False
+
+        def _on_console_load_changed(self, webview: Any, load_event: Any) -> None:
+            if load_event != WebKit.LoadEvent.FINISHED:
+                return
+            script = """
+                JSON.stringify({
+                    readyState: document.readyState,
+                    location: window.location.href,
+                    title: document.title,
+                    bodyText: document.body?.innerText?.slice(0, 500) ?? null,
+                    rootChildren: document.getElementById('root')?.childElementCount ?? null,
+                    rootHtml: document.getElementById('root')?.innerHTML?.slice(0, 500) ?? null
+                })
+            """
+            webview.evaluate_javascript(script, -1, None, CONSOLE_URI, None, self._finish_console_probe, None)
+
+        def _finish_console_probe(self, webview: Any, result: Any, _data: Any = None) -> None:
+            try:
+                value = webview.evaluate_javascript_finish(result)
+                print(f"ModelDeck console DOM: {value.to_string()}", flush=True)
+            except GLib.Error as error:
+                print(f"ModelDeck console DOM probe failed: {error}", file=sys.stderr, flush=True)
 
         def _restart(self, *_args: Any) -> None:
             self._start_in_background(restart=True)
