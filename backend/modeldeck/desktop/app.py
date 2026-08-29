@@ -234,6 +234,11 @@ def main() -> None:
         def _on_console_load_changed(self, webview: Any, load_event: Any) -> None:
             if load_event != WebKit.LoadEvent.FINISHED:
                 return
+            self._probe_console_dom(webview, "load-finished")
+            GLib.timeout_add(1000, self._probe_console_dom, webview, "after-1s")
+            GLib.timeout_add(5000, self._probe_console_dom, webview, "after-5s")
+
+        def _probe_console_dom(self, webview: Any, label: str) -> bool:
             script = """
                 JSON.stringify({
                     readyState: document.readyState,
@@ -244,12 +249,21 @@ def main() -> None:
                     rootHtml: document.getElementById('root')?.innerHTML?.slice(0, 500) ?? null
                 })
             """
-            webview.evaluate_javascript(script, -1, None, CONSOLE_URI, None, self._finish_console_probe, None)
+            webview.evaluate_javascript(
+                script,
+                -1,
+                None,
+                CONSOLE_URI,
+                None,
+                self._finish_console_probe,
+                label,
+            )
+            return GLib.SOURCE_REMOVE
 
-        def _finish_console_probe(self, webview: Any, result: Any, _data: Any = None) -> None:
+        def _finish_console_probe(self, webview: Any, result: Any, label: Any = None) -> None:
             try:
                 value = webview.evaluate_javascript_finish(result)
-                print(f"ModelDeck console DOM: {value.to_string()}", flush=True)
+                print(f"ModelDeck console DOM ({label}): {value.to_string()}", flush=True)
             except GLib.Error as error:
                 print(f"ModelDeck console DOM probe failed: {error}", file=sys.stderr, flush=True)
 
