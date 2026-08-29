@@ -5,10 +5,10 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '../..')
 
 if (-not (Test-Path '.venv/bin/modeldeck')) { throw 'Run scripts/setup/setup.ps1 first.' }
-if (-not (Get-Command python3 -ErrorAction SilentlyContinue)) { throw 'python3 with GTK4, libadwaita, and WebKitGTK support is required.' }
+if (-not (Test-Path '/usr/bin/python3' -PathType Leaf)) { throw '/usr/bin/python3 with GTK4, libadwaita, and WebKitGTK support is required.' }
 
-& python3 -c 'import gi; gi.require_version("Adw", "1"); gi.require_version("Gtk", "4.0"); gi.require_version("WebKit", "6.0")'
-if ($LASTEXITCODE -ne 0) { throw 'python3 requires GTK4, libadwaita, and WebKitGTK 6.0 support to launch the ModelDeck desktop shell.' }
+& /usr/bin/python3 -c 'import gi; gi.require_version("Adw", "1"); gi.require_version("Gtk", "4.0"); gi.require_version("WebKit", "6.0")'
+if ($LASTEXITCODE -ne 0) { throw '/usr/bin/python3 requires GTK4, libadwaita, and WebKitGTK 6.0 support to launch the ModelDeck desktop shell.' }
 
 & (Join-Path $PSScriptRoot 'run.ps1') -LockConfiguration:$LockConfiguration
 
@@ -22,5 +22,5 @@ $Env:MODELDECK_DESKTOP_BUILD_ID = 'development'
 
 Write-Host "Opening ModelDeck Desktop ${Version} from this checkout."
 Write-Host 'Services remain running after the window closes; stop them with scripts/operations/stop.ps1.'
-& python3 -m modeldeck.desktop.app
+& /usr/bin/python3 -m modeldeck.desktop.app
 if ($LASTEXITCODE -ne 0) { throw 'ModelDeck Desktop exited with an error.' }
