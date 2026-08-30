@@ -10,7 +10,7 @@ dist/
 packaging/fedora/wheelhouse/
 packaging/fedora/wheelhouse.backup-*/
 var/
-.modeldeck/
+.modeldeck*
 *.log
 *.pid
 .env
