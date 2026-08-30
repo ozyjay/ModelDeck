@@ -88,7 +88,7 @@ does not stop the target, so configured local applications may continue using
 requests graceful Worker shutdown, when that gateway should no longer run. The RPM does not
 enable either service at login.
 
-## Per-user state and importing a development installation
+## Per-user state, export, and importing a development installation
 
 The package writes state to `~/.local/share/modeldeck` and Worker logs to
 `~/.local/state/modeldeck/logs/workers`. First use starts empty. Select **Import existing
@@ -100,6 +100,12 @@ without modifying the source, and backs up existing packaged-app state before re
 preserves configured Workers, routing profiles, compatibility evidence, thermal state, and
 trusted runtime manifests. Older v2/v3 databases must use the documented migrations before
 import.
+
+Select **Export state…** to choose a parent folder for an import-compatible copy. ModelDeck stops
+services while it copies state and creates a new timestamped `modeldeck-state-…` directory there;
+it never replaces an existing export or modifies the active state. The command-line equivalent is
+`modeldeck-export-state ~/.local/share/modeldeck /path/to/new-export-directory` and should be run
+only after stopping ModelDeck services.
 
 ## Updating
 

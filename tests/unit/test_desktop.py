@@ -19,6 +19,7 @@ from modeldeck.desktop.controller import (
     prepare_service_directories,
     should_prompt_for_restart,
 )
+from modeldeck.state_export import StateExportError, export_state_directory
 from modeldeck.state_import import StateImportError, import_state_directory, validate_state_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -132,6 +133,35 @@ def test_state_import_requires_confirmation_before_replacing_existing_state(tmp_
     assert not (destination / "existing.txt").exists()
 
 
+def test_state_export_copies_validated_state_without_modifying_source(tmp_path: Path) -> None:
+    source = _state(tmp_path / "xdg/modeldeck")
+    destination = tmp_path / "backups/modeldeck-state"
+
+    result = export_state_directory(source, destination)
+
+    assert result.source == source.resolve()
+    assert result.destination == destination.resolve()
+    assert (destination / "thermal-status.json").read_text(encoding="utf-8") == '{"state":"normal"}'
+    assert (source / "trusted-runtime-manifests/manifest.json").exists()
+    validate_state_directory(destination)
+
+
+def test_state_export_refuses_to_replace_an_existing_destination(tmp_path: Path) -> None:
+    source = _state(tmp_path / "xdg/modeldeck")
+    destination = _state(tmp_path / "backups/modeldeck-state")
+
+    with pytest.raises(StateExportError, match="already exists"):
+        export_state_directory(source, destination)
+
+
+def test_state_export_reports_invalid_source_as_an_export_error(tmp_path: Path) -> None:
+    source = tmp_path / "invalid"
+    source.mkdir()
+
+    with pytest.raises(StateExportError, match="modeldeck.sqlite3"):
+        export_state_directory(source, tmp_path / "backups/modeldeck-state")
+
+
 def test_state_import_rejects_legacy_or_invalid_data(tmp_path: Path) -> None:
     legacy = tmp_path / "legacy"
     legacy.mkdir()
@@ -194,6 +224,7 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "Wheelhouse contains unlisted files" in build_script
     assert "New-BundledPythonRuntime" in build_script
     assert "Set-PackagedRuntimeLauncher" in build_script
+    assert "modeldeck-export-state" in build_script
     assert "desktop-python" in build_script
     assert "absolute symbolic links" in build_script
     assert "direct_url.json" in build_script

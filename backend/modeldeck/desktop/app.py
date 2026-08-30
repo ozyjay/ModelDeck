@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ APP_ID = "com.modeldeck.ModelDeck"
 CONSOLE_URI = "http://127.0.0.1:3600/"
 RELEASE_METADATA = Path("/usr/share/modeldeck/release.json")
 IMPORTER = Path("/usr/libexec/modeldeck/control/bin/modeldeck-import-state")
+EXPORTER = Path("/usr/libexec/modeldeck/control/bin/modeldeck-export-state")
 DEVELOPMENT_MODE_ENV = "MODELDECK_DESKTOP_DEVELOPMENT"
 BUILD_ID_ENV = "MODELDECK_DESKTOP_BUILD_ID"
 
@@ -75,6 +77,7 @@ def main() -> None:
                 ("restart", self._restart),
                 ("stop", self._confirm_stop),
                 ("import", self._import),
+                ("export", self._export),
             )
             for name, callback in actions:
                 action = gio.SimpleAction.new(name, None)
@@ -97,6 +100,7 @@ def main() -> None:
                 menu = Gio.Menu()
                 menu.append("Restart services", "app.restart")
                 menu.append("Import existing state…", "app.import")
+                menu.append("Export state…", "app.export")
                 menu.append("Stop ModelDeck services…", "app.stop")
                 menu_button = Gtk.MenuButton(
                     icon_name="open-menu-symbolic",
@@ -297,6 +301,83 @@ def main() -> None:
                     subprocess.TimeoutExpired,
                 ) as error:
                     GLib.idle_add(self._show_recovery, f"State import failed: {error}")
+                    return
+                GLib.idle_add(self._show_console)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def _export(self, *_args: Any) -> None:
+            chooser = Gtk.FileDialog(title="Select a folder for the ModelDeck state export")
+            chooser.select_folder(self.window, None, self._finish_select_export_destination)
+
+        def _finish_select_export_destination(self, chooser: Any, result: Any) -> None:
+            try:
+                parent = chooser.select_folder_finish(result).get_path()
+            except GLib.Error:
+                return
+            if not parent:
+                return
+            export_name = f"modeldeck-state-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+            destination = str(Path(parent) / export_name)
+            dialog = Adw.AlertDialog(
+                heading="Export ModelDeck state?",
+                body=(
+                    f"Services will stop while state is copied to {export_name}. "
+                    "The export can later be selected with Import existing state…"
+                ),
+            )
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("export", "Export state")
+            dialog.set_response_appearance("export", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.set_default_response("cancel")
+            dialog.choose(
+                self.window,
+                None,
+                lambda prompt, chosen: self._finish_export_prompt(prompt, chosen, destination),
+            )
+
+        def _finish_export_prompt(self, dialog: Any, result: Any, destination: str) -> None:
+            try:
+                response = dialog.choose_finish(result)
+            except GLib.Error:
+                response = "cancel"
+            if response != "export":
+                return
+            self._show_status("Exporting ModelDeck state", "Stopping services and copying local state…")
+
+            def work() -> None:
+                export_error: Exception | None = None
+                try:
+                    self.controller.stop()
+                    subprocess.run(
+                        (str(EXPORTER), str(_desktop_data_dir()), destination),
+                        capture_output=True,
+                        check=True,
+                        text=True,
+                        timeout=120,
+                    )
+                except (
+                    DesktopServiceError,
+                    OSError,
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                ) as error:
+                    export_error = error
+                try:
+                    self.controller.start()
+                    self.controller.wait_until_ready()
+                except DesktopServiceError as error:
+                    detail = f"ModelDeck services could not restart: {error}"
+                    if export_error is not None:
+                        detail = f"State export failed: {export_error}. {detail}"
+                    GLib.idle_add(self._show_recovery, detail)
+                    return
+                if export_error is not None:
+                    GLib.idle_add(
+                        self._show_status,
+                        "State export failed",
+                        f"{export_error} ModelDeck services have restarted.",
+                    )
                     return
                 GLib.idle_add(self._show_console)
 

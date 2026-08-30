@@ -30,6 +30,7 @@ modeldeck = "modeldeck.__main__:main"
 modeldeck-gateway = "modeldeck.gateway.app:main"
 modeldeck-probe = "modeldeck.hardware.probe:main"
 modeldeck-import-state = "modeldeck.state_import:main"
+modeldeck-export-state = "modeldeck.state_export:main"
 modeldeck-desktop = "modeldeck.desktop.app:main"
 
 [tool.hatch.version]
