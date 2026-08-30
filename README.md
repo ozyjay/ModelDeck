@@ -321,6 +321,18 @@ Get-Help ./scripts/packaging/bump_version.ps1 -Full
 Get-Help ./scripts/packaging/bump_rpm_release.ps1 -Full
 ```
 
+### Install a local unsigned build
+
+Use an unsigned RPM only when installing the file you built locally or obtained through another
+verified local channel. `--nogpgcheck` deliberately bypasses RPM signature verification, so do not
+use it for a published release. Confirm the expected file and digest first, then install it:
+
+```bash
+sha256sum dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+sudo dnf install --nogpgcheck ./dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+modeldeck-desktop
+```
+
 Sign a release RPM separately, then verify and install it. The release wrapper selects the
 only local secret key automatically. For a fresh signing workstation, it can create a protected
 key and proceed in one command (GPG opens pinentry for its passphrase):

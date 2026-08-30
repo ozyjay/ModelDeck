@@ -51,7 +51,17 @@ release to `1`) and `scripts/packaging/bump_rpm_release.ps1 -Increment` for a pa
 rebuild. Both CLIs validate their input, reject a non-increasing value, and support `-WhatIf`.
 `-RpmRelease 2` remains an explicit one-off build override without changing tracked release state.
 
-## Sign, install, and launch
+## Install an unsigned RPM, or sign a release
+
+An unsigned RPM is appropriate only for a locally built file or one obtained through another
+verified local channel. Confirm the expected file and digest, then use `--nogpgcheck` explicitly;
+it bypasses RPM signature verification and must not be used for a published release:
+
+```bash
+sha256sum dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+sudo dnf install --nogpgcheck ./dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+modeldeck-desktop
+```
 
 Signing is separate from building. Install Fedora's `rpm-sign` package and make the release GPG
 private key available to the local signing agent; never add a key to this repository. The release
