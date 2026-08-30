@@ -11,6 +11,7 @@ RUN_SCRIPT = PROJECT_ROOT / "scripts/operations/run.ps1"
 STOP_SCRIPT = PROJECT_ROOT / "scripts/operations/stop.ps1"
 STOP_STALE_WORKERS_SCRIPT = PROJECT_ROOT / "scripts/operations/stop_stale_workers.ps1"
 CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts/operations/check_ports.ps1"
+SETUP_LLAMA_VULKAN_SCRIPT = PROJECT_ROOT / "scripts/setup/setup_llama_vulkan.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
 
@@ -150,6 +151,14 @@ def test_stale_worker_cleanup_covers_all_managed_workers_and_private_llama_serve
     assert '"$Root/.runtime-tools/llama.cpp/bin/llama-server"' in script
     assert "private llama-server" in script
     assert "$Arguments[0] -eq $TrustedLlamaServer" in script
+
+
+def test_llama_vulkan_setup_accepts_an_explicit_runtime_root() -> None:
+    script = SETUP_LLAMA_VULKAN_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[string]$RuntimeRoot = ''" in script
+    assert "GetFullPath($RuntimeRoot)" in script
+    assert "else { '.runtime-tools/llama.cpp' }" in script
 
 
 def test_port_check_preserves_the_binding_details_in_its_error() -> None:
