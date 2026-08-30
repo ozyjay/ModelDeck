@@ -203,6 +203,7 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "modeldeck_version $Version" in build_script
     assert "modeldeck_release $RpmRelease" in build_script
     assert "RpmRelease must be a positive integer" in build_script
+    assert "packaging/fedora/rpm-release" in build_script
     cleanup_position = build_script.index("Get-ChildItem $Libexec -Recurse -Directory -Filter '__pycache__'")
     desktop_copy_position = build_script.index("Copy-Item 'backend/modeldeck/desktop'")
     assert cleanup_position > desktop_copy_position
@@ -223,6 +224,20 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "$BuildParameters" in wrapper
     assert "RpmRelease = $RpmRelease" in wrapper
     assert "modeldeck-*.x86_64.rpm" in wrapper
+
+
+def test_fedora_version_and_release_bump_clis_are_validated_and_canonical() -> None:
+    version_bump = (PROJECT_ROOT / "scripts/packaging/bump_version.ps1").read_text(encoding="utf-8")
+    release_bump = (PROJECT_ROOT / "scripts/packaging/bump_rpm_release.ps1").read_text(encoding="utf-8")
+    release_file = PROJECT_ROOT / "packaging/fedora/rpm-release"
+
+    assert release_file.read_text(encoding="utf-8").strip() == "1"
+    assert "SupportsShouldProcess" in version_bump
+    assert "ValidateSet('Major', 'Minor', 'Patch')" in version_bump
+    assert "Version bump must be greater" in version_bump
+    assert "RPM release: 1" in version_bump
+    assert "SupportsShouldProcess" in release_bump
+    assert "RPM release bump must be greater" in release_bump
 
 
 def test_development_desktop_launcher_uses_checkout_services() -> None:

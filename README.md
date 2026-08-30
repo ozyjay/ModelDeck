@@ -298,9 +298,21 @@ empty directory. To replace an incomplete wheelhouse, add `-ReplaceWheelhouse`; 
 the old directory to a timestamped backup rather than deleting it. Review its generated SHA-256
 inventory before signing or distributing an RPM.
 
-RPM builds read the application version from `backend/modeldeck/__init__.py`. The RPM release
-number defaults to `1`; pass `-RpmRelease 2` for a packaging-only rebuild of the same application
-version. A new application release changes only `__version__` and starts again at RPM release `1`.
+RPM builds read the application version from `backend/modeldeck/__init__.py` and the RPM release
+number from `packaging/fedora/rpm-release`. Use the packaging CLIs to make auditable, validated
+bumps instead of editing those values by hand:
+
+```powershell
+# 0.1.1 → 0.1.2 and reset the RPM release to 1
+pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Part Patch
+
+# Packaging-only rebuild: 1 → 2
+pwsh -NoProfile -File scripts/packaging/bump_rpm_release.ps1 -Increment
+```
+
+Both commands support `-WhatIf`. Use `-Version 1.0.0` or `-Release 3` to set a specific greater
+value. `-RpmRelease` remains available on either build command as an explicit one-off override;
+it does not modify the canonical release file.
 
 Sign a release RPM separately, then verify and install it. The release wrapper selects the
 only local secret key automatically. For a fresh signing workstation, it can create a protected

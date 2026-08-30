@@ -4,7 +4,7 @@ param(
     [string]$WheelhouseManifest = 'packaging/fedora/wheelhouse.sha256',
     [string]$OutputDirectory = 'dist/fedora',
     [string]$Python = 'python3.12',
-    [string]$RpmRelease = '1'
+    [string]$RpmRelease = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -162,6 +162,11 @@ if ($LASTEXITCODE -ne 0) { throw "Python interpreter is unavailable: $Python" }
 $Version = (Select-String -Path backend/modeldeck/__init__.py -Pattern '^__version__ = "([^"]+)"').Matches[0].Groups[1].Value
 if (-not $Version) { throw 'Could not determine the ModelDeck package version.' }
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:[A-Za-z0-9.+~_-]+)?$') { throw "Invalid ModelDeck package version: $Version" }
+if (-not $RpmRelease) {
+    $ReleasePath = 'packaging/fedora/rpm-release'
+    if (-not (Test-Path $ReleasePath -PathType Leaf)) { throw "RPM release file was not found: $ReleasePath" }
+    $RpmRelease = (Get-Content -Path $ReleasePath -Raw).Trim()
+}
 if ($RpmRelease -notmatch '^[1-9]\d*$') { throw "RpmRelease must be a positive integer, not: $RpmRelease" }
 $BuildId = "$Version-$RpmRelease"
 $Stage = Join-Path ([System.IO.Path]::GetTempPath()) "modeldeck-rpm-stage-$([guid]::NewGuid().ToString('N'))"

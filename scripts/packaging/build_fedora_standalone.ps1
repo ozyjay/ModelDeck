@@ -4,7 +4,7 @@ param(
     [string]$WheelhouseManifest = 'packaging/fedora/wheelhouse.sha256',
     [string]$OutputDirectory = 'dist/fedora',
     [string]$Python = '',
-    [string]$RpmRelease = '1',
+    [string]$RpmRelease = '',
     [switch]$PrepareWheelhouse,
     [switch]$ReplaceWheelhouse
 )

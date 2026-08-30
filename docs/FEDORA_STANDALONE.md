@@ -45,9 +45,11 @@ them with their pinned package versions. No model download or package-manager in
 during the build.
 
 The application version is read from `backend/modeldeck/__init__.py`; the spec receives that value
-only from the build script. For a packaging-only rebuild, keep the application version and pass a
-new RPM release number, for example `-RpmRelease 2`. For a new application release, change
-`__version__` and build with the default RPM release `1`.
+only from the build script. The canonical RPM release is `packaging/fedora/rpm-release`. Use
+`scripts/packaging/bump_version.ps1 -Part Patch` for an application release (which resets the RPM
+release to `1`) and `scripts/packaging/bump_rpm_release.ps1 -Increment` for a packaging-only
+rebuild. Both CLIs validate their input, reject a non-increasing value, and support `-WhatIf`.
+`-RpmRelease 2` remains an explicit one-off build override without changing tracked release state.
 
 ## Sign, install, and launch
 
