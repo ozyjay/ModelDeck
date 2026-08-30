@@ -86,6 +86,22 @@ def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> No
         build_worker_launch(profile)
 
 
+def test_rocm_launch_uses_managed_miopen_state(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    data_dir = tmp_path / "modeldeck-data"
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile, data_dir=data_dir)
+
+    assert launch.environment["MIOPEN_USER_DB_PATH"] == str(data_dir / "runtime/miopen/user-db")
+    assert launch.environment["MIOPEN_CUSTOM_CACHE_DIR"] == str(data_dir / "runtime/miopen/kernel-cache")
+    assert (data_dir / "runtime/miopen/user-db").is_dir()
+    assert (data_dir / "runtime/miopen/kernel-cache").is_dir()
+
+
 @pytest.mark.asyncio
 async def test_supervisor_registers_and_removes_only_stopped_profiles() -> None:
     base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")

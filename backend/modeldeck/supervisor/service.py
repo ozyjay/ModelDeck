@@ -429,8 +429,17 @@ def build_worker_launch(profile: ModelProfile, *, data_dir: Path | None = None) 
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
-    if data_dir is not None:
-        environment["MODELDECK_DATA_DIR"] = str(data_dir)
+    managed_data_dir = data_dir or Path(os.environ.get("MODELDECK_DATA_DIR", ".modeldeck"))
+    environment["MODELDECK_DATA_DIR"] = str(managed_data_dir)
+    miopen_root = managed_data_dir / "runtime" / "miopen"
+    user_database = miopen_root / "user-db"
+    kernel_cache = miopen_root / "kernel-cache"
+    for path in (user_database, kernel_cache):
+        path.mkdir(parents=True, exist_ok=True)
+    # Fedora standalone services deliberately make $HOME read-only. MIOpen
+    # otherwise writes its user database and compiled-kernel cache below it.
+    environment["MIOPEN_USER_DB_PATH"] = str(user_database)
+    environment["MIOPEN_CUSTOM_CACHE_DIR"] = str(kernel_cache)
     common = [
         "--worker-id",
         profile.id,

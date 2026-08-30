@@ -97,6 +97,9 @@ Profiles, capability policies and evidence can conflict. The operator console id
 active store as either **Desktop standalone state** or **Checkout development state**, including
 its directory in the badge tooltip. First use starts empty. Select **Import existing state…**
 from the desktop window to choose an exported `modeldeck-state-….tar` archive.
+ROCm Workers also keep their MIOpen user database and compiled-kernel cache below
+`~/.local/share/modeldeck/runtime/miopen`, rather than under the package service's read-only
+home directory.
 
 Import stops services, safely extracts the archive, checks SQLite integrity and schema version 4,
 and backs up existing packaged-app state before replacement. It
