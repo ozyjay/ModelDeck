@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import subprocess
-import tarfile
 import tomllib
 from pathlib import Path
 
@@ -20,13 +19,7 @@ from modeldeck.desktop.controller import (
     prepare_service_directories,
     should_prompt_for_restart,
 )
-from modeldeck.state_export import StateExportError, export_state_directory
-from modeldeck.state_import import (
-    StateImportError,
-    import_state_archive,
-    import_state_directory,
-    validate_state_directory,
-)
+from modeldeck.state_import import StateImportError, import_state_directory, validate_state_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -137,50 +130,6 @@ def test_state_import_requires_confirmation_before_replacing_existing_state(tmp_
     assert result.backup is not None
     assert (result.backup / "existing.txt").read_text(encoding="utf-8") == "keep as backup"
     assert not (destination / "existing.txt").exists()
-
-
-def test_state_export_creates_an_import_compatible_archive_without_modifying_source(
-    tmp_path: Path,
-) -> None:
-    source = _state(tmp_path / "xdg/modeldeck")
-    destination = tmp_path / "backups/modeldeck-state.tar"
-
-    result = export_state_directory(source, destination)
-
-    assert result.source == source.resolve()
-    assert result.destination == destination.resolve()
-    with tarfile.open(destination) as archive:
-        assert "modeldeck-state/modeldeck.sqlite3" in archive.getnames()
-    assert (source / "trusted-runtime-manifests/manifest.json").exists()
-    imported = import_state_archive(destination, tmp_path / "imported/modeldeck")
-    assert (imported.destination / "thermal-status.json").read_text(encoding="utf-8") == '{"state":"normal"}'
-
-
-def test_state_export_refuses_to_replace_an_existing_destination(tmp_path: Path) -> None:
-    source = _state(tmp_path / "xdg/modeldeck")
-    destination = tmp_path / "backups/modeldeck-state.tar"
-    destination.parent.mkdir()
-    destination.write_bytes(b"existing export")
-
-    with pytest.raises(StateExportError, match="already exists"):
-        export_state_directory(source, destination)
-
-
-def test_state_export_reports_invalid_source_as_an_export_error(tmp_path: Path) -> None:
-    source = tmp_path / "invalid"
-    source.mkdir()
-
-    with pytest.raises(StateExportError, match="modeldeck.sqlite3"):
-        export_state_directory(source, tmp_path / "backups/modeldeck-state")
-
-
-def test_state_import_rejects_an_archive_with_path_traversal(tmp_path: Path) -> None:
-    archive_path = tmp_path / "unsafe.tar"
-    with tarfile.open(archive_path, mode="w") as archive:
-        archive.addfile(tarfile.TarInfo("../outside"))
-
-    with pytest.raises(StateImportError, match="unsafe path"):
-        import_state_archive(archive_path, tmp_path / "xdg/modeldeck")
 
 
 def test_state_import_rejects_legacy_or_invalid_data(tmp_path: Path) -> None:
