@@ -92,20 +92,19 @@ enable either service at login.
 
 The package writes state to `~/.local/share/modeldeck` and Worker logs to
 `~/.local/state/modeldeck/logs/workers`. First use starts empty. Select **Import existing
-state…** from the desktop window to copy an existing data directory such as
-`/path/to/ModelDeck/.modeldeck`.
+state…** from the desktop window to choose an exported `modeldeck-state-….tar` archive.
 
-Import stops services, checks SQLite integrity and schema version 4, copies the selected state
-without modifying the source, and backs up existing packaged-app state before replacement. It
+Import stops services, safely extracts the archive, checks SQLite integrity and schema version 4,
+and backs up existing packaged-app state before replacement. It
 preserves configured Workers, routing profiles, compatibility evidence, thermal state, and
 trusted runtime manifests. Older v2/v3 databases must use the documented migrations before
 import.
 
-Select **Export state…** to choose a parent folder for an import-compatible copy. ModelDeck stops
-services while it copies state and creates a new timestamped `modeldeck-state-…` directory there;
-it never replaces an existing export or modifies the active state. The command-line equivalent is
-`modeldeck-export-state ~/.local/share/modeldeck /path/to/new-export-directory` and should be run
-only after stopping ModelDeck services.
+Select **Export state…** to save an import-compatible `modeldeck-state-….tar` archive. ModelDeck
+stops services while it creates the archive; it never replaces an existing export or modifies the
+active state. The command-line equivalent is
+`modeldeck-export-state ~/.local/share/modeldeck /path/to/new-export.tar` and should be run only
+after stopping ModelDeck services.
 
 ## Updating
 

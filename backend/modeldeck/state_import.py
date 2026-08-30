@@ -1,4 +1,4 @@
-"""Safe, explicit import of a ModelDeck per-user data directory."""
+"""Safe, explicit import of ModelDeck state archives and directories."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from modeldeck.state_archive import StateArchiveError, extract_state_archive
 
 
 class StateImportError(RuntimeError):
@@ -86,6 +88,48 @@ def import_state_directory(
     return StateImportResult(source=source, destination=destination, backup=backup)
 
 
+def import_state_archive(
+    source: Path,
+    destination: Path,
+    *,
+    replace_existing: bool = False,
+) -> StateImportResult:
+    """Extract and import a validated ModelDeck state archive.
+
+    Archives are extracted only into a temporary directory after rejecting
+    traversal, links, and other unsupported tar entries.
+    """
+
+    source = source.expanduser().resolve()
+    destination = destination.expanduser().resolve()
+    if source == destination:
+        raise StateImportError("The source archive and destination data directory must differ")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    existing = destination.exists() and any(destination.iterdir())
+    if existing and not replace_existing:
+        raise StateImportError("The packaged-app data directory is not empty; confirm replacement first")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="modeldeck-import-", dir=destination.parent) as temporary:
+            staged = Path(temporary) / "state"
+            extract_state_archive(source, staged)
+            validate_state_directory(staged)
+            backup: Path | None = None
+            if destination.exists():
+                if existing:
+                    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                    backup = destination.parent / f"{destination.name}.backup-{stamp}"
+                    if backup.exists():
+                        raise StateImportError(f"Backup destination already exists: {backup}")
+                    destination.replace(backup)
+                else:
+                    destination.rmdir()
+            staged.replace(destination)
+    except StateArchiveError as error:
+        raise StateImportError(str(error)) from error
+    return StateImportResult(source=source, destination=destination, backup=backup)
+
+
 def _reject_symlinks(directory: Path) -> None:
     for path in directory.rglob("*"):
         if path.is_symlink():
@@ -94,9 +138,9 @@ def _reject_symlinks(directory: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import existing ModelDeck state into the Fedora desktop app"
+        description="Import a ModelDeck state archive into the Fedora desktop app"
     )
-    parser.add_argument("source", type=Path, help="Existing ModelDeck data directory, usually .modeldeck")
+    parser.add_argument("source", type=Path, help="Exported ModelDeck state .tar archive")
     parser.add_argument("destination", type=Path, help="XDG ModelDeck data directory")
     parser.add_argument(
         "--replace-existing",
@@ -105,7 +149,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     try:
-        result = import_state_directory(args.source, args.destination, replace_existing=args.replace_existing)
+        result = import_state_archive(args.source, args.destination, replace_existing=args.replace_existing)
     except StateImportError as error:
         parser.error(str(error))
     print(f"Imported ModelDeck state into {result.destination}")

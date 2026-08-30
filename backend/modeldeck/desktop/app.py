@@ -242,12 +242,12 @@ def main() -> None:
             threading.Thread(target=work, daemon=True).start()
 
         def _import(self, *_args: Any) -> None:
-            chooser = Gtk.FileDialog(title="Select existing ModelDeck data directory")
-            chooser.select_folder(self.window, None, self._finish_select_import_source)
+            chooser = Gtk.FileDialog(title="Select ModelDeck state export")
+            chooser.open(self.window, None, self._finish_select_import_source)
 
         def _finish_select_import_source(self, chooser: Any, result: Any) -> None:
             try:
-                source = chooser.select_folder_finish(result).get_path()
+                source = chooser.open_finish(result).get_path()
             except GLib.Error:
                 return
             if not source:
@@ -256,7 +256,7 @@ def main() -> None:
                 heading="Import existing ModelDeck state?",
                 body=(
                     "Services will stop. Existing packaged-app state will be backed up before the selected "
-                    "state is copied."
+                    "archive is imported."
                 ),
             )
             dialog.add_response("cancel", "Cancel")
@@ -307,22 +307,23 @@ def main() -> None:
             threading.Thread(target=work, daemon=True).start()
 
         def _export(self, *_args: Any) -> None:
-            chooser = Gtk.FileDialog(title="Select a folder for the ModelDeck state export")
-            chooser.select_folder(self.window, None, self._finish_select_export_destination)
+            chooser = Gtk.FileDialog(title="Save ModelDeck state export")
+            export_name = f"modeldeck-state-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.tar"
+            chooser.set_initial_name(export_name)
+            chooser.save(self.window, None, self._finish_select_export_destination)
 
         def _finish_select_export_destination(self, chooser: Any, result: Any) -> None:
             try:
-                parent = chooser.select_folder_finish(result).get_path()
+                destination = chooser.save_finish(result).get_path()
             except GLib.Error:
                 return
-            if not parent:
+            if not destination:
                 return
-            export_name = f"modeldeck-state-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-            destination = str(Path(parent) / export_name)
+            export_name = Path(destination).name
             dialog = Adw.AlertDialog(
                 heading="Export ModelDeck state?",
                 body=(
-                    f"Services will stop while state is copied to {export_name}. "
+                    f"Services will stop while state is archived to {export_name}. "
                     "The export can later be selected with Import existing state…"
                 ),
             )
