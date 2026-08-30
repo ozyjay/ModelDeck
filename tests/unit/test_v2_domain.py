@@ -178,6 +178,47 @@ def test_routing_profile_preserves_capability_worker_order() -> None:
     ]
 
 
+def test_tool_calling_route_requires_tool_capable_workers() -> None:
+    worker = worker_definition()
+    profile = routing_profile(worker.id)
+    profile.capabilities[0].tool_calling_enabled = True
+
+    validation = validate_routing_profile(profile, [worker], [])
+
+    assert validation["valid"] is False
+    assert validation["errors"] == [
+        {
+            "capability_id": profile.capabilities[0].id,
+            "worker_id": worker.id,
+            "message": "Tool calling is enabled, but this Worker does not support it",
+        }
+    ]
+
+    tool_worker = worker.model_copy(
+        update={"capabilities": {**worker.capabilities, "tool_calling": True}}
+    )
+    assert validate_routing_profile(profile, [tool_worker], [])["valid"] is True
+    assert routing_snapshot(profile, 4)["capabilities"][0]["tool_calling_enabled"] is True
+
+
+def test_tool_calling_can_only_use_openai_chat_contract() -> None:
+    with pytest.raises(ValueError, match="tool calling is supported only"):
+        RoutingProfile(
+            id=str(uuid4()),
+            name="Invalid tools",
+            capabilities=[
+                {
+                    "id": str(uuid4()),
+                    "display_name": "Embedding tools",
+                    "public_name": "embedding-tools",
+                    "protocol_contract": "openai-embeddings-v1",
+                    "tool_calling_enabled": True,
+                    "worker_ids": [str(uuid4())],
+                }
+            ],
+        )
+
+
 def test_routing_profile_rejects_duplicate_public_model_names() -> None:
     worker = worker_definition()
     profile = routing_profile(worker.id)

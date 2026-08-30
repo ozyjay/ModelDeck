@@ -37,6 +37,7 @@ export interface CapabilityBinding {
   display_name: string;
   public_name: string;
   protocol_contract: string;
+  tool_calling_enabled: boolean;
   worker_ids: string[];
 }
 export interface RoutingProfile {

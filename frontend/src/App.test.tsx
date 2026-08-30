@@ -22,7 +22,7 @@ const profile: RoutingProfileRecord = {
     description: "Token Trail and SprintBot", qualification: "tested-working",
     capabilities: [{
       id: "144d1dbf-9f46-4277-a324-e352577dbd5a", display_name: "Token trace",
-      public_name: "qwen-0-5b", protocol_contract: "native-ar-trace-v1", worker_ids: [worker.id],
+      public_name: "qwen-0-5b", protocol_contract: "native-ar-trace-v1", tool_calling_enabled: false, worker_ids: [worker.id],
     }],
   },
   created_at: "2026-07-20T00:00:00Z", updated_at: "2026-07-20T00:00:00Z",

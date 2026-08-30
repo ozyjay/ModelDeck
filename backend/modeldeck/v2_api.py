@@ -872,7 +872,7 @@ def create_v3_router() -> APIRouter:
         )
         if capability is None:
             raise HTTPException(404, "The capability is not in the live Routing Profile revision")
-        if capability["protocol_contract"] == "openai-chat-v1":
+        if capability.get("tool_calling_enabled") is True:
             return await _rehearse_route_tool_calling(snapshot, capability, request)
         path, body = _capability_smoke_request(capability)
         timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
@@ -965,10 +965,15 @@ def create_v3_router() -> APIRouter:
                         **capability,
                         "id": capability["capability_id"],
                         "profile_id": snapshot["profile_id"],
-                        "tool_calling": request.app.state.compatibility_store.route_tool_calling_state(
-                            str(snapshot["profile_id"]),
-                            int(snapshot["revision"]),
-                            str(capability["capability_id"]),
+                        "tool_calling_enabled": capability.get("tool_calling_enabled") is True,
+                        "tool_calling": (
+                            request.app.state.compatibility_store.route_tool_calling_state(
+                                str(snapshot["profile_id"]),
+                                int(snapshot["revision"]),
+                                str(capability["capability_id"]),
+                            )
+                            if capability.get("tool_calling_enabled") is True
+                            else None
                         ),
                         "workers": [worker for worker in chain if worker],
                         "effective_worker": effective,

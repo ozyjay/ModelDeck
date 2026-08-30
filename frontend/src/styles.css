@@ -117,6 +117,10 @@ nav { display: grid; gap: 0.3rem; }
 .field-grid, .field-grid label { min-width: 0; }
 .field-grid label { display: grid; gap: 0.35rem; }
 .field-grid input, .field-grid select { width: 100%; min-width: 0; }
+.field-checkbox { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; }
+.field-checkbox input { margin-top: 0.25rem; }
+.field-checkbox span { display: grid; gap: 0.2rem; }
+.field-checkbox small { color: var(--muted); }
 .field-help { color: var(--muted); font-size: 0.72rem; font-weight: 500; text-transform: none; }
 .field-help code { color: inherit; font-size: inherit; }
 .order-label { width: 5rem; flex: 0 0 auto; color: var(--muted); font-size: 0.75rem; font-weight: 750; text-transform: uppercase; }

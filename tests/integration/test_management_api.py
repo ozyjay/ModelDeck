@@ -472,7 +472,7 @@ async def test_profile_publish_rejects_incompatible_worker(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_profiles_are_active_together_and_reject_model_id_collisions(tmp_path) -> None:
+async def test_publishing_a_profile_replaces_the_previous_live_profile(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
     store.initialise_v3()
@@ -495,17 +495,10 @@ async def test_profiles_are_active_together_and_reject_model_id_collisions(tmp_p
                     await client.post(f"/api/routing-profiles/{profile['id']}/publish")
                 ).status_code == 201
             live = (await client.get("/api/live")).json()
-            duplicate = {**second, "id": str(uuid4()), "name": "collision"}
-            assert (await client.post("/api/routing-profiles", json=duplicate)).status_code == 201
-            rejected = await client.post(f"/api/routing-profiles/{duplicate['id']}/publish")
 
-    assert {profile["name"] for profile in live["active_profiles"]} == {"Existing", "wayfinder-gate0"}
-    assert {capability["public_name"] for capability in live["capabilities"]} == {
-        "existing-local",
-        "fast-local",
-    }
-    assert rejected.status_code == 409
-    assert "unique API Model IDs" in rejected.json()["detail"]
+    assert live["active_profile"] == {"id": second["id"], "name": "wayfinder-gate0", "revision": 1}
+    assert live["active_profiles"] == [live["active_profile"]]
+    assert [capability["public_name"] for capability in live["capabilities"]] == ["fast-local"]
 
 
 def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path) -> None:
