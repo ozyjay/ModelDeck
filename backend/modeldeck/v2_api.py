@@ -52,6 +52,9 @@ NATIVE_FP8_MAXIMUM_FIRST_TOKEN_SECONDS = 0.50
 NATIVE_FP8_MAXIMUM_STEADY_MEMORY_BYTES = 36 * 1024**3
 NATIVE_FP8_MAXIMUM_PEAK_MEMORY_BYTES = 38 * 1024**3
 NATIVE_FP8_BENCHMARK_REPETITIONS = 5
+# Tool-use rehearsal must leave room for models that emit internal reasoning
+# before their OpenAI-compatible function call.
+TOOL_CALLING_REHEARSAL_MAX_TOKENS = 512
 
 
 def _discover_models(request: Request):
@@ -1040,7 +1043,7 @@ async def _rehearse_route_tool_calling(
                     "tools": [list_tool],
                     "tool_choice": "required",
                     "temperature": 0,
-                    "max_tokens": 192,
+                    "max_tokens": TOOL_CALLING_REHEARSAL_MAX_TOKENS,
                 },
             )
             call, category = _rehearsal_tool_call(response, "list_workspace_entries", {})
@@ -1075,7 +1078,7 @@ async def _rehearse_route_tool_calling(
                         "tools": [read_tool],
                         "tool_choice": "required",
                         "temperature": 0,
-                        "max_tokens": 192,
+                        "max_tokens": TOOL_CALLING_REHEARSAL_MAX_TOKENS,
                     },
                 )
                 call, category = _rehearsal_tool_call(

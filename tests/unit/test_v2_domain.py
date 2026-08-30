@@ -547,7 +547,7 @@ async def test_tool_calling_rehearsal_exercises_a_complete_openai_tool_loop(monk
 
     assert result["ok"] is True
     assert len(client.payloads) == 3
-    assert [payload["max_tokens"] for payload in client.payloads] == [192, 192, 96]
+    assert [payload["max_tokens"] for payload in client.payloads] == [512, 512, 96]
     assert client.payloads[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert client.payloads[2]["messages"][3]["tool_calls"][0]["function"]["arguments"] == (
         '{"path":"Readme.md"}'
