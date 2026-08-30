@@ -314,6 +314,13 @@ Both commands support `-WhatIf`. Use `-Version 1.0.0` or `-Release 3` to set a s
 value. `-RpmRelease` remains available on either build command as an explicit one-off override;
 it does not modify the canonical release file.
 
+For parameter descriptions and more examples, use PowerShell's built-in help:
+
+```powershell
+Get-Help ./scripts/packaging/bump_version.ps1 -Full
+Get-Help ./scripts/packaging/bump_rpm_release.ps1 -Full
+```
+
 Sign a release RPM separately, then verify and install it. The release wrapper selects the
 only local secret key automatically. For a fresh signing workstation, it can create a protected
 key and proceed in one command (GPG opens pinentry for its passphrase):

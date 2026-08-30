@@ -1,3 +1,34 @@
+<#
+.SYNOPSIS
+Advances ModelDeck's Fedora RPM release number.
+
+.DESCRIPTION
+Updates the canonical positive-integer RPM release in packaging/fedora/rpm-release without
+changing the application MAJOR.MINOR.PATCH version. Use this for a packaging-only rebuild.
+
+.PARAMETER Increment
+Increases the canonical RPM release by one.
+
+.PARAMETER Release
+Sets an exact, greater positive-integer RPM release instead of incrementing it.
+
+.PARAMETER ReleaseFile
+Overrides the canonical RPM-release file. Intended for tests and controlled tooling.
+
+.EXAMPLE
+pwsh -NoProfile -File scripts/packaging/bump_rpm_release.ps1 -Increment
+
+Advances the RPM release from 1 to 2 without changing the application version.
+
+.EXAMPLE
+pwsh -NoProfile -File scripts/packaging/bump_rpm_release.ps1 -Release 3 -WhatIf
+
+Shows the proposed RPM-release change without changing files.
+
+.NOTES
+The requested RPM release must be greater than the current release. Use Get-Help with -Full
+to view this help from PowerShell.
+#>
 [CmdletBinding(DefaultParameterSetName = 'Increment', SupportsShouldProcess)]
 param(
     [Parameter(Mandatory, ParameterSetName = 'Increment')]

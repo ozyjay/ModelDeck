@@ -236,8 +236,12 @@ def test_fedora_version_and_release_bump_clis_are_validated_and_canonical() -> N
     assert "ValidateSet('Major', 'Minor', 'Patch')" in version_bump
     assert "Version bump must be greater" in version_bump
     assert "RPM release: 1" in version_bump
+    assert ".SYNOPSIS" in version_bump
+    assert ".EXAMPLE" in version_bump
     assert "SupportsShouldProcess" in release_bump
     assert "RPM release bump must be greater" in release_bump
+    assert ".SYNOPSIS" in release_bump
+    assert ".EXAMPLE" in release_bump
 
 
 def test_development_desktop_launcher_uses_checkout_services() -> None:

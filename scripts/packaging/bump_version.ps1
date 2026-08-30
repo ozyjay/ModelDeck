@@ -1,3 +1,44 @@
+<#
+.SYNOPSIS
+Advances ModelDeck's application version.
+
+.DESCRIPTION
+Updates the canonical MAJOR.MINOR.PATCH version in backend/modeldeck/__init__.py.
+A major, minor, or patch bump can be selected, or an exact greater version can be supplied.
+Every application-version change resets the canonical Fedora RPM release to 1.
+
+.PARAMETER Part
+Selects the semantic-version component to advance: Major resets minor and patch to zero;
+Minor resets patch to zero; Patch increments only the patch component.
+
+.PARAMETER Version
+Sets an exact, greater MAJOR.MINOR.PATCH application version instead of selecting Part.
+
+.PARAMETER VersionFile
+Overrides the canonical application-version file. Intended for tests and controlled tooling.
+
+.PARAMETER ReleaseFile
+Overrides the canonical RPM-release file. Intended for tests and controlled tooling.
+
+.EXAMPLE
+pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Part Patch
+
+Advances 0.1.1 to 0.1.2 and resets the RPM release to 1.
+
+.EXAMPLE
+pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Part Minor -WhatIf
+
+Shows the proposed minor release without changing files.
+
+.EXAMPLE
+pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Version 1.0.0
+
+Sets the application version to 1.0.0 and resets the RPM release to 1.
+
+.NOTES
+The requested version must be greater than the current version. Use Get-Help with -Full
+to view this help from PowerShell.
+#>
 [CmdletBinding(DefaultParameterSetName = 'Part', SupportsShouldProcess)]
 param(
     [Parameter(Mandatory, ParameterSetName = 'Part')]
