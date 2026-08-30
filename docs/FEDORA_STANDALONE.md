@@ -35,6 +35,14 @@ also needs `rpmbuild` and `patchelf`; the latter removes build-host RPATHs from 
 runtime before packaging.
 
 ```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1
+```
+
+This is the routine build path: it reuses the existing verified offline wheelhouse. Preparing a
+wheelhouse with `-PrepareWheelhouse` downloads pinned packages and builds the Q4 source-only wheels,
+so run it only for a new or deliberately refreshed wheelhouse:
+
+```powershell
 pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 -PrepareWheelhouse
 ```
 

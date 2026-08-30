@@ -268,19 +268,24 @@ build; it stops if a required wheel is missing or differs from the inventory. Ne
 downloads Models.
 
 On Fedora 44 x86_64 with `rpmbuild`, `patchelf`, Python 3.12, Node.js, npm, and the frontend dependencies
-already installed, create an unsigned RPM distribution from the repository root with:
+already installed, create an unsigned RPM distribution from the repository root with the existing verified
+wheelhouse:
 
 ```powershell
-pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 -PrepareWheelhouse
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1
 ```
 
-The wrapper automatically finds an installed Python 3.12, including pyenv-managed versions. If
-automatic discovery is unsuitable, pass the complete path explicitly:
+`-PrepareWheelhouse` is a deliberately slow preparation step: it downloads pinned packages and builds
+the Q4 source-only wheels. Run it only when creating or deliberately refreshing a wheelhouse, not for
+routine local builds:
 
 ```powershell
 pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
   -Python /path/to/python3.12 -PrepareWheelhouse
 ```
+
+The wrapper automatically finds an installed Python 3.12, including pyenv-managed versions. Pass
+`-Python /path/to/python3.12` to override that discovery for either mode.
 
 The package is written beneath `dist/fedora/`, normally as
 `dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm`. To use a wheelhouse stored elsewhere,

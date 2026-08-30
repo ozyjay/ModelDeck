@@ -171,6 +171,9 @@ if ($PrepareWheelhouse) {
 elseif ($ReplaceWheelhouse) {
     throw '-ReplaceWheelhouse requires -PrepareWheelhouse.'
 }
+else {
+    Write-Host 'Using the existing verified offline wheelhouse. Omit -PrepareWheelhouse for routine RPM builds.'
+}
 
 $BuildParameters = @{
     Wheelhouse = $Wheelhouse

@@ -216,6 +216,7 @@ def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:
     assert "Assert-Python312" in wrapper
     assert "Resolve-Python312" in wrapper
     assert "Prepare-OfflineWheelhouse" in wrapper
+    assert "Omit -PrepareWheelhouse for routine RPM builds" in wrapper
     assert "-m pip wheel" in wrapper
     assert "--wheel-dir" in wrapper
     assert "--no-cache-dir" in wrapper
