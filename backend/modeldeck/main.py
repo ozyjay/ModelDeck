@@ -23,7 +23,7 @@ from modeldeck.capabilities import (
 )
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
-from modeldeck.config import Settings, gateway_base_url
+from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
 from modeldeck.qwen_candidates import approve_candidate
@@ -160,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "configuration_locked": configured.configuration_locked,
             "offline_only": True,
             "gateway_url": gateway_base_url(configured.gateway_host, configured.gateway_port),
+            "state_store": state_store_metadata(configured.data_dir),
         }
 
     @app.get("/api/gateway/status")

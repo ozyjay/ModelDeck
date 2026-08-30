@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from modeldeck.config import Settings, gateway_base_url
+from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.gateway import app as gateway_app
 
 
@@ -9,6 +9,20 @@ def test_gateway_host_defaults_to_loopback(monkeypatch) -> None:
     monkeypatch.delenv("MODELDECK_GATEWAY_HOST", raising=False)
 
     assert Settings.from_env().gateway_host == "127.0.0.1"
+
+
+def test_state_store_metadata_distinguishes_desktop_and_checkout_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("MODELDECK_DESKTOP", raising=False)
+    assert state_store_metadata(tmp_path)["kind"] == "checkout-development"
+
+    monkeypatch.setenv("MODELDECK_DESKTOP", "1")
+    metadata = state_store_metadata(tmp_path)
+
+    assert metadata == {
+        "kind": "desktop-standalone",
+        "label": "Desktop standalone state",
+        "directory": str(tmp_path.resolve()),
+    }
 
 
 def test_gateway_host_does_not_change_legacy_settings_positional_arguments() -> None:

@@ -131,6 +131,11 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     assert isinstance(health.json()["build_id"], str)
     assert health.json()["configuration_locked"] is False
     assert health.json()["offline_only"] is True
+    assert health.json()["state_store"] == {
+        "kind": "checkout-development",
+        "label": "Checkout development state",
+        "directory": str(tmp_path.resolve()),
+    }
     assert workers.json() == []
     assert profiles.json() == {"profiles": []}
     assert live.json() == {"active_profile": None, "active_profiles": [], "capabilities": []}

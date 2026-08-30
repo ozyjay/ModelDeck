@@ -74,6 +74,22 @@ def gateway_base_url(host: str, port: int) -> str:
     return f"http://{formatted_host}:{port}"
 
 
+def state_store_metadata(data_dir: Path) -> dict[str, str]:
+    """Describe the intentionally separate desktop and checkout state stores."""
+
+    if _bool_env("MODELDECK_DESKTOP"):
+        return {
+            "kind": "desktop-standalone",
+            "label": "Desktop standalone state",
+            "directory": str(data_dir.resolve()),
+        }
+    return {
+        "kind": "checkout-development",
+        "label": "Checkout development state",
+        "directory": str(data_dir.resolve()),
+    }
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = "127.0.0.1"

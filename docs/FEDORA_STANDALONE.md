@@ -91,8 +91,12 @@ enable either service at login.
 ## Per-user state, export, and importing a development installation
 
 The package writes state to `~/.local/share/modeldeck` and Worker logs to
-`~/.local/state/modeldeck/logs/workers`. First use starts empty. Select **Import existing
-state…** from the desktop window to choose an exported `modeldeck-state-….tar` archive.
+`~/.local/state/modeldeck/logs/workers`. This is deliberately separate from a source checkout's
+`.modeldeck` development state: they are not merged automatically because Worker IDs, Routing
+Profiles, capability policies and evidence can conflict. The operator console identifies the
+active store as either **Desktop standalone state** or **Checkout development state**, including
+its directory in the badge tooltip. First use starts empty. Select **Import existing state…**
+from the desktop window to choose an exported `modeldeck-state-….tar` archive.
 
 Import stops services, safely extracts the archive, checks SQLite integrity and schema version 4,
 and backs up existing packaged-app state before replacement. It

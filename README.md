@@ -37,6 +37,15 @@ loading. The checked-in defaults work without a `.env`; create one when local po
 storage, timeouts, runtime interpreters, cache location, or the SceneChat credential need
 to differ.
 
+### State stores
+
+Development launched from this checkout uses `.modeldeck`; the Fedora desktop package uses
+`~/.local/share/modeldeck`. These are intentionally separate and are not merged automatically:
+independently created Workers, Routing Profiles, policy choices and qualification evidence can
+conflict. The operator console always displays the active store as **Checkout development state**
+or **Desktop standalone state**; hover that badge to see its directory. Export and import state
+explicitly when moving an approved configuration between them.
+
 Use `MODELDECK_CONFIGURATION_LOCKED=1` (or `scripts/operations/run.ps1 -LockConfiguration`) for a
 prepared, read-only configuration. The former `MODELDECK_OPEN_DAY` and `-OpenDay` names are
 accepted temporarily while local launch files are updated. ModelDeck is always offline-only;

@@ -195,6 +195,11 @@ export interface ManagementHealth {
   configuration_locked: boolean;
   offline_only: boolean;
   gateway_url: string;
+  state_store: {
+    kind: "desktop-standalone" | "checkout-development";
+    label: string;
+    directory: string;
+  };
 }
 
 export interface MemoryReading { total_bytes: number; available_bytes: number; percent: number }
