@@ -62,6 +62,10 @@ class WorkerDefinition(BaseModel):
     @model_validator(mode="after")
     def normalise_legacy_settings(self) -> WorkerDefinition:
         thinking_default = {
+            # The dedicated text-chat adapter has always run without thinking.
+            # Persisted Workers from before this setting became explicit must
+            # retain that immutable runtime policy when they are reloaded.
+            ("qwen35-chat-transformers-rocm", "qwen35-chat-transformers-rocm"): "disabled",
             ("qwen38-llamacpp-vulkan", "qwen38-llamacpp-q8-mtp-vulkan"): "adaptive",
             (
                 "qwen38-llamacpp-vulkan",

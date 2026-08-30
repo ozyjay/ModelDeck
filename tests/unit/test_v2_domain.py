@@ -48,6 +48,7 @@ def worker_definition() -> WorkerDefinition:
 @pytest.mark.parametrize(
     ("runtime", "runtime_template_id", "expected"),
     [
+        ("qwen35-chat-transformers-rocm", "qwen35-chat-transformers-rocm", "disabled"),
         ("qwen38-llamacpp-vulkan", "qwen38-llamacpp-q8-mtp-vulkan", "adaptive"),
         (
             "qwen38-llamacpp-vulkan",
