@@ -9,6 +9,7 @@ import pytest
 from modeldeck.workers import llama_vulkan_worker
 from modeldeck.workers.llama_vulkan_worker import (
     amd_gpu_memory_metrics,
+    classify_llama_startup_failure,
     llama_command,
     remove_reasoning,
 )
@@ -138,6 +139,77 @@ async def test_llama_process_records_first_ready_time(monkeypatch, tmp_path) -> 
     assert runtime.load_seconds == 12.5
     assert await runtime.ready() is True
     assert runtime.load_seconds == 12.5
+
+
+@pytest.mark.asyncio
+async def test_llama_process_reports_a_safe_child_load_failure(tmp_path) -> None:
+    model = tmp_path / "gpt-oss-120b-MXFP4.gguf"
+    model.write_bytes(b"gguf")
+    runtime = llama_vulkan_worker.LlamaProcess(argparse.Namespace(port=9630, artifact_path=str(model)))
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"ggml_vulkan: failed to allocate device memory\n")
+    stream.feed_eof()
+
+    await runtime._capture(stream)
+    runtime.process = SimpleNamespace(returncode=1)
+
+    assert runtime.child_failure() == {
+        "failure_category": "accelerator_memory_allocation_failed",
+        "child_exit_code": 1,
+        "error": (
+            "llama.cpp child exited during model loading with code 1: accelerator memory allocation failed"
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("failed to load model", "model_load_failed"),
+        ("Vulkan initialization error", "vulkan_initialisation_failed"),
+        ("ordinary progress output", None),
+    ],
+)
+def test_llama_startup_failure_categories_do_not_retain_log_content(message, expected) -> None:
+    assert classify_llama_startup_failure(message) == expected
+
+
+@pytest.mark.asyncio
+async def test_llama_health_reports_child_exit_as_failed(monkeypatch) -> None:
+    failure = {
+        "failure_category": "llama_child_exited",
+        "child_exit_code": -6,
+        "error": "llama.cpp child exited with code -6",
+    }
+
+    class FailedRuntime:
+        qwen_runtime = None
+
+        async def ready(self):
+            return False
+
+        def child_failure(self):
+            return failure
+
+    monkeypatch.setattr(llama_vulkan_worker, "LlamaProcess", lambda _args: FailedRuntime())
+    app = llama_vulkan_worker.create_app(
+        argparse.Namespace(
+            worker_id="worker-id",
+            model_id="ggml-org/gpt-oss-120b-GGUF",
+            revision="a" * 40,
+            runtime_profile=None,
+            thinking_mode="adaptive",
+            execution_preset="vulkan-full",
+        )
+    )
+    health = next(route.endpoint for route in app.routes if route.path == "/health")
+
+    payload = await health()
+
+    assert payload["state"] == "failed"
+    assert payload["ready"] is False
+    assert payload["failure_category"] == "llama_child_exited"
+    assert payload["child_exit_code"] == -6
 
 
 def test_llama_response_filter_removes_reasoning_channels() -> None:

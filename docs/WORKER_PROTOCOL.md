@@ -63,6 +63,14 @@ cancellation, one active generation, first-token and total latency, tokens per s
 top-k trace events, prompt/generated token IDs, and optional hidden-state summaries.
 It advertises health while loading and becomes ready only after explicit warmup.
 
+The llama.cpp Vulkan wrapper reports an exited inference child as `state: failed` rather
+than remaining in `loading`. Its health and metrics responses include a bounded
+`failure_category` and `child_exit_code`; raw child output is not copied into those fields.
+When a managed port is occupied during restart, the supervisor requests shutdown only if
+the endpoint is non-ready and its Worker, Model revision, generation-family and runtime
+identity all exactly match the persisted Worker. Ready or mismatched endpoints are left
+untouched.
+
 The dedicated Qwen3.5 text-chat runtime has an immutable `thinking_mode=disabled`
 policy. Message prompts are rendered with the official tokenizer chat template and
 `enable_thinking=False`; startup rejects a Worker definition that attempts to change

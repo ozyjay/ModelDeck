@@ -31,6 +31,7 @@ CAPABILITY_DEFINITIONS = {
             (
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
+                "gpt-oss-llama-vulkan-cpu-moe",
                 "qwen35-chat-transformers-rocm",
                 "qwen35-llamacpp-q8-vulkan",
                 "qwen35-llamacpp-q8-vulkan-adaptive",
@@ -51,6 +52,7 @@ CAPABILITY_DEFINITIONS = {
             (
                 "autoregressive-transformers",
                 "gpt-oss-llama-vulkan",
+                "gpt-oss-llama-vulkan-cpu-moe",
                 "qwen35-chat-transformers-rocm",
                 "qwen35-llamacpp-q8-vulkan",
                 "qwen35-llamacpp-q8-vulkan-adaptive",
@@ -258,6 +260,18 @@ def compatible_runtime_template_ids(
     definition = CAPABILITY_DEFINITIONS.get(capability_id)
     if definition is None:
         return []
+    if configuration_support == "gpt-oss-llama-vulkan" and capability_id in {
+        "general-chat",
+        "text-completion",
+    }:
+        return [
+            template_id
+            for template_id in (
+                "gpt-oss-llama-vulkan",
+                "gpt-oss-llama-vulkan-cpu-moe",
+            )
+            if template_id in registrations
+        ]
     qwen_templates = QWEN_TEXT_CAPABILITY_TEMPLATES.get(configuration_support or "", {}).get(
         capability_id, ()
     )

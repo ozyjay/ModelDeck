@@ -4,6 +4,7 @@ import hashlib
 import socket
 import sys
 
+import modeldeck.supervisor.service as supervisor_service
 import pytest
 from modeldeck.llama_runtime import LLAMA_CPP_COMMIT, QwenLlamaManifest, TrustedArtefact
 from modeldeck.profiles import LocalProfileRequest, create_local_profile
@@ -125,6 +126,109 @@ def test_supervisor_reports_the_environment_passed_to_the_worker() -> None:
         "TRANSFORMERS_OFFLINE": "1",
         "LD_PRELOAD": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_reclaims_only_an_exact_non_ready_worker_endpoint(monkeypatch) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile])
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            requests.append(("GET", url))
+            return FakeResponse(
+                {
+                    "worker_id": profile.id,
+                    "model_id": profile.model_id,
+                    "model_revision": profile.revision,
+                    "generation_family": profile.generation_family.value,
+                    "runtime": profile.preferred_runtime,
+                    "state": "failed",
+                    "ready": False,
+                }
+            )
+
+        async def post(self, url):
+            requests.append(("POST", url))
+            return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(supervisor_service.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(supervisor_service, "port_available", lambda _port: True)
+
+    assert await supervisor._reclaim_stale_worker_endpoint(supervisor.workers[profile.id]) is True
+    assert requests == [
+        ("GET", f"http://127.0.0.1:{profile.port}/health"),
+        ("POST", f"http://127.0.0.1:{profile.port}/shutdown"),
+    ]
+    assert supervisor.logs(profile.id)[-1]["source"] == "supervisor"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "ready", "worker_id"),
+    [
+        ("ready", True, "exact"),
+        ("loading", False, "different-worker"),
+    ],
+)
+async def test_supervisor_does_not_reclaim_ready_or_mismatched_endpoints(
+    monkeypatch, state, ready, worker_id
+) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile])
+    posted = False
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "worker_id": profile.id if worker_id == "exact" else worker_id,
+                "model_id": profile.model_id,
+                "model_revision": profile.revision,
+                "generation_family": profile.generation_family.value,
+                "runtime": profile.preferred_runtime,
+                "state": state,
+                "ready": ready,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return FakeResponse()
+
+        async def post(self, _url):
+            nonlocal posted
+            posted = True
+            return FakeResponse()
+
+    monkeypatch.setattr(supervisor_service.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+
+    assert await supervisor._reclaim_stale_worker_endpoint(supervisor.workers[profile.id]) is False
+    assert posted is False
 
 
 def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:

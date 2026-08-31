@@ -3,7 +3,7 @@
   "version": 1,
   "package": {
     "id": "modeldeck-core",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "display_name": "ModelDeck core runtimes",
     "publisher": "ModelDeck"
   },
@@ -116,6 +116,16 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 256, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "execution_preset": "vulkan-full", "hardware_verification_required": true},
+      "cache_setting": "artifact_path",
+      "lifecycle": "exclusive"
+    },
+    {
+      "id": "gpt-oss-llama-vulkan-cpu-moe",
+      "display_name": "GPT-OSS llama.cpp Vulkan + CPU MoE",
+      "runtime": "llama-vulkan",
+      "generation_family": "autoregressive",
+      "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
+      "settings": {"context_length": 8192, "maximum_new_tokens": 256, "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "execution_preset": "vulkan-cpu-moe", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
       "lifecycle": "exclusive"
     },

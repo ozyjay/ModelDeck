@@ -292,6 +292,19 @@ def test_identifies_reviewed_qwen_scenechat_models(tmp_path: Path, model_id: str
     assert not any("audio" in trait for item in capabilities.values() for trait in item["traits"])
 
 
+def test_gpt_oss_exposes_only_its_distinct_vulkan_runtime_variants() -> None:
+    registrations = runtime_template_registrations()
+
+    assert compatible_runtime_template_ids("general-chat", "gpt-oss-llama-vulkan", registrations) == [
+        "gpt-oss-llama-vulkan",
+        "gpt-oss-llama-vulkan-cpu-moe",
+    ]
+    assert compatible_runtime_template_ids("text-completion", "gpt-oss-llama-vulkan", registrations) == [
+        "gpt-oss-llama-vulkan",
+        "gpt-oss-llama-vulkan-cpu-moe",
+    ]
+
+
 def test_rejects_qwen3_8_fp8_snapshot_with_changed_quantisation_metadata(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--Qwen--Qwen3.8-27B-FP8" / "snapshots" / "pinned"
     snapshot.mkdir(parents=True)

@@ -166,8 +166,11 @@ class WorkerSupervisor:
                         and other.process.returncode is None
                     ):
                         await self.stop(other_id)
+            worker.log_session_id = uuid.uuid4().hex
             await self._transition(worker, WorkerState.VALIDATING, "Validating allowlisted worker manifest")
-            if not port_available(worker.profile.port):
+            if not port_available(worker.profile.port) and not await self._reclaim_stale_worker_endpoint(
+                worker
+            ):
                 worker.last_error = f"Port {worker.profile.port} is already in use"
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 raise RuntimeError(worker.last_error)
@@ -180,7 +183,6 @@ class WorkerSupervisor:
                 raise RuntimeError(worker.last_error) from error
             worker.launch_environment = dict(launch.environment)
             await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
-            worker.log_session_id = uuid.uuid4().hex
             try:
                 worker.process = await asyncio.create_subprocess_exec(
                     *launch.command,
@@ -226,6 +228,45 @@ class WorkerSupervisor:
                 await self._terminate(worker)
                 raise RuntimeError(worker.last_error) from error
             return worker.snapshot()
+
+    async def _reclaim_stale_worker_endpoint(self, worker: ManagedWorker) -> bool:
+        """Shut down only a non-ready endpoint with the exact persisted Worker identity."""
+        endpoint = f"http://127.0.0.1:{worker.profile.port}"
+        try:
+            async with httpx.AsyncClient(timeout=0.75) as client:
+                response = await client.get(f"{endpoint}/health")
+                response.raise_for_status()
+                payload = response.json()
+                expected = {
+                    "worker_id": worker.profile.id,
+                    "model_id": worker.profile.model_id,
+                    "model_revision": worker.profile.revision,
+                    "generation_family": worker.profile.generation_family.value,
+                    "runtime": worker.profile.preferred_runtime,
+                }
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("ready") is True
+                    or payload.get("state") not in {"loading", "failed"}
+                    or any(payload.get(key) != value for key, value in expected.items())
+                ):
+                    return False
+                shutdown = await client.post(f"{endpoint}/shutdown")
+                shutdown.raise_for_status()
+        except (httpx.HTTPError, TypeError, ValueError):
+            return False
+
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not port_available(worker.profile.port):
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+        self._append_log(
+            worker.profile.id,
+            "supervisor",
+            "Reclaimed a stale non-ready endpoint with the same Worker identity",
+        )
+        return True
 
     async def stop(self, worker_id: str) -> dict[str, Any]:
         worker = self._require(worker_id)

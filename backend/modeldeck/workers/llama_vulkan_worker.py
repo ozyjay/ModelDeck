@@ -458,11 +458,13 @@ class LlamaProcess:
         self.started = time.monotonic()
         self.load_seconds: float | None = None
         self.last_time_to_first_token_seconds: float | None = None
+        self.startup_failure_category: str | None = None
 
     async def start(self) -> None:
         self.started = time.monotonic()
         self.internal_port = allocate_private_port()
         self.evidence = LlamaEvidence()
+        self.startup_failure_category = None
         if getattr(self.args, "runtime_profile", None):
             self.qwen_runtime = validate_qwen_runtime(
                 self.args.runtime_profile,
@@ -532,7 +534,30 @@ class LlamaProcess:
             return
         quantisation = self.qwen_runtime.manifest.quantisation if self.qwen_runtime else "mxfp4"
         while line := await stream.readline():
-            self.evidence.feed(line.decode(errors="replace").rstrip(), quantisation=quantisation)
+            message = line.decode(errors="replace").rstrip()
+            self.evidence.feed(message, quantisation=quantisation)
+            self.startup_failure_category = (
+                classify_llama_startup_failure(message) or self.startup_failure_category
+            )
+
+    def child_failure(self) -> dict[str, Any] | None:
+        if self.process is None or self.process.returncode is None:
+            return None
+        category = self.startup_failure_category or "llama_child_exited"
+        descriptions = {
+            "accelerator_memory_allocation_failed": "accelerator memory allocation failed",
+            "model_load_failed": "model loading failed",
+            "vulkan_initialisation_failed": "Vulkan initialisation failed",
+            "llama_child_exited": "the llama.cpp process exited",
+        }
+        return {
+            "failure_category": category,
+            "child_exit_code": self.process.returncode,
+            "error": (
+                f"llama.cpp child exited during model loading with code "
+                f"{self.process.returncode}: {descriptions[category]}"
+            ),
+        }
 
     def memory_metrics(self) -> dict[str, int]:
         metrics = amd_gpu_memory_metrics()
@@ -565,6 +590,28 @@ class LlamaProcess:
             return False
 
 
+def classify_llama_startup_failure(message: str) -> str | None:
+    """Return a safe failure category without retaining child-process log content."""
+    lowered = message.casefold()
+    if any(
+        marker in lowered
+        for marker in (
+            "out of memory",
+            "failed to allocate",
+            "allocation failed",
+            "cannot allocate memory",
+        )
+    ):
+        return "accelerator_memory_allocation_failed"
+    if any(marker in lowered for marker in ("failed to load model", "model load failed")):
+        return "model_load_failed"
+    if "vulkan" in lowered and any(
+        marker in lowered for marker in ("error", "failed", "failure", "initialization")
+    ):
+        return "vulkan_initialisation_failed"
+    return None
+
+
 def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
@@ -584,19 +631,21 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     @app.get("/health")
     async def health():
         ready = await runtime.ready()
+        failure = runtime.child_failure()
         manifest = runtime.qwen_runtime.manifest if runtime.qwen_runtime else None
         return {
             "protocol_version": "1",
             "worker_id": args.worker_id,
             "runtime": "llama-vulkan",
             "generation_family": GenerationFamily.AUTOREGRESSIVE,
-            "state": "ready" if ready else "loading",
+            "state": "failed" if failure else "ready" if ready else "loading",
             "model_id": args.model_id,
             "model_revision": args.revision,
             "device": "vulkan:0",
             "device_name": "AMD Radeon 8060S (Vulkan)" if manifest else "AMD Vulkan",
             "rocm_version": None,
             "ready": ready,
+            **(failure or {}),
             **(
                 {
                     "runtime_profile": manifest.id,
@@ -716,6 +765,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "throughput_basis": "effective_mtp" if runtime.qwen_runtime else "backend_reported",
             "startup_checks": startup_checks,
             "startup_errors": [name for name, passed in startup_checks.items() if not passed],
+            **(runtime.child_failure() or {}),
             **runtime.memory_metrics(),
         }
 
