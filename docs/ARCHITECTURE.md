@@ -34,6 +34,10 @@ Applications ── gateway :8600 ── active capability ── first ready Wo
 `.venv-rocm72` owns the primary ROCm inference stack; `.venv-rocm72-q4` isolates Q4
 dependencies. Model libraries and tensors never enter the management process.
 
+The proposed [trusted runtime currency and qualification](RUNTIME_CURRENCY_PROPOSAL.md)
+model would make concrete Runtime Installation identity, integrity and evidence currency
+observable without treating upstream recency as compatibility. It is not current behaviour.
+
 ## Code-owned protocols
 
 The gateway has a static protocol-adapter registry. An adapter owns its contract,

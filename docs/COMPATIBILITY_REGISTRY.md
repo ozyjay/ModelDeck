@@ -26,6 +26,11 @@ template ID and version, Worker ID and execution-configuration fingerprint. A
 schema-v5 evidence migration may use matching legacy model/revision/runtime
 evidence and are labelled `legacy`; new and replacement Workers cannot.
 
+The [trusted runtime currency and qualification proposal](RUNTIME_CURRENCY_PROPOSAL.md)
+defines how a future Runtime Installation inventory would distinguish executable integrity,
+trust currency, qualification currency and optional upstream recency. Those states are
+proposed and are not yet stored by the compatibility registry.
+
 The first physical working fingerprint is
 `423a331ad14e12a400adbd5b2c65c8fe8e1c9e8a85138e85fb6ff2e9d5bb6163` for the pinned
 Qwen 0.5B FP16 Transformers/ROCm configuration documented in
