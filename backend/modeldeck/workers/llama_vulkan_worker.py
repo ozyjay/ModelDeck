@@ -66,7 +66,7 @@ def fixed_llama_server() -> Path:
 
 
 def llama_command(*, model: Path, port: int, context_length: int, preset: str) -> list[str]:
-    if preset not in {"vulkan-full", "vulkan-cpu-moe"}:
+    if preset != "vulkan-full":
         raise ValueError("Unknown allowlisted GPT-OSS execution preset")
     executable = fixed_llama_server()
     if not executable.is_file():
@@ -97,8 +97,6 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
         "--flash-attn",
         "--jinja",
     ]
-    if preset == "vulkan-cpu-moe":
-        command.extend(["--n-cpu-moe", "20"])
     return command
 
 
@@ -880,7 +878,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thinking-mode", choices=("adaptive", "disabled"), default="adaptive")
     parser.add_argument(
         "--execution-preset",
-        choices=("vulkan-full", "vulkan-cpu-moe"),
+        choices=("vulkan-full",),
         default="vulkan-full",
     )
     return parser.parse_args()

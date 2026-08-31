@@ -292,16 +292,14 @@ def test_identifies_reviewed_qwen_scenechat_models(tmp_path: Path, model_id: str
     assert not any("audio" in trait for item in capabilities.values() for trait in item["traits"])
 
 
-def test_gpt_oss_exposes_only_its_distinct_vulkan_runtime_variants() -> None:
+def test_gpt_oss_exposes_only_its_full_vulkan_runtime() -> None:
     registrations = runtime_template_registrations()
 
     assert compatible_runtime_template_ids("general-chat", "gpt-oss-llama-vulkan", registrations) == [
-        "gpt-oss-llama-vulkan",
-        "gpt-oss-llama-vulkan-cpu-moe",
+        "gpt-oss-llama-vulkan"
     ]
     assert compatible_runtime_template_ids("text-completion", "gpt-oss-llama-vulkan", registrations) == [
-        "gpt-oss-llama-vulkan",
-        "gpt-oss-llama-vulkan-cpu-moe",
+        "gpt-oss-llama-vulkan"
     ]
 
 

@@ -21,15 +21,11 @@ Provision the allowlisted executable with:
 pwsh -NoProfile -File scripts/setup/setup_llama_vulkan.ps1
 ```
 
-The default `gpt-oss-llama-vulkan` template uses full Vulkan offload. The separate
-`gpt-oss-llama-vulkan-cpu-moe` template uses the fixed `vulkan-cpu-moe` preset with 20 MoE
-layers on the CPU. It remains hardware-verification-gated and is not the default because it
-does not yet have physical qualification evidence on the target machine. Arbitrary llama.cpp
-arguments are never accepted through the management API. Each template retains its own
-runtime-template identity and compatibility evidence. The runtime does not advertise Token
-Trail traces and strips reasoning-only fields before returning responses. The tested
-full-offload fingerprint used llama.cpp revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon
-8060S.
+The `gpt-oss-llama-vulkan` template uses full Vulkan offload. CPU and CPU-MoE presets are
+not registered or accepted by the management API. Arbitrary llama.cpp arguments are never
+accepted through the management API. The runtime does not advertise Token Trail traces and
+strips reasoning-only fields before returning responses. The tested full-offload fingerprint
+used llama.cpp revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon 8060S.
 
 ## Speech model
 

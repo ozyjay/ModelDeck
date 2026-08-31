@@ -95,11 +95,7 @@ class RuntimeTemplate(BaseModel):
                 "runtime template setting visual_token_budget must be one of "
                 + ", ".join(str(value) for value in ALLOWED_VISUAL_TOKEN_BUDGETS)
             )
-        if self.settings.get("execution_preset") not in {
-            None,
-            "vulkan-full",
-            "vulkan-cpu-moe",
-        }:
+        if self.settings.get("execution_preset") not in {None, "vulkan-full"}:
             raise ValueError("runtime template execution preset is not trusted")
         if self.settings.get("runtime_profile") not in {
             None,
