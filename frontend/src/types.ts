@@ -250,6 +250,28 @@ export interface GatewayStatus {
   error: string | null;
 }
 
+export interface BenchmarkThroughputPoint {
+  series_key: string;
+  observed_at: string;
+  model_id: string;
+  model_revision: string;
+  runtime: string;
+  dtype: string;
+  generation_family: string;
+  worker_id: string | null;
+  worker_name: string | null;
+  tokens_per_second: number;
+  workload: string;
+  configuration_fingerprint: string | null;
+  sample_count: number | null;
+}
+
+export interface BenchmarkHistory {
+  points: BenchmarkThroughputPoint[];
+  reports_scanned: number;
+  measurement: string;
+}
+
 export interface ManagementHealth {
   status: string;
   service: string;

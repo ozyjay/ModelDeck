@@ -3,7 +3,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 
 import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
-  CapabilityPublicationPreview, CapabilitySetup, CapabilitySetupPreview, CapabilitySetupSelection,
+  BenchmarkHistory, BenchmarkThroughputPoint, CapabilityPublicationPreview, CapabilitySetup, CapabilitySetupPreview, CapabilitySetupSelection,
   CompatibilityTest, GatewayStatus, HardwareProbe, LiveCapability, LiveState, ManagementHealth, ModelEntry, PotentialCapability,
   ProtocolContract, RoutingProfile, RoutingProfileRecord,
   RoutingProfileRevision, RoutingProfileValidation, RuntimeTemplate, Telemetry, ThermalStatus,
@@ -130,6 +130,7 @@ export default function App() {
   const [contracts, setContracts] = useState<ProtocolContract[]>([]);
   const [templates, setTemplates] = useState<RuntimeTemplate[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
+  const [benchmarkHistory, setBenchmarkHistory] = useState<BenchmarkHistory>({ points: [], reports_scanned: 0, measurement: "median benchmark throughput" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [workerOperationErrors, setWorkerOperationErrors] = useState<Record<string, string>>({});
@@ -155,7 +156,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextThermal, nextLive, nextWorkers,
-      nextProfiles, catalogue, contractResponse, templateResponse, tests] = await Promise.all([
+      nextProfiles, catalogue, contractResponse, templateResponse, tests, history] = await Promise.all([
       getJson<ManagementHealth>("/api/health"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<HardwareProbe>("/api/hardware"),
@@ -168,12 +169,14 @@ export default function App() {
       getJson<{ contracts: ProtocolContract[] }>("/api/protocol-contracts"),
       getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
       getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
+      getJson<BenchmarkHistory>("/api/benchmark-history"),
     ]);
     setHealth(nextHealth); setGateway(nextGateway); setHardware(nextHardware);
     setTelemetry(nextTelemetry); setThermal(nextThermal); setLive(nextLive); setWorkers(nextWorkers);
     setProfiles(nextProfiles.profiles); setModels(catalogue.models);
     setContracts(contractResponse.contracts); setTemplates(templateResponse.templates);
     setCompatibility(tests.tests);
+    setBenchmarkHistory(history);
   }, []);
 
   useEffect(() => {
@@ -194,8 +197,8 @@ export default function App() {
         getJson<Worker[]>("/api/workers").then(setWorkers),
         getJson<LiveState>("/api/live").then(setLive),
         getJson<GatewayStatus>("/api/gateway/status").then(setGateway),
-        getJson<Telemetry>("/api/telemetry").then(setTelemetry),
         getJson<ThermalStatus>("/api/thermal").then(setThermal),
+        getJson<BenchmarkHistory>("/api/benchmark-history").then(setBenchmarkHistory),
       ]).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
@@ -267,7 +270,7 @@ export default function App() {
           : view === "profiles" ? <RoutingProfilesView profiles={profiles} workers={workers} contracts={contracts} openDay={health.configuration_locked} refresh={refresh} />
           : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} thermal={thermal} operationErrors={workerOperationErrors} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.configuration_locked} />
-          : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} />}
+          : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} benchmarkHistory={benchmarkHistory} />}
       </main>
     </div>
     </CollapseContext.Provider>
@@ -913,22 +916,42 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   </div>;
 }
 
-function AdvancedView({ hardware, telemetry, thermal, contracts, templates, compatibility, workers }: { hardware: HardwareProbe; telemetry: Telemetry; thermal: ThermalStatus; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[] }) {
-  const memoryUsed = Math.max(0, telemetry.memory.total_bytes - telemetry.memory.available_bytes);
-  const swapConfigured = telemetry.swap.total_bytes > 0;
+function AdvancedView({ hardware, telemetry, thermal, contracts, templates, compatibility, workers, benchmarkHistory }: { hardware: HardwareProbe; telemetry: Telemetry; thermal: ThermalStatus; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[]; benchmarkHistory: BenchmarkHistory }) {
   return <div className="view-stack">
-    <section aria-label="Host metrics"><StaticPanelHeading title="Host metrics" detail="Live telemetry · refreshes every 5 seconds" /><div className="metric-grid">
-      <article className="metric"><span>Memory pressure</span><strong>{formatPercent(telemetry.memory.percent)}</strong><small>{formatBytes(memoryUsed)} used of {formatBytes(telemetry.memory.total_bytes)}</small></article>
-      <article className="metric"><span>Swap use</span><strong>{swapConfigured ? formatPercent(telemetry.swap.percent) : "Not configured"}</strong><small>{swapConfigured ? `${formatBytes(telemetry.swap.used_bytes)} used of ${formatBytes(telemetry.swap.total_bytes)}` : "No swap capacity reported"}</small></article>
-      <article className="metric"><span>APU temperature</span><strong>{thermal.temperature_c == null ? "Unavailable" : `${thermal.temperature_c.toFixed(1)}°C`}</strong><small>{humanise(thermal.state)} · {thermal.sensor_id ?? "No control sensor"}</small></article>
-      <article className="metric"><span>Model processes</span><strong>{telemetry.active_model_processes.length}</strong><small>{telemetry.active_model_processes.length === 1 ? "Active local process" : "Active local processes"}</small></article>
-    </div></section>
+    <ThroughputHistory history={benchmarkHistory} />
     <section className="panel"><PanelHeading title="Detected hardware" detail="Reported, never assumed" /><DefinitionList rows={[["Configured target", `${hardware.configured.gpu} (${hardware.configured.gpu_architecture})`], ["Detected Fedora", hardware.detected.fedora_release ?? "Not detected"], ["Kernel", hardware.detected.kernel], ["ROCm packages", hardware.detected.rocm_packages.join(", ") || "Not detected"], ["Available memory", formatBytes(telemetry.memory.available_bytes)]]} /></section>
     <section className="panel"><PanelHeading title="Thermal workload policy" detail={thermal.enabled ? "ModelDeck self-throttling active" : "Disabled by configuration"} /><DefinitionList rows={[["ModelDeck thermal state", humanise(thermal.state)], ["APU temperature", thermal.temperature_c == null ? "Unavailable" : `${thermal.temperature_c.toFixed(1)}°C`], ["Control sensor", thermal.sensor_id ?? "Awaiting selection"], ["Heavy concurrency", `${thermal.active_heavy_concurrency ?? "Unknown"} active · limit ${thermal.heavy_concurrency_limit}`], ["Background benchmarks", thermal.background_paused ? "Paused" : "Permitted"], ["Model loading", thermal.model_loading_allowed ? "Permitted" : "Blocked"], ["Scene refresh interval", `${thermal.scenechat_degradation.minimum_frame_interval_seconds} seconds`], ["Reason", humanise(thermal.reason_code)], ["Host power policy", thermal.host_power_policy.service_active === true ? "Active · external read-only" : "Unavailable or inactive · external read-only"], ["TuneD profile", thermal.host_power_policy.tuned_profile ?? "Unavailable"]]} /></section>
     <div className="two-column"><section className="panel"><PanelHeading title="Trusted protocol contracts" detail={`${contracts.length} code-owned`} /><ul className="status-list">{contracts.map((contract) => <li key={contract.id}><StatusDot state="good" /><span><strong>{contract.display_name}</strong><small>{contract.id} · {contract.surfaces.join(", ")}</small></span></li>)}</ul></section><section className="panel"><PanelHeading title="Trusted runtimes" detail={`${templates.length} installed`} /><ul className="status-list">{templates.map((template) => <li key={template.id}><StatusDot state="good" /><span><strong>{template.display_name}</strong><small>{template.id} · {template.package_version}</small></span></li>)}</ul></section></div>
     <section className="panel"><PanelHeading title="Compatibility evidence" detail={`${compatibility.length} records`} /><div className="evidence-list">{compatibility.length ? compatibility.map((test) => <details className="evidence-row" key={test.id}><summary><span><StateBadge state={test.result} /><strong>{String(test.evidence.model_id ?? "Unknown Model")}</strong><small>{new Date(test.tested_at).toLocaleString()}</small></span><code>{test.fingerprint.slice(0, 12)}</code></summary><DefinitionList rows={Object.entries(test.evidence).slice(0, 16).map(([key, value]) => [humanise(key), String(value ?? "—")])} /></details>) : <p className="muted">Qualify a Worker capability to record evidence.</p>}</div></section>
     <LogsPanel workers={workers} />
   </div>;
+}
+
+const CHART_COLOURS = ["#68e0b8", "#70a7ff", "#f3ba67", "#ff7b86", "#c89cff", "#74d6e7"];
+
+function ThroughputHistory({ history }: { history: BenchmarkHistory }) {
+  const series = useMemo(() => {
+    const grouped = new Map<string, BenchmarkThroughputPoint[]>();
+    for (const point of history.points) grouped.set(point.series_key, [...(grouped.get(point.series_key) ?? []), point]);
+    return [...grouped.entries()].map(([key, points], index) => ({ key, points, colour: CHART_COLOURS[index % CHART_COLOURS.length] }));
+  }, [history.points]);
+  if (!history.points.length) return <section className="panel throughput-panel" aria-label="Model throughput over time"><StaticPanelHeading title="Model throughput over time" detail="Median tokens/second from comparable benchmark runs" /><div className="empty-state compact"><h3>No throughput history yet</h3><p>Run the model benchmark suite to add privacy-safe, workload-specific samples.</p></div></section>;
+  const width = 760, height = 260, left = 54, right = 18, top = 18, bottom = 42;
+  const times = history.points.map((point) => new Date(point.observed_at).getTime());
+  const minimumTime = Math.min(...times), maximumTime = Math.max(...times);
+  const maximumThroughput = Math.max(...history.points.map((point) => point.tokens_per_second));
+  const yMaximum = Math.max(10, Math.ceil(maximumThroughput / 10) * 10);
+  const x = (point: BenchmarkThroughputPoint) => left + ((new Date(point.observed_at).getTime() - minimumTime) / Math.max(maximumTime - minimumTime, 1)) * (width - left - right);
+  const y = (point: BenchmarkThroughputPoint) => top + (1 - point.tokens_per_second / yMaximum) * (height - top - bottom);
+  return <section className="panel throughput-panel" aria-label="Model throughput over time"><StaticPanelHeading title="Model throughput over time" detail={`${history.points.length} median samples from ${history.reports_scanned} benchmark reports`} />
+    <div className="throughput-chart-wrap"><svg className="throughput-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Tokens per second benchmark history">
+      {[0, 0.25, 0.5, 0.75, 1].map((fraction) => { const chartY = top + fraction * (height - top - bottom); const label = yMaximum * (1 - fraction); return <g key={fraction}><line x1={left} x2={width - right} y1={chartY} y2={chartY} /><text x={left - 9} y={chartY + 4}>{label.toFixed(0)}</text></g>; })}
+      {series.map((item) => <g key={item.key}>{item.points.length > 1 && <polyline points={item.points.map((point) => `${x(point)},${y(point)}`).join(" ")} style={{ stroke: item.colour }} />}{item.points.map((point) => <circle key={`${point.observed_at}-${point.tokens_per_second}`} cx={x(point)} cy={y(point)} r="5" style={{ fill: item.colour }}><title>{`${point.model_id} · ${point.workload} · ${point.tokens_per_second.toFixed(2)} tok/s · ${new Date(point.observed_at).toLocaleString()}`}</title></circle>)}</g>)}
+      <text className="axis-title" x="14" y="14">tok/s</text><text className="axis-time" x={left} y={height - 12}>{new Date(minimumTime).toLocaleDateString()}</text><text className="axis-time end" x={width - right} y={height - 12}>{new Date(maximumTime).toLocaleDateString()}</text>
+    </svg></div>
+    <div className="throughput-legend">{series.map((item) => { const latest = item.points.at(-1)!; return <article key={item.key}><span className="throughput-swatch" style={{ background: item.colour }} /><div><strong>{latest.worker_name ?? latest.model_id.split("/").at(-1)}</strong><small>{latest.runtime} · {latest.workload}</small><span>{latest.tokens_per_second.toFixed(2)} tok/s latest · revision {latest.model_revision.slice(0, 12)}</span></div></article>; })}</div>
+    <p className="manifest-note">Each line keeps the Model revision, Runtime, data type and workload fixed. Points are benchmark medians, not hardware telemetry or a universal model score.</p>
+  </section>;
 }
 
 function LogsPanel({ workers }: { workers: Worker[] }) {
@@ -958,7 +981,6 @@ function StatusDot({ state }: { state: "good" | "warn" | "bad" | "neutral" }) { 
 function StateBadge({ state }: { state: string }) { return <span className={`state-badge state-${state}`}>{humanise(state)}</span>; }
 function DefinitionList({ rows }: { rows: Array<[string, string]> }) { return <dl className="definition-list compact">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>; }
 function formatBytes(value: number) { if (!Number.isFinite(value) || value <= 0) return "0 B"; const units = ["B", "KiB", "MiB", "GiB", "TiB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`; }
-function formatPercent(value: number) { return Number.isFinite(value) ? `${value.toFixed(1)}%` : "Unavailable"; }
 function humanise(value: string) { return value.replaceAll("_", " ").replaceAll("-", " "); }
 function thermalLoadingNotice(thermal: ThermalStatus) {
   const temperature = thermal.temperature_c == null ? "" : ` (${thermal.temperature_c.toFixed(1)}°C)`;

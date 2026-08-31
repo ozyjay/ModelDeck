@@ -48,6 +48,7 @@ function responses(configured = false): Record<string, unknown> {
     "/api/protocol-contracts": { contracts: [{ id: "native-ar-trace-v1", display_name: "Native autoregressive trace", generation_family: "autoregressive", required_capabilities: ["top_k_trace"], required_worker_settings: {}, surfaces: ["POST /native/v1/autoregressive/traces"] }] },
     "/api/runtime-templates": { templates: [] },
     "/api/compatibility": { tests: [] },
+    "/api/benchmark-history": { points: [], reports_scanned: 0, measurement: "median benchmark throughput" },
   };
 }
 
@@ -85,24 +86,23 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByLabelText("State store")).toHaveTextContent("Checkout development state");
   });
 
-  it("shows live host metrics with their measurement context", async () => {
+  it("shows model token throughput over time from comparable benchmark reports", async () => {
     const payloads = responses();
-    payloads["/api/telemetry"] = {
-      memory: { total_bytes: 16 * 1024 ** 3, available_bytes: 4 * 1024 ** 3, percent: 75 },
-      swap: { total_bytes: 8 * 1024 ** 3, used_bytes: 2 * 1024 ** 3, percent: 25 },
-      filesystems: [], temperatures: [], fans: [],
-      active_model_processes: [{ pid: 42, name: "model-worker", command: "modeldeck-worker" }],
+    payloads["/api/benchmark-history"] = {
+      reports_scanned: 2, measurement: "median benchmark throughput", points: [
+        { series_key: "same-configuration", observed_at: "2026-07-18T00:00:00Z", model_id: "Qwen/Qwen3.5-4B", model_revision: "revision-123456789", runtime: "llama-vulkan", dtype: "q8", generation_family: "autoregressive", worker_id: "worker-1", worker_name: "Qwen 4B", tokens_per_second: 42.5, workload: "Standard · quick · 256 output tokens", configuration_fingerprint: "fingerprint-1", sample_count: 2 },
+        { series_key: "same-configuration", observed_at: "2026-07-21T00:00:00Z", model_id: "Qwen/Qwen3.5-4B", model_revision: "revision-123456789", runtime: "llama-vulkan", dtype: "q8", generation_family: "autoregressive", worker_id: "worker-1", worker_name: "Qwen 4B", tokens_per_second: 48.25, workload: "Standard · quick · 256 output tokens", configuration_fingerprint: "fingerprint-2", sample_count: 2 },
+      ],
     };
     mockFetch(payloads);
     render(<App />);
 
     fireEvent.click(await screen.findByRole("link", { name: "Advanced" }));
 
-    expect(await screen.findByRole("heading", { name: "Host metrics" })).toBeInTheDocument();
-    expect(screen.getByText("75.0%")).toBeInTheDocument();
-    expect(screen.getByText("12.0 GiB used of 16.0 GiB")).toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: "Host metrics" })).getByText("62.0°C")).toBeInTheDocument();
-    expect(screen.getByText("Active local process")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Model throughput over time" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Tokens per second benchmark history" })).toBeInTheDocument();
+    expect(screen.getByText("48.25 tok/s latest · revision revision-123")).toBeInTheDocument();
+    expect(screen.getByText(/Points are benchmark medians, not hardware telemetry/i)).toBeInTheDocument();
   });
 
   it("shows published capability readiness separately from Worker state", async () => {

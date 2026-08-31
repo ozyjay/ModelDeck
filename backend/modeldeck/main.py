@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from modeldeck import __version__
 from modeldeck.async_execution import run_in_isolated_thread
+from modeldeck.benchmark_history import read_benchmark_history
 from modeldeck.build_info import BUILD_ID
 from modeldeck.capabilities import (
     capability_evidence_status,
@@ -194,6 +195,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "active_model_processes",
             )
         }
+
+    @app.get("/api/benchmark-history")
+    async def benchmark_history():
+        return await run_in_isolated_thread(read_benchmark_history, Path("var/benchmarks"))
 
     @app.get("/api/thermal")
     async def thermal_status(request: Request):

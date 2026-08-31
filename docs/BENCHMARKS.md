@@ -53,6 +53,11 @@ It never changes Event routing or Worker configuration.
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
 
+The operator console's **Advanced** view reads the privacy-safe JSON reports in that
+directory and charts median tokens per second over time. It keeps different Model
+revisions, runtimes, data types and workload settings in separate series; it does not mix
+ordinary live requests or host telemetry into the benchmark trend.
+
 For a focused SceneChat comparison, run the committed 1280-by-720, 59,214-byte synthetic
 booth image through every curated question. The benchmark performs two warm-ups and ten
 measured requests per question by default:
