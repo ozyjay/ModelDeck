@@ -269,8 +269,9 @@ nav { display: grid; gap: 0.3rem; }
 .thermal-load-notice { display: grid; gap: 0.2rem; margin: 0.7rem 0; padding: 0.65rem; border: 1px solid #6a5431; border-radius: 0.55rem; background: #2d2415; color: #ffe0ac; font-size: 0.78rem; overflow-wrap: anywhere; }
 .worker-card:has(.thermal-load-notice) .button-row button:nth-of-type(3) { cursor: not-allowed; opacity: 0.5; pointer-events: none; }
 
-.advanced-nav { border-top: 1px solid var(--border); margin-top: .75rem; padding-top: .75rem; }
+.advanced-nav { display: grid; min-width: 0; gap: .3rem; border-top: 1px solid var(--line-soft); margin-top: .75rem; padding-top: .75rem; }
 .advanced-nav::before { color: var(--muted); content: "Advanced sections"; display: block; font-size: .7rem; letter-spacing: .08em; margin: 0 .75rem .35rem; text-transform: uppercase; }
+.advanced-nav .nav-link { display: block; min-width: 0; overflow-wrap: anywhere; }
 .capability-grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .capability-choice, .model-choice-list button { align-items: flex-start; background: var(--surface-raised, rgba(255,255,255,.03)); border: 1px solid var(--border); color: inherit; display: flex; flex-direction: column; gap: .35rem; padding: 1rem; text-align: left; }
 .capability-choice.selected, .model-choice-list button.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -416,6 +417,8 @@ select { min-width: 250px; padding: 0.62rem 2.4rem 0.62rem 0.7rem; border: 1px s
   .brand { padding-bottom: 0.75rem; }
   nav { display: flex; overflow-x: auto; padding-bottom: 0.25rem; }
   .nav-link { white-space: nowrap; }
+  .advanced-nav { display: flex; flex: 0 0 auto; gap: 0.3rem; margin: 0; padding: 0; border-top: 0; }
+  .advanced-nav::before { display: none; }
   .sidebar-policy { display: none; }
   .main-content { padding: 1.2rem 0.85rem 3rem; }
   .topbar { align-items: flex-start; }

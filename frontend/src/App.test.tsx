@@ -85,6 +85,26 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByLabelText("State store")).toHaveTextContent("Checkout development state");
   });
 
+  it("shows live host metrics with their measurement context", async () => {
+    const payloads = responses();
+    payloads["/api/telemetry"] = {
+      memory: { total_bytes: 16 * 1024 ** 3, available_bytes: 4 * 1024 ** 3, percent: 75 },
+      swap: { total_bytes: 8 * 1024 ** 3, used_bytes: 2 * 1024 ** 3, percent: 25 },
+      filesystems: [], temperatures: [], fans: [],
+      active_model_processes: [{ pid: 42, name: "model-worker", command: "modeldeck-worker" }],
+    };
+    mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Advanced" }));
+
+    expect(await screen.findByRole("heading", { name: "Host metrics" })).toBeInTheDocument();
+    expect(screen.getByText("75.0%")).toBeInTheDocument();
+    expect(screen.getByText("12.0 GiB used of 16.0 GiB")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Host metrics" })).getByText("62.0°C")).toBeInTheDocument();
+    expect(screen.getByText("Active local process")).toBeInTheDocument();
+  });
+
   it("shows published capability readiness separately from Worker state", async () => {
     mockFetch(responses(true));
     render(<App />);
