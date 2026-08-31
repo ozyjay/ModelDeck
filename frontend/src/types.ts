@@ -179,6 +179,67 @@ export interface CompatibilityTest {
   failure_class: string | null;
   evidence: Record<string, unknown>;
   tested_at: string;
+  fingerprint_version?: number;
+  evidence_status?: "current" | "legacy";
+  observations?: CompatibilityObservation[];
+}
+
+export interface CompatibilityObservation {
+  id: number;
+  test_id: number;
+  kind: string;
+  observation: Record<string, unknown>;
+  observed_at: string;
+}
+
+export interface CapabilitySetupSelection {
+  capability_id: string;
+  model_id: string;
+  revision: string;
+  worker_name: string;
+  artifact_id?: string | null;
+  runtime_template_id?: string | null;
+  dtype?: "float16" | "bfloat16" | "float32" | null;
+  lifecycle?: "resident" | "on-demand" | "exclusive" | null;
+  context_length?: number | null;
+  maximum_new_tokens?: number | null;
+  maximum_denoising_steps?: number | null;
+  visual_token_budget?: number | null;
+  prefix_cache_enabled?: boolean;
+}
+
+export interface CapabilitySetupPreview {
+  selection: CapabilitySetupSelection;
+  worker: Record<string, unknown>;
+  selection_basis: string;
+  runtime_registration_digest: string;
+  policy_changes: { model_allowed: boolean; capability_allowed: boolean };
+  warnings: string[];
+  preview_fingerprint: string;
+}
+
+export interface CapabilitySetup {
+  id: string;
+  request_id: string;
+  state: string;
+  current_step: string;
+  plan: CapabilitySetupPreview;
+  worker_id?: string;
+  evidence_id?: number;
+  qualification?: CompatibilityTest;
+  resolved_identity?: Record<string, unknown>;
+  error?: { code: string; message: string; component: string; step: string; retryable: boolean } | null;
+  publication?: { profile_id: string; revision: number; public_name: string };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapabilityPublicationPreview {
+  profile_id: string;
+  before: RoutingProfile;
+  after: RoutingProfile;
+  validation: RoutingProfileValidation;
+  publication_fingerprint: string;
 }
 
 export interface GatewayStatus {

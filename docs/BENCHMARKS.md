@@ -9,6 +9,10 @@ remain distinct from later interpretation. This suite implements only the measur
 documented here; it does not yet provide a cross-runtime recommendation engine or universal
 usability score.
 
+Every standard report records the active ModelDeck thermal policy and bounded before/after
+thermal observations. A very-hot, critical, or degraded-telemetry finish is
+`thermal-invalid`, not a successful benchmark, even when inference returned output.
+
 ## Run the suite
 
 Run the standard suite across every configured non-mock Worker that has exactly one

@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from modeldeck import __version__
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
@@ -71,7 +72,7 @@ def create_gateway_app(
     settings: Settings | None = None,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
-    app = FastAPI(title="ModelDeck stable local gateway", version="0.3.0")
+    app = FastAPI(title="ModelDeck stable local gateway", version=__version__)
     app.state.last_request_diagnostics = None
     app.state.active_request_workers = {}
     app.state.active_request_lock = asyncio.Lock()
@@ -92,7 +93,7 @@ def create_gateway_app(
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     persistence_enabled = alias_routes is None
     if persistence_enabled:
-        store.initialise_v4()
+        store.initialise_v5()
 
     def active_route_records(
         adapter_ids: set[str] | None = None,
@@ -220,6 +221,7 @@ def create_gateway_app(
         return {
             "status": "ok",
             "service": "modeldeck-gateway",
+            "version": __version__,
             "ready_workers": sum(worker["ready"] for worker in states),
         }
 
@@ -801,7 +803,10 @@ async def proxy_request(
             ),
             status_code=response.status_code,
             media_type=response.headers.get("content-type", "text/event-stream"),
-            headers={**worker_response_headers(selected), **thermal_response_headers(thermal_decision)},
+            headers={
+                **worker_response_headers(selected, route_role(selected, candidates)),
+                **thermal_response_headers(thermal_decision),
+            },
         )
     try:
         payload = await response.aread()
@@ -852,11 +857,16 @@ async def proxy_request(
             started,
             "success" if response.is_success else "error",
             error_code,
+            selected,
+            route_role(selected, candidates),
         )
         return JSONResponse(
             response_payload,
             status_code=response.status_code,
-            headers={**worker_response_headers(selected), **thermal_response_headers(thermal_decision)},
+            headers={
+                **worker_response_headers(selected, route_role(selected, candidates)),
+                **thermal_response_headers(thermal_decision),
+            },
         )
     finally:
         await response.aclose()
@@ -947,7 +957,7 @@ async def proxy_binary_request(
         )
         if key in upstream.headers
     }
-    response_headers.update(worker_response_headers(selected))
+    response_headers.update(worker_response_headers(selected, route_role(selected, candidates)))
     response_headers.update(thermal_response_headers(thermal_decision))
     if not upstream.is_success:
         try:
@@ -1618,7 +1628,7 @@ def accelerator_for_runtime(runtime: str, health: dict[str, Any]) -> str:
         return "rocm"
     if runtime.endswith("-rocm"):
         return "rocm"
-    if runtime == "llama-vulkan":
+    if runtime == "llama-vulkan" or "llamacpp-vulkan" in runtime:
         return "vulkan"
     if runtime == "marian-transformers-cpu":
         return "cpu"
@@ -1656,8 +1666,18 @@ def upstream_headers(profile: ModelProfile, request_id: str = "") -> dict[str, s
     return headers
 
 
-def worker_response_headers(profile: ModelProfile) -> dict[str, str]:
-    return {}
+def route_role(selected: ModelProfile, candidates: list[ModelProfile]) -> str:
+    return "primary" if candidates and candidates[0].id == selected.id else "backup"
+
+
+def worker_response_headers(profile: ModelProfile, role: str = "primary") -> dict[str, str]:
+    return {
+        "X-ModelDeck-Worker-Id": profile.id,
+        "X-ModelDeck-Configuration-Fingerprint": legacy_configuration_fingerprint(
+            profile, {"ready": False, "health": {}}, profile.preferred_runtime
+        ),
+        "X-ModelDeck-Route-Role": role,
+    }
 
 
 def deprecated_response(response: Response, successor: str) -> Response:
@@ -1711,12 +1731,23 @@ def _record_gateway_diagnostic(
     started: float,
     outcome: str,
     error_code: str | None,
+    worker: ModelProfile | None = None,
+    route_role_name: str | None = None,
 ) -> None:
     request.app.state.last_request_diagnostics = {
         "route": alias or None,
         "total_gateway_seconds": round(time.perf_counter() - started, 6),
         "outcome": outcome,
         "error_code": error_code,
+        "worker_id": worker.id if worker else None,
+        "configuration_fingerprint": (
+            worker_response_headers(worker, route_role_name or "primary")[
+                "X-ModelDeck-Configuration-Fingerprint"
+            ]
+            if worker
+            else None
+        ),
+        "route_role": route_role_name,
     }
 
 

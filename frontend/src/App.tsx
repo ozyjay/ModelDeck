@@ -3,13 +3,14 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 
 import { ApiError, deleteJson, getJson, patchJson, postJson, putJson } from "./api";
 import type {
+  CapabilityPublicationPreview, CapabilitySetup, CapabilitySetupPreview, CapabilitySetupSelection,
   CompatibilityTest, GatewayStatus, HardwareProbe, LiveCapability, LiveState, ManagementHealth, ModelEntry, PotentialCapability,
   ProtocolContract, RoutingProfile, RoutingProfileRecord,
   RoutingProfileRevision, RoutingProfileValidation, RuntimeTemplate, Telemetry, ThermalStatus,
   Worker, WorkerLog,
 } from "./types";
 
-type View = "live" | "profiles" | "workers" | "models" | "advanced";
+type View = "setup" | "live" | "profiles" | "workers" | "models" | "advanced";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
 type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc" | "readiness" | "workers";
@@ -100,15 +101,19 @@ function useCollapse(sectionId: string) {
 }
 
 const NAVIGATION: Array<{ view: View; label: string; path: string }> = [
-  { view: "live", label: "Live", path: "/" },
-  { view: "profiles", label: "Routing profiles", path: "/profiles" },
-  { view: "workers", label: "Workers", path: "/workers" },
-  { view: "models", label: "Models", path: "/models" },
+  { view: "setup", label: "Setup", path: "/" },
+  { view: "live", label: "Live", path: "/live" },
   { view: "advanced", label: "Advanced", path: "/advanced" },
 ];
 
+const ADVANCED_NAVIGATION: Array<{ view: View; label: string; path: string }> = [
+  { view: "models", label: "Models", path: "/models" },
+  { view: "workers", label: "Workers", path: "/workers" },
+  { view: "profiles", label: "Routing profiles", path: "/profiles" },
+];
+
 function viewFromPath(path: string): View {
-  return NAVIGATION.find((item) => item.path === path)?.view ?? "live";
+  return [...NAVIGATION, ...ADVANCED_NAVIGATION].find((item) => item.path === path)?.view ?? "setup";
 }
 
 export default function App() {
@@ -225,6 +230,7 @@ export default function App() {
   const navigate = (next: View, path: string) => {
     window.history.pushState({}, "", path); setView(next);
   };
+  const advancedActive = ["profiles", "workers", "models", "advanced"].includes(view);
 
   if (loading) return <Loading />;
   return (
@@ -233,15 +239,18 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">MD</span><div><strong>ModelDeck</strong><small>Operator console</small></div></div>
         <nav aria-label="Primary navigation">{NAVIGATION.map((item) => (
-          <a className={view === item.view ? "nav-link active" : "nav-link"} href={item.path}
+          <a className={view === item.view || (item.view === "advanced" && advancedActive) ? "nav-link active" : "nav-link"} href={item.path}
             key={item.view} onClick={(event) => { event.preventDefault(); navigate(item.view, item.path); }}>
             {item.label}
           </a>
-        ))}</nav>
+        ))}{advancedActive && <div className="advanced-nav" aria-label="Advanced sections">{ADVANCED_NAVIGATION.map((item) => (
+          <a className={view === item.view ? "nav-link active" : "nav-link"} href={item.path} key={item.view}
+            onClick={(event) => { event.preventDefault(); navigate(item.view, item.path); }}>{item.label}</a>
+        ))}</div>}</nav>
         <div className="sidebar-policy"><StatusDot state={gateway?.available ? "good" : "warn"} /><span>Local gateway only</span></div>
       </aside>
       <main className="main-content">
-        <header className="topbar"><div><p className="eyebrow">Framework Desktop · local control plane</p><h1>{NAVIGATION.find((item) => item.view === view)?.label}</h1></div>
+        <header className="topbar"><div><p className="eyebrow">Framework Desktop · local control plane</p><h1>{[...NAVIGATION, ...ADVANCED_NAVIGATION].find((item) => item.view === view)?.label}</h1></div>
           <div className="topbar-status">
             <button className="secondary collapse-all-button" onClick={() => collapseControls.setAllCollapsed(!collapsePreferences.allCollapsed)}>{collapsePreferences.allCollapsed ? "Expand all" : "Collapse all"}</button>
             {health && <div className="mode-badge state-store-badge" title={`State directory: ${health.state_store.directory}`} aria-label="State store"><StatusDot state="good" /><span>{health.state_store.label}</span></div>}
@@ -252,6 +261,7 @@ export default function App() {
         </header>
         {error && <div className="alert error" role="alert"><strong>Action failed</strong><span>{error}</span><button className="icon-button" onClick={() => setError(null)}>×</button></div>}
         {!health || !hardware || !telemetry || !thermal || !gateway ? <Unavailable retry={refresh} />
+          : view === "setup" ? <SetupView models={models} workers={workers} templates={templates} live={live} refresh={refresh} openDay={health.configuration_locked} />
           : view === "live" ? <LiveView live={live} workers={workers} models={models} thermal={thermal} operate={operate} pending={pending} refresh={refresh} />
           : view === "profiles" ? <RoutingProfilesView profiles={profiles} workers={workers} contracts={contracts} openDay={health.configuration_locked} refresh={refresh} />
           : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} thermal={thermal} operationErrors={workerOperationErrors} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
@@ -261,6 +271,150 @@ export default function App() {
     </div>
     </CollapseContext.Provider>
   );
+}
+
+function SetupView({ models, workers, templates, live, refresh, openDay }: {
+  models: ModelEntry[]; workers: Worker[]; templates: RuntimeTemplate[]; live: LiveState;
+  refresh: () => Promise<void>; openDay: boolean;
+}) {
+  const [capabilityId, setCapabilityId] = useState("");
+  const [modelKey, setModelKey] = useState("");
+  const [runtimeTemplateId, setRuntimeTemplateId] = useState("");
+  const [query, setQuery] = useState("");
+  const [preview, setPreview] = useState<CapabilitySetupPreview | null>(null);
+  const [setup, setSetup] = useState<CapabilitySetup | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [publicName, setPublicName] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [publication, setPublication] = useState<CapabilityPublicationPreview | null>(null);
+  const capabilities = useMemo(() => {
+    const values = new Map<string, PotentialCapability>();
+    for (const model of models) for (const capability of model.potential_capabilities) {
+      if (capability.available_runtime_template_ids.length) values.set(capability.id, capability);
+    }
+    return [...values.values()].sort((left, right) => left.display_name.localeCompare(right.display_name));
+  }, [models]);
+  const compatibleModels = useMemo(() => models.filter((model) => {
+    if (!capabilityId || !model.revision || model.download_state !== "installed-untested") return false;
+    if (query && !model.model_id.toLocaleLowerCase().includes(query.toLocaleLowerCase())) return false;
+    return model.potential_capabilities.some((item) => item.id === capabilityId && item.available_runtime_template_ids.length);
+  }), [capabilityId, models, query]);
+  const selectedModel = models.find((model) => `${model.model_id}@${model.revision}` === modelKey);
+  const selectedCapability = selectedModel?.potential_capabilities.find((item) => item.id === capabilityId);
+  const runtimeIds = selectedCapability?.available_runtime_template_ids ?? [];
+
+  useEffect(() => {
+    getJson<{ setups: CapabilitySetup[] }>("/api/capability-setups")
+      .then(({ setups }) => {
+        const resumable = setups.find((item) => !["succeeded", "cancelled"].includes(item.state));
+        if (!resumable) return;
+        setSetup(resumable);
+        const planned = resumable.plan.selection;
+        setDisplayName(humanise(planned.capability_id));
+        setPublicName(planned.model_id.split("/").at(-1)?.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-") ?? "local-model");
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    setModelKey(""); setRuntimeTemplateId(""); setPreview(null); setSetup(null); setFeedback(null);
+  }, [capabilityId]);
+  useEffect(() => {
+    setRuntimeTemplateId(runtimeIds.length === 1 ? runtimeIds[0] : ""); setPreview(null); setFeedback(null);
+  }, [modelKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!setup || ["succeeded", "failed", "cancelled"].includes(setup.state)) return;
+    const source = new EventSource(`/api/capability-setups/${setup.id}/events`);
+    const update = () => getJson<CapabilitySetup>(`/api/capability-setups/${setup.id}`).then(setSetup).catch(() => undefined);
+    source.addEventListener("setup", update);
+    source.onerror = () => { source.close(); void update(); };
+    const timer = window.setInterval(update, 2000);
+    return () => { source.close(); window.clearInterval(timer); };
+  }, [setup?.id, setup?.state]);
+
+  const selection = (): CapabilitySetupSelection | null => {
+    if (!selectedModel?.revision || !capabilityId || !runtimeTemplateId) return null;
+    const shortName = selectedModel.model_id.split("/").at(-1) ?? selectedModel.model_id;
+    return {
+      capability_id: capabilityId,
+      model_id: selectedModel.model_id,
+      revision: selectedModel.revision,
+      worker_name: `${shortName} · ${selectedCapability?.display_name ?? capabilityId}`.slice(0, 80),
+      runtime_template_id: runtimeTemplateId,
+      artifact_id: selectedModel.artifacts?.length === 1 ? selectedModel.artifacts[0].artifact_id : null,
+      prefix_cache_enabled: false,
+    };
+  };
+  const review = async () => {
+    const selected = selection(); if (!selected) return;
+    setBusy(true); setFeedback(null);
+    try { setPreview(await postJson<CapabilitySetupPreview>("/api/capability-setups/preview", selected)); }
+    catch (reason) { setFeedback(messageFrom(reason)); }
+    finally { setBusy(false); }
+  };
+  const createAndTest = async () => {
+    const selected = selection(); if (!selected || !preview) return;
+    setBusy(true); setFeedback(null);
+    try {
+      const created = await postJson<CapabilitySetup>("/api/capability-setups", {
+        request_id: crypto.randomUUID(), preview_fingerprint: preview.preview_fingerprint, selection: selected,
+      });
+      setSetup(created); setDisplayName(selectedCapability?.display_name ?? "Local capability");
+      setPublicName(selected.model_id.split("/").at(-1)?.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+/, "") || "local-model");
+    } catch (reason) { setFeedback(messageFrom(reason)); }
+    finally { setBusy(false); }
+  };
+  const publicationBody = () => ({
+    display_name: displayName, public_name: publicName, tool_calling_enabled: false,
+    route_action: live.capabilities.some((item) => item.public_name.toLocaleLowerCase() === publicName.toLocaleLowerCase()) ? "replace-primary" : "add",
+  });
+  const reviewPublication = async () => {
+    if (!setup) return; setBusy(true); setFeedback(null);
+    try { setPublication(await postJson(`/api/capability-setups/${setup.id}/publication-preview`, publicationBody())); }
+    catch (reason) { setFeedback(messageFrom(reason)); }
+    finally { setBusy(false); }
+  };
+  const publish = async () => {
+    if (!setup || !publication) return; setBusy(true); setFeedback(null);
+    try {
+      const result = await postJson<CapabilitySetup>(`/api/capability-setups/${setup.id}/publish`, {
+        ...publicationBody(), publication_fingerprint: publication.publication_fingerprint,
+      });
+      setSetup(result); await refresh();
+    } catch (reason) { setFeedback(messageFrom(reason)); }
+    finally { setBusy(false); }
+  };
+  const reset = () => { setCapabilityId(""); setModelKey(""); setPreview(null); setSetup(null); setPublication(null); setFeedback(null); };
+
+  if (setup?.state === "succeeded") return <div className="view-stack">
+    <section className="hero-panel setup-success"><div><p className="eyebrow">Setup complete</p><h2>{setup.publication?.public_name} is serving locally</h2><p>The exact qualified Worker is published through Routing Profile revision {setup.publication?.revision}.</p></div></section>
+    <section className="panel"><PanelHeading title="Serving identity" detail="Verified locally" /><DefinitionList rows={[
+      ["API Model ID", setup.publication?.public_name ?? "—"], ["Worker", setup.worker_id ?? "—"],
+      ["Runtime", String(setup.resolved_identity?.runtime ?? "—")], ["Backend", String(setup.resolved_identity?.backend ?? "—")],
+      ["Device", String(setup.resolved_identity?.device ?? "—")], ["Configuration fingerprint", String(setup.resolved_identity?.configuration_fingerprint ?? "Not reported")],
+    ]} /><button onClick={reset}>Set up another capability</button></section>
+  </div>;
+
+  return <div className="view-stack">
+    <section className="hero-panel"><div><p className="eyebrow">Guided local setup</p><h2>Set up a local capability</h2><p>Choose the outcome. ModelDeck keeps the exact Model, Runtime, Worker evidence and routing decision visible.</p></div><div className="hero-status"><StatusDot state={live.capabilities.length ? "good" : "warn"} /><span>{live.capabilities.length} published capabilities</span></div></section>
+    {feedback && <div className="alert error" role="alert" aria-live="assertive"><strong>Setup needs attention</strong><span>{feedback}</span></div>}
+    {setup ? <section className="panel setup-progress" aria-live="polite"><PanelHeading title="Create and test" detail={humanise(setup.state)} />
+      <ol className="setup-list">{["applying-policy", "creating-worker", "starting-worker", "verifying-identity", "qualifying", "awaiting-publication"].map((step) => <li className={step === setup.current_step ? "active" : ""} key={step}>{humanise(step)}</li>)}</ol>
+      {setup.state === "waiting-for-thermal-capacity" && <p className="thermal-load-notice">Setup is safely paused until fresh thermal telemetry permits model loading.</p>}
+      {setup.error && <div className="validation-summary bad"><strong>{setup.error.message}</strong><p>{setup.error.retryable ? "The exact setup can be retried." : "Adjust the configuration and create a new setup."}</p></div>}
+      {setup.state === "failed" && <div className="button-row"><button disabled={!setup.error?.retryable} onClick={() => void postJson<CapabilitySetup>(`/api/capability-setups/${setup.id}/retry`).then(setSetup).catch((reason) => setFeedback(messageFrom(reason)))}>Try again</button><button className="secondary" onClick={reset}>Adjust configuration</button></div>}
+      {setup.state === "awaiting-publication" && <div className="publication-review"><h3>Review publication</h3><p>Qualification passed. Publishing is a separate explicit action.</p><div className="field-grid"><label>Capability label<input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setPublication(null); }} /></label><label>API Model ID<input value={publicName} onChange={(event) => { setPublicName(event.target.value); setPublication(null); }} /></label></div>
+        {!publication ? <button disabled={busy} onClick={() => void reviewPublication()}>{busy ? "Reviewing…" : "Review routing changes"}</button> : <><div className={`validation-summary ${publication.validation.valid ? "good" : "bad"}`}><strong>{publication.validation.valid ? "Ready to publish" : "Publication is blocked"}</strong><p>{publication.before.capabilities.length} existing and {publication.after.capabilities.length} resulting capabilities. No unlisted fallback is added.</p>{publication.validation.errors.map((issue, index) => <p key={index}>{issue.message}</p>)}</div><button disabled={busy || !publication.validation.valid} onClick={() => void publish()}>{busy ? "Publishing…" : "Publish"}</button></>}
+      </div>}
+    </section> : <>
+      <section className="panel"><PanelHeading title="1. Choose an outcome" detail={`${capabilities.length} available`} /><div className="capability-grid">{capabilities.map((capability) => <button className={`capability-choice ${capabilityId === capability.id ? "selected" : ""}`} key={capability.id} onClick={() => setCapabilityId(capability.id)}><strong>{capability.display_name}</strong><span>{capability.description}</span></button>)}</div></section>
+      {capabilityId && <section className="panel"><PanelHeading title="2. Choose a cached Model" detail={`${compatibleModels.length} compatible`} /><label>Search cached Models<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="model-choice-list">{compatibleModels.map((model) => <button className={modelKey === `${model.model_id}@${model.revision}` ? "selected" : ""} key={`${model.model_id}@${model.revision}`} onClick={() => setModelKey(`${model.model_id}@${model.revision}`)}><strong>{model.model_id}</strong><small>Pinned revision {model.revision?.slice(0, 12)}</small></button>)}</div></section>}
+      {selectedModel && <section className="panel"><PanelHeading title="3. Review configuration" detail="Exact and immutable" /><DefinitionList rows={[["Model", selectedModel.model_id], ["Revision", selectedModel.revision ?? "—"], ["Capability", selectedCapability?.display_name ?? capabilityId]]} /><details><summary>Advanced Runtime and parameters</summary><label>Trusted Runtime<select value={runtimeTemplateId} onChange={(event) => { setRuntimeTemplateId(event.target.value); setPreview(null); }}><option value="">Choose a Runtime</option>{runtimeIds.map((id) => <option key={id} value={id}>{templates.find((item) => item.id === id)?.display_name ?? id}</option>)}</select></label><p className="manifest-note">With multiple compatible Runtimes, ModelDeck requires an explicit choice unless exact matching local evidence identifies one.</p></details>
+        {!preview ? <button disabled={busy || !runtimeTemplateId || openDay} onClick={() => void review()}>{busy ? "Reviewing…" : "Review Create and test"}</button> : <div className="configuration-review"><h3>Policy and execution review</h3><DefinitionList rows={[["Runtime selection", humanise(preview.selection_basis)], ["Runtime", String(preview.worker.runtime_template_id)], ["Model policy change", preview.policy_changes.model_allowed ? "Allow exact revision" : "Already allowed"], ["Capability policy change", preview.policy_changes.capability_allowed ? "Allow exact capability" : "Already allowed"], ["Resolved Backend/device", "Verified after Worker start"]]} /><button disabled={busy || openDay} onClick={() => void createAndTest()}>{busy ? "Creating…" : "Create and test"}</button></div>}
+      </section>}
+    </>}
+  </div>;
 }
 
 function LiveView({ live, workers, models, thermal, operate, pending, refresh }: {

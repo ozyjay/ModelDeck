@@ -424,6 +424,7 @@ def capability_evidence_status(
     fingerprint = worker_configuration_fingerprint(worker)
     stale = False
     failed: int | None = None
+    requires_v2 = int(worker.get("capability_policy_version") or 0) >= 5
     for test in tests:
         evidence = test.get("evidence", {})
         if not isinstance(evidence, Mapping):
@@ -439,7 +440,13 @@ def capability_evidence_status(
                 stale = True
                 continue
             if test.get("result") == "tested-working":
-                return "qualified", int(test["id"])
+                version = int(evidence.get("fingerprint_version") or test.get("fingerprint_version") or 1)
+                if version == 2:
+                    return "qualified", int(test["id"])
+                if requires_v2:
+                    stale = True
+                    continue
+                return "legacy", int(test["id"])
             failed = int(test["id"])
     if failed is not None:
         return "failed", failed

@@ -48,5 +48,9 @@ cp -a usr %{buildroot}/
 /usr/share/modeldeck/release.json
 
 %changelog
+* Mon Aug 31 2026 ModelDeck maintainers <maintainers@modeldeck.local> - 2.0.0-1
+- Add the guided capability setup and publication workflow
+- Strengthen identity, qualification, thermal and routing evidence boundaries
+
 * Sat Aug 29 2026 ModelDeck maintainers <maintainers@modeldeck.local> - 0.1.0-1
 - Initial Fedora standalone package

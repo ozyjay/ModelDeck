@@ -78,7 +78,7 @@ and can create a new protected key on a fresh signing workstation.
 
 ```powershell
 pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
-  -RpmPath dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm `
+  -RpmPath dist/fedora/x86_64/modeldeck-2.0.0-1.fc44.x86_64.rpm `
   -CreateKey -SigningName 'ModelDeck Release' -SigningEmail 'release@example.com'
 ```
 
@@ -86,10 +86,10 @@ For an existing key, use its long ID or fingerprint:
 
 ```powershell
 pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
-  -RpmPath dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm `
+  -RpmPath dist/fedora/x86_64/modeldeck-2.0.0-1.fc44.x86_64.rpm `
   -KeyId <private-key-id-or-fingerprint>
-rpm --checksig --verbose dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm
-sudo dnf install dist/fedora/x86_64/modeldeck-0.1.0-1.fc44.x86_64.rpm
+rpm --checksig --verbose dist/fedora/x86_64/modeldeck-2.0.0-1.fc44.x86_64.rpm
+sudo dnf install dist/fedora/x86_64/modeldeck-2.0.0-1.fc44.x86_64.rpm
 modeldeck-desktop
 ```
 
@@ -121,7 +121,7 @@ ROCm Workers also keep their MIOpen user database and compiled-kernel cache belo
 `~/.local/share/modeldeck/runtime/miopen`, rather than under the package service's read-only
 home directory.
 
-Import stops services, safely extracts the archive, checks SQLite integrity and schema version 4,
+Import stops services, safely extracts the archive, checks SQLite integrity and schema version 4 or 5,
 and backs up existing packaged-app state before replacement. It
 preserves configured Workers, routing profiles, compatibility evidence, thermal state, and
 trusted runtime manifests. Older v2/v3 databases must use the documented migrations before

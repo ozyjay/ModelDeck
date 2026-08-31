@@ -117,7 +117,7 @@ class WorkerDefinition(BaseModel):
             dtype=profile.dtype,
             capabilities=profile.capabilities.model_dump(mode="json"),
             settings=profile.settings,
-            capability_policy_version=4,
+            capability_policy_version=5,
         )
 
     def to_profile(self) -> ModelProfile:

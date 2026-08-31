@@ -11,6 +11,26 @@ Discovery is read-only: `GET /api/health`, `/api/hardware`, `/api/telemetry`,
 `/api/thermal`, `/api/gateway/status`, `/api/catalogue`, `/api/runtime-templates`,
 `/api/protocol-contracts`, and `/api/compatibility`.
 
+### Guided capability setup
+
+The intent-first setup surface uses durable, local-only operation resources:
+
+- `POST /api/capability-setups/preview` resolves one exact cached Model, Artifact,
+  trusted Runtime and immutable Worker plan without changing policy.
+- `POST|GET /api/capability-setups` creates or lists durable FIFO operations.
+- `GET /api/capability-setups/{setup_id}` and `/events` report persisted state and
+  replayable SSE progress.
+- `POST /api/capability-setups/{setup_id}/cancel|retry` controls work without deleting
+  its Worker or evidence.
+- `POST /api/capability-setups/{setup_id}/publication-preview|publish` separates
+  qualification from an explicit, stale-protected routing decision.
+
+Creation requires a caller UUID and the SHA-256 fingerprint of the reviewed preview.
+Model loading and qualification pause under thermal policy, resume after a management
+restart, and preserve positive or negative evidence. Publication reuses the managed
+**Local capabilities** profile, requires `tested-working` evidence, verifies the public
+route and restores the previous live revision when that verification fails.
+
 Workers use `GET|POST /api/workers`, `GET|PATCH|DELETE /api/workers/{worker_id}` and
 the bounded lifecycle, logs, smoke, usage, replacement and stop-all subroutes. Workers
 can be created only from a complete, cached model revision and an installed trusted
@@ -198,6 +218,9 @@ The gateway selects an ordered backup only before a request or text-diffusion jo
 It does not fail over an interrupted stream or an existing job. Job-to-Worker ownership is
 stored durably so a restarted gateway can poll or cancel the same live Worker job.
 
+Successful routed responses include `X-ModelDeck-Worker-Id`,
+`X-ModelDeck-Configuration-Fingerprint`, and `X-ModelDeck-Route-Role` (`primary` or
+`backup`) so selection remains observable without exposing paths or environment values.
 When no matching local Worker is ready, the gateway returns HTTP 503
 `local_route_unavailable` with `cloud_fallback_attempted: false`. Gateway responses do not
 carry mock or fallback headers.

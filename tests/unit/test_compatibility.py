@@ -35,7 +35,7 @@ def test_records_compatibility_without_overwriting_negative_history(tmp_path) ->
     evidence = {"model_id": "org/model", "runtime": "transformers-rocm", "rocm_version": "7.2.1"}
     failed = store.record_test(evidence, result="transient-failure", failure_class="smoke-failure")
     passed = store.record_test(evidence, result="tested-working")
-    updated = store.update_test_evidence(
+    observation = store.record_test_observation(
         passed["id"],
         {
             "shutdown_result": "success",
@@ -45,8 +45,12 @@ def test_records_compatibility_without_overwriting_negative_history(tmp_path) ->
     records = store.list_tests()
     assert failed["fingerprint"] == passed["fingerprint"]
     assert [record["result"] for record in records] == ["tested-working", "transient-failure"]
-    assert updated["evidence"]["shutdown_result"] == "success"
-    assert records[0]["evidence"]["memory_recovery_result"] == "not-measured-process-exit-confirmed"
+    assert observation["observation"]["shutdown_result"] == "success"
+    assert "memory_recovery_result" not in records[0]["evidence"]
+    assert records[0]["observations"][0]["observation"]["memory_recovery_result"] == (
+        "not-measured-process-exit-confirmed"
+    )
+    assert records[0]["fingerprint_version"] == 2
 
 
 def test_model_cache_policy_defaults_allowed_and_persists_disallowed_revision(tmp_path) -> None:
@@ -96,3 +100,24 @@ def test_route_tool_calling_rehearsal_state_is_revision_scoped_and_coarse(tmp_pa
     assert stored["last_rehearsal"]
     assert stored["failure_code"] is None
     assert store.route_tool_calling_state("profile-1", 2, "capability-1")["supported"] is False
+
+
+def test_capability_setup_is_idempotent_and_events_are_append_only(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "evidence.sqlite3")
+    store.initialise()
+    setup = {
+        "id": "setup-1",
+        "request_id": "request-1",
+        "request_fingerprint": "a" * 64,
+        "state": "queued",
+    }
+
+    assert store.create_capability_setup(setup) == setup
+    assert store.create_capability_setup({**setup, "id": "ignored-duplicate"}) == setup
+    first = store.record_capability_setup_event("setup-1", "queued", {"message": "Queued"})
+    second = store.record_capability_setup_event("setup-1", "starting-worker", {"message": "Starting"})
+
+    assert [item["id"] for item in store.list_capability_setup_events("setup-1")] == [
+        first["id"],
+        second["id"],
+    ]

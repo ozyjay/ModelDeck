@@ -32,7 +32,7 @@ const profile: RoutingProfileRecord = {
 function responses(configured = false): Record<string, unknown> {
   const workers = configured ? [worker] : [];
   return {
-    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 4, configuration_locked: false, offline_only: true, gateway_url: "http://127.0.0.1:8600", state_store: { kind: "checkout-development", label: "Checkout development state", directory: "/workspace/.modeldeck" } },
+    "/api/health": { status: "ok", service: "modeldeck-management", schema_version: 5, configuration_locked: false, offline_only: true, gateway_url: "http://127.0.0.1:8600", state_store: { kind: "checkout-development", label: "Checkout development state", directory: "/workspace/.modeldeck" } },
     "/api/gateway/status": { available: true, health: { status: "ok", ready_workers: 0 }, models: { data: [] }, routes: { routes: [] }, error: null },
     "/api/hardware": { configured: { profile_id: "framework", os: "Fedora", gpu: "Radeon", gpu_architecture: "gfx1151", rocm_family: "7.2", work_mount: "/mnt/work" }, detected: { fedora_release: "44", kernel: "6.0", python: "3.13", rocm_packages: [], gpu_device_nodes: {}, memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] }, diagnostic_note: "" },
     "/api/telemetry": { memory: { total_bytes: 1, available_bytes: 1, percent: 0 }, swap: { total_bytes: 0, used_bytes: 0, percent: 0 }, filesystems: [], temperatures: [], fans: [], active_model_processes: [] },
@@ -64,6 +64,11 @@ function mockFetch(payloads: Record<string, unknown>) {
   return fetchMock;
 }
 
+async function openAdvancedSection(name: "Models" | "Workers" | "Routing profiles") {
+  fireEvent.click(await screen.findByRole("link", { name: "Advanced" }));
+  fireEvent.click(await screen.findByRole("link", { name }));
+}
+
 describe("ModelDeck routing profile operator console", () => {
   beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -72,8 +77,8 @@ describe("ModelDeck routing profile operator console", () => {
     const fetchMock = mockFetch(responses());
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Build your first local capability" })).toBeInTheDocument();
-    expect(screen.getByText(/create a Routing Profile and capability/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Set up a local capability" })).toBeInTheDocument();
+    expect(screen.getByText(/keeps the exact Model, Runtime, Worker evidence/i)).toBeInTheDocument();
     expect(screen.queryByText(/Mock Worker/i)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes("mock-worker"))).toBe(false);
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/events")).toBe(false);
@@ -83,6 +88,7 @@ describe("ModelDeck routing profile operator console", () => {
   it("shows published capability readiness separately from Worker state", async () => {
     mockFetch(responses(true));
     render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Live" }));
 
     const status = await screen.findByRole("status", { name: "Token trace capability status" });
     expect(within(status).getByText("Not serving")).toBeInTheDocument();
@@ -100,6 +106,7 @@ describe("ModelDeck routing profile operator console", () => {
     payloads[`/api/workers/${backup.id}/start`] = { state: "starting" };
     const fetchMock = mockFetch(payloads);
     render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Live" }));
 
     expect(await screen.findByRole("button", { name: `Start Worker ${worker.name}` })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: `Start Worker ${backup.name}` }));
@@ -120,6 +127,7 @@ describe("ModelDeck routing profile operator console", () => {
     payloads[`/api/workers/${readyWorker.id}/stop`] = { state: "stopping" };
     const fetchMock = mockFetch(payloads);
     render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Live" }));
 
     fireEvent.click(await screen.findByRole("button", { name: `Stop Worker ${readyWorker.name}` }));
 
@@ -140,7 +148,7 @@ describe("ModelDeck routing profile operator console", () => {
     };
     mockFetch(payloads);
     render(<App />);
-    fireEvent.click(await screen.findByRole("link", { name: "Workers" }));
+    await openAdvancedSection("Workers");
 
     expect(await screen.findByText("Model loading paused")).toBeInTheDocument();
     expect(screen.getByText(/Fresh thermal telemetry is stabilising/i)).toBeInTheDocument();
@@ -150,7 +158,7 @@ describe("ModelDeck routing profile operator console", () => {
   it("edits routing profiles without Event or Demo terminology", async () => {
     const fetchMock = mockFetch(responses(true));
     render(<App />);
-    fireEvent.click(await screen.findByRole("link", { name: "Routing profiles" }));
+    await openAdvancedSection("Routing profiles");
 
     expect(await screen.findByText("Published capabilities")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Local applications")).toBeInTheDocument();
@@ -183,7 +191,7 @@ describe("ModelDeck routing profile operator console", () => {
     }] };
     mockFetch(payloads);
     render(<App />);
-    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    await openAdvancedSection("Models");
 
     expect(await screen.findByText("Video understanding")).toBeInTheDocument();
     expect(screen.getByText("runtime unavailable")).toBeInTheDocument();
@@ -212,7 +220,7 @@ describe("ModelDeck routing profile operator console", () => {
     payloads["/api/catalogue/capabilities/policy"] = { ok: true };
     const fetchMock = mockFetch(payloads);
     render(<App />);
-    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    await openAdvancedSection("Models");
 
     expect(await screen.findByRole("button", { name: "Set up Worker" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Worker" })).not.toBeInTheDocument();
@@ -221,6 +229,49 @@ describe("ModelDeck routing profile operator console", () => {
     expect(await screen.findByRole("heading", { name: "Create a Worker" })).toBeInTheDocument();
     const policyCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/catalogue/capabilities/policy");
     expect(policyCall?.[1]).toMatchObject({ method: "POST" });
+  });
+
+  it("reviews exact policy and Runtime identity before guided creation", async () => {
+    const payloads = responses();
+    payloads["/api/catalogue"] = { downloads_started: false, models: [{
+      model_id: "example/local-chat", revision: "revision-1", cache_location: "/cache/model",
+      snapshot_location: "/cache/model/snapshots/revision-1", physical_size_bytes: 1,
+      download_state: "installed-untested", generation_family_hint: "autoregressive",
+      capability_hints: ["chat"], configuration_support: "autoregressive-transformers",
+      configuration_support_reason: "Trusted local adapter", modeldeck_allowed: true,
+      base_model_id: null, base_model_revision: null, runnable: false, runnable_reason: "Not tested",
+      worker_count: 0, artifacts: [], potential_capabilities: [{
+        id: "general-chat", display_name: "General chat", description: "Conversational text generation.",
+        protocol_contract_id: "openai-chat-v1", traits: ["chat"], evidence: [],
+        runtime_template_ids: ["autoregressive-transformers"],
+        available_runtime_template_ids: ["autoregressive-transformers"], policy_allowed: false,
+        effective_allowed: false, runtime_status: "available", qualification_status: "not-tested",
+        qualifying_workers: [], published: false, creatable: false, reason: "Approval required.",
+      }],
+    }] };
+    payloads["/api/runtime-templates"] = { templates: [{
+      id: "autoregressive-transformers", display_name: "Autoregressive Transformers ROCm",
+      implementation: "transformers-rocm", generation_family: "autoregressive", cache_setting: "cache_root",
+      uses_base_model_identity: false, lifecycle: "on-demand", dtype: "bfloat16", settings: {},
+      package_id: "modeldeck-core", package_version: "1", package_display_name: "ModelDeck",
+      publisher: "ModelDeck", source: "packaged", digest: "a".repeat(64),
+    }] };
+    payloads["/api/capability-setups/preview"] = {
+      selection: {}, worker: { runtime_template_id: "autoregressive-transformers" },
+      selection_basis: "only-compatible-runtime", runtime_registration_digest: "a".repeat(64),
+      policy_changes: { model_allowed: false, capability_allowed: true }, warnings: [],
+      preview_fingerprint: "b".repeat(64),
+    };
+    mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /General chat/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /example\/local-chat/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review Create and test" }));
+
+    expect(await screen.findByText("Allow exact capability")).toBeInTheDocument();
+    expect(screen.getByText("Verified after Worker start")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create and test" })).toBeInTheDocument();
   });
 
   it("offers explicit checksum approval for eligible local Qwen3.5 candidates", async () => {
@@ -246,7 +297,7 @@ describe("ModelDeck routing profile operator console", () => {
     };
     const fetchMock = mockFetch(payloads);
     render(<App />);
-    fireEvent.click(await screen.findByRole("link", { name: "Models" }));
+    await openAdvancedSection("Models");
 
     fireEvent.click(await screen.findByRole("button", { name: "Verify and approve" }));
 

@@ -216,14 +216,23 @@ class BenchmarkRunner:
     def telemetry(self) -> dict[str, Any]:
         return safe_telemetry(self.get("/api/telemetry"))
 
+    def thermal(self) -> dict[str, Any]:
+        status = self.get("/api/thermal")
+        return {
+            "enabled": status.get("enabled"),
+            "state": status.get("state"),
+            "temperature_c": status.get("temperature_c"),
+            "sensor_id": status.get("sensor_id"),
+            "reason_code": status.get("reason_code"),
+            "policy": status.get("policy"),
+        }
+
     def preflight(self, selected: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         workers = self.workers()
         resolved = []
         for selector in selected:
             matches = [
-                worker
-                for worker in workers
-                if worker.get("id") == selector or worker.get("name") == selector
+                worker for worker in workers if worker.get("id") == selector or worker.get("name") == selector
             ]
             if not matches:
                 raise BenchmarkError(f"Running ModelDeck has no Worker named or identified by: {selector}")
@@ -358,9 +367,7 @@ class BenchmarkRunner:
             "stream_intermediate_frames": False,
         }
         started = time.perf_counter()
-        queued, _ = request_json(
-            self.client, "POST", self.gateway_url + "/v1/diffuse", payload=payload
-        )
+        queued, _ = request_json(self.client, "POST", self.gateway_url + "/v1/diffuse", payload=payload)
         job_id = str(queued.get("job_id") or "")
         if not job_id:
             raise BenchmarkError("Diffusion benchmark returned no job identifier")
@@ -460,6 +467,7 @@ class BenchmarkRunner:
 
     def benchmark_profile(self, profile: dict[str, Any], hardware: dict[str, Any]) -> dict[str, Any]:
         before_telemetry = self.telemetry()
+        thermal_before = self.thermal()
         started_at = datetime.now(UTC).isoformat()
         try:
             worker, cold_wall = self.start_worker(profile["id"])
@@ -478,7 +486,15 @@ class BenchmarkRunner:
             metrics_after = safe_runtime_metrics(self.worker_payload(endpoint, "/metrics"))
             if not samples:
                 raise BenchmarkError("Every measured request failed")
-            fingerprint_fields = build_fingerprint_fields(hardware, profile, model, metrics_after)
+            thermal_after = self.thermal()
+            fingerprint_fields = build_fingerprint_fields(
+                hardware, profile, model, metrics_after, thermal_before.get("policy")
+            )
+            thermal_invalid = thermal_after.get("state") in {
+                "very_hot",
+                "critical",
+                "telemetry_degraded",
+            }
             result = {
                 "worker_id": profile["id"],
                 "worker_name": profile["name"],
@@ -488,7 +504,9 @@ class BenchmarkRunner:
                 "generation_family": profile["generation_family"],
                 "runtime": profile["runtime"],
                 "dtype": profile["dtype"],
-                "status": "success" if not failures else "partial-failure",
+                "status": (
+                    "thermal-invalid" if thermal_invalid else "success" if not failures else "partial-failure"
+                ),
                 "started_at": started_at,
                 "cold_start_wall_seconds": cold_wall,
                 "model_load_seconds": metrics_after.get("load_seconds"),
@@ -496,6 +514,8 @@ class BenchmarkRunner:
                 "fingerprint_fields": fingerprint_fields,
                 "telemetry_before": before_telemetry,
                 "telemetry_after": self.telemetry(),
+                "thermal_before": thermal_before,
+                "thermal_after": thermal_after,
                 "metrics_before": metrics_before,
                 "metrics_after": metrics_after,
                 "samples": samples,
@@ -526,6 +546,7 @@ def build_fingerprint_fields(
     profile: dict[str, Any],
     model: dict[str, Any],
     metrics: dict[str, Any],
+    thermal_policy: Any = None,
 ) -> dict[str, Any]:
     configured = hardware.get("configured") or {}
     detected = hardware.get("detected") or {}
@@ -550,6 +571,7 @@ def build_fingerprint_fields(
         "quantisation": model.get("quantization", "none"),
         "dtype": model.get("dtype", profile.get("dtype")),
         "runtime": profile.get("runtime"),
+        "thermal_policy": thermal_policy,
         "runtime_profile": model.get("runtime_profile"),
         "configuration_fingerprint": model.get("configuration_fingerprint"),
         "llama_cpp_commit": model.get("llama_cpp_commit"),

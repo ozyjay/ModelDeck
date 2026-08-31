@@ -6,6 +6,7 @@ import httpx
 import modeldeck.main as main_module
 import modeldeck.v2_api as v2_api_module
 import pytest
+from modeldeck import __version__
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot
@@ -127,7 +128,8 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
             profiles = await client.get("/api/routing-profiles")
             live = await client.get("/api/live")
 
-    assert health.json()["schema_version"] == 4
+    assert health.json()["schema_version"] == 5
+    assert health.json()["version"] == __version__
     assert isinstance(health.json()["build_id"], str)
     assert health.json()["configuration_locked"] is False
     assert health.json()["offline_only"] is True
@@ -139,6 +141,59 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     assert workers.json() == []
     assert profiles.json() == {"profiles": []}
     assert live.json() == {"active_profile": None, "active_profiles": [], "capabilities": []}
+
+
+@pytest.mark.asyncio
+async def test_guided_setup_preview_resolves_one_trusted_runtime_and_explicit_policy(
+    tmp_path, monkeypatch
+) -> None:
+    model = discovered_model(runtime="autoregressive-transformers")
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/capability-setups/preview",
+                json={
+                    "capability_id": "autoregressive-trace",
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "worker_name": "Guided trace",
+                },
+            )
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["selection_basis"] == "only-compatible-runtime"
+    assert preview["worker"]["runtime_template_id"] == "autoregressive-transformers"
+    assert preview["policy_changes"] == {"model_allowed": False, "capability_allowed": True}
+    assert len(preview["preview_fingerprint"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_compatibility_lifecycle_observation_does_not_mutate_raw_evidence(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    test = store.record_test({"model_id": "example/model", "runtime": "mock"}, result="tested-working")
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/api/compatibility/tests/{test['id']}/observations",
+                json={
+                    "shutdown_result": "success",
+                    "memory_recovery_result": "not-measured-process-exit-confirmed",
+                },
+            )
+            records = (await client.get("/api/compatibility")).json()["tests"]
+
+    assert response.status_code == 201
+    assert "shutdown_result" not in records[0]["evidence"]
+    assert records[0]["observations"][0]["observation"]["shutdown_result"] == "success"
 
 
 @pytest.mark.asyncio
@@ -389,7 +444,7 @@ async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monk
     assert denied.status_code == 409
     assert denied.json()["detail"] == "Allow this capability before creating a Worker"
     assert created.status_code == 201
-    assert created.json()["capability_policy_version"] == 4
+    assert created.json()["capability_policy_version"] == 5
 
 
 @pytest.mark.asyncio

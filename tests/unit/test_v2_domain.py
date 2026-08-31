@@ -194,9 +194,7 @@ def test_tool_calling_route_requires_tool_capable_workers() -> None:
         }
     ]
 
-    tool_worker = worker.model_copy(
-        update={"capabilities": {**worker.capabilities, "tool_calling": True}}
-    )
+    tool_worker = worker.model_copy(update={"capabilities": {**worker.capabilities, "tool_calling": True}})
     assert validate_routing_profile(profile, [tool_worker], [])["valid"] is True
     assert routing_snapshot(profile, 4)["capabilities"][0]["tool_calling_enabled"] is True
 
@@ -357,6 +355,27 @@ def test_v4_profile_requires_capability_permission_and_exact_evidence() -> None:
     assert allowed["valid"] is True
     assert stale["valid"] is False
     assert any("tested-working evidence" in error["message"] for error in stale["errors"])
+
+
+def test_v5_worker_requires_v2_evidence_for_new_publication() -> None:
+    worker = worker_definition().model_copy(update={"capability_policy_version": 5})
+    profile = routing_profile(worker.id, qualification="tested-working")
+    base_evidence = {
+        "worker_id": worker.id,
+        "capability_id": "autoregressive-trace",
+        "worker_configuration_fingerprint": worker_configuration_fingerprint(worker.model_dump(mode="json")),
+    }
+
+    legacy = {"id": 1, "result": "tested-working", "evidence": base_evidence}
+    current = {
+        "id": 2,
+        "result": "tested-working",
+        "fingerprint_version": 2,
+        "evidence": {"fingerprint_version": 2, **base_evidence},
+    }
+
+    assert validate_routing_profile(profile, [worker], [legacy])["valid"] is False
+    assert validate_routing_profile(profile, [worker], [current])["valid"] is True
 
 
 def test_worker_smoke_requests_use_worker_protocols() -> None:

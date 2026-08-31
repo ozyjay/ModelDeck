@@ -139,7 +139,7 @@ def test_state_import_rejects_legacy_or_invalid_data(tmp_path: Path) -> None:
         database.execute("CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT)")
         database.execute("INSERT INTO schema_metadata VALUES ('schema_version', '3')")
 
-    with pytest.raises(StateImportError, match="schema version 4"):
+    with pytest.raises(StateImportError, match="schema version 4 or 5"):
         validate_state_directory(legacy)
 
 

@@ -1,3 +1,3 @@
 """ModelDeck local runtime manager."""
 
-__version__ = "0.1.2"
+__version__ = "2.0.0"

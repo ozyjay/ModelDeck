@@ -315,14 +315,14 @@ number from `packaging/fedora/rpm-release`. Use the packaging CLIs to make audit
 bumps instead of editing those values by hand:
 
 ```powershell
-# 0.1.1 → 0.1.2 and reset the RPM release to 1
+# 2.0.0 → 2.0.1 and reset the RPM release to 1
 pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Part Patch
 
 # Packaging-only rebuild: 1 → 2
 pwsh -NoProfile -File scripts/packaging/bump_rpm_release.ps1 -Increment
 ```
 
-Both commands support `-WhatIf`. Use `-Version 1.0.0` or `-Release 3` to set a specific greater
+Both commands support `-WhatIf`. Use `-Version 2.1.0` or `-Release 3` to set a specific greater
 value. `-RpmRelease` remains available on either build command as an explicit one-off override;
 it does not modify the canonical release file.
 

@@ -25,7 +25,7 @@ class StateImportResult:
 
 
 def validate_state_directory(directory: Path) -> None:
-    """Check that a directory holds a complete schema-v4 ModelDeck database."""
+    """Check that a directory holds an importable schema-v4 or schema-v5 database."""
 
     database_path = directory / "modeldeck.sqlite3"
     if not directory.is_dir() or not database_path.is_file():
@@ -40,9 +40,9 @@ def validate_state_directory(directory: Path) -> None:
             ).fetchone()
     except sqlite3.DatabaseError as error:
         raise StateImportError("The selected ModelDeck database is unreadable") from error
-    if row is None or str(row[0]) != "4":
+    if row is None or str(row[0]) not in {"4", "5"}:
         raise StateImportError(
-            "The selected data is not schema version 4. Run the documented database migration first."
+            "The selected data is not schema version 4 or 5. Run the documented database migration first."
         )
     _reject_symlinks(directory)
 

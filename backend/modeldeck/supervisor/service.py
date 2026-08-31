@@ -43,6 +43,7 @@ class ManagedWorker:
     log_session_id: str | None = None
     launch_environment: dict[str, str] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    resolved_identity: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -60,7 +61,12 @@ class ManagedWorker:
             "last_error": self.last_error,
             "log_session_id": self.log_session_id,
             "capabilities": self.profile.capabilities.model_dump(),
+            "resolved_identity": self.resolved_identity,
         }
+
+
+class WorkerIdentityError(RuntimeError):
+    pass
 
 
 class WorkerSupervisor:
@@ -200,6 +206,7 @@ class WorkerSupervisor:
                     worker.profile.settings.get("startup_timeout_seconds", self.startup_timeout)
                 )
                 await asyncio.wait_for(self._wait_until_loaded(worker), timeout=startup_timeout)
+                await self._verify_identity(worker)
                 await self._transition(worker, WorkerState.WARMING, "Running configured warmup")
                 warmup_timeout = float(worker.profile.settings.get("warmup_timeout_seconds", 10.0))
                 async with httpx.AsyncClient(timeout=warmup_timeout) as client:
@@ -208,6 +215,11 @@ class WorkerSupervisor:
                     if response.json().get("ready") is not True:
                         raise RuntimeError("worker warmup did not report readiness")
                 await self._transition(worker, WorkerState.READY, "Worker passed health and warmup checks")
+            except WorkerIdentityError as error:
+                worker.last_error = str(error)
+                await self._transition(worker, WorkerState.INCOMPATIBLE, worker.last_error)
+                await self._terminate(worker)
+                raise RuntimeError(worker.last_error) from error
             except Exception as error:
                 worker.last_error = f"Startup failed: {type(error).__name__}: {error}"
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
@@ -280,6 +292,65 @@ class WorkerSupervisor:
                 except (httpx.HTTPError, ValueError):
                     pass
                 await asyncio.sleep(0.5)
+
+    async def _verify_identity(self, worker: ManagedWorker) -> None:
+        endpoint = f"http://127.0.0.1:{worker.profile.port}"
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                health_response, model_response, metrics_response = await asyncio.gather(
+                    client.get(f"{endpoint}/health"),
+                    client.get(f"{endpoint}/model"),
+                    client.get(f"{endpoint}/metrics"),
+                )
+            for response in (health_response, model_response, metrics_response):
+                response.raise_for_status()
+            health = health_response.json()
+            model = model_response.json()
+            metrics = metrics_response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise WorkerIdentityError(f"Worker identity could not be verified: {error}") from error
+        expected = {
+            "model_id": worker.profile.model_id,
+            "revision": worker.profile.revision,
+        }
+        mismatches = [
+            f"{field} expected {value!r}, reported {model.get(field)!r}"
+            for field, value in expected.items()
+            if model.get(field) != value
+        ]
+        health_expected = {
+            "worker_id": worker.profile.id,
+            "model_id": worker.profile.model_id,
+            "model_revision": worker.profile.revision,
+            "generation_family": worker.profile.generation_family.value,
+        }
+        mismatches.extend(
+            f"health {field} expected {value!r}, reported {health.get(field)!r}"
+            for field, value in health_expected.items()
+            if health.get(field) != value
+        )
+        if mismatches:
+            raise WorkerIdentityError("Worker identity mismatch: " + "; ".join(mismatches))
+        runtime = str(health.get("runtime") or metrics.get("runtime") or worker.profile.preferred_runtime)
+        if health.get("rocm_version") or runtime.endswith("-rocm"):
+            backend = "rocm"
+        elif "vulkan" in runtime:
+            backend = "vulkan"
+        elif runtime.endswith("-cpu"):
+            backend = "cpu"
+        elif runtime == "mock":
+            backend = "mock"
+        else:
+            backend = "unknown"
+        worker.resolved_identity = {
+            "model_id": model["model_id"],
+            "revision": model["revision"],
+            "runtime": runtime,
+            "backend": backend,
+            "device": health.get("device") or health.get("device_name") or metrics.get("device") or "unknown",
+            "configuration_fingerprint": health.get("configuration_fingerprint")
+            or metrics.get("configuration_fingerprint"),
+        }
 
     async def _capture(
         self,
