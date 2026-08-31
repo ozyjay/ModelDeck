@@ -3,6 +3,11 @@
 ModelDeck provides a hardware-gated benchmark suite for repeatable performance and
 stability observations on the target Framework Desktop. It never downloads weights and
 does not replace compatibility smoke tests or workload-specific quality evaluation.
+The [guiding principles](GUIDING_PRINCIPLES.md) define the broader direction: a Run measures
+a complete configuration and workload, usability is multidimensional, and raw observations
+remain distinct from later interpretation. This suite implements only the measurements
+documented here; it does not yet provide a cross-runtime recommendation engine or universal
+usability score.
 
 ## Run the suite
 
