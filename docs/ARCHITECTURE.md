@@ -1,5 +1,10 @@
 # Architecture
 
+The [guiding principles](GUIDING_PRINCIPLES.md) define the project-wide experimental and
+architectural constraints for this design. This document describes current implementation;
+it must not be read as evidence that all future benchmark, identity, or recommendation
+capabilities are already implemented.
+
 ## Conceptual model
 
 ```text
@@ -52,6 +57,10 @@ The gateway is local-only. It starts with no published capabilities, sends no cl
 fallback, chooses a backup only before a request or job begins, and persists
 text-diffusion job ownership for restart-safe polling/cancellation. Test fixtures are not
 operator-visible and cannot be represented as a public fallback.
+
+An ordered backup is explicit Routing Profile policy, not a hidden change to a Worker's
+execution definition. The API exposes configured primary and selected Worker identity for
+readiness snapshots; future request-level observability must preserve the same distinction.
 
 ## Database migrations
 

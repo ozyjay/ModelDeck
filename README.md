@@ -20,6 +20,13 @@ only when explicitly started and never download weights. The management plane, g
 fallbacks, and normal verification still run without GPU access so development and
 diagnosis remain useful when the target hardware is unavailable.
 
+ModelDeck is also a controlled experimental layer above local runtimes: it evaluates a
+complete Model, Artifact, Runtime, Backend, workload, and environment rather than assuming
+that one engine or a loadable artifact is best. The authoritative constraints for that work,
+including reproducibility, explicit backend identity, lifecycle observability, thermal
+safety, and evidence-based recommendations, are in the [guiding principles](docs/GUIDING_PRINCIPLES.md).
+They distinguish current behaviour from work that still requires design and validation.
+
 ## Target setup
 
 ```powershell
