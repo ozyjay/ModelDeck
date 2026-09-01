@@ -14,6 +14,7 @@ type View = "setup" | "live" | "profiles" | "workers" | "models" | "advanced";
 type WorkerOperation = "start" | "stop" | "restart" | "smoke";
 type WorkerSort = "name-asc" | "name-desc" | "model-asc" | "runtime-asc" | "state";
 type ModelSort = "name-asc" | "name-desc" | "size-desc" | "size-asc" | "readiness" | "workers";
+type ModelStatusFilter = "" | "runtime-available" | "runtime-missing" | "workers-configured" | "workers-missing";
 
 interface CollapsePreferences {
   allCollapsed: boolean;
@@ -33,10 +34,11 @@ const LIVE_CAPABILITY_VISIBILITY_STORAGE_KEY = "modeldeck-live-capability-visibi
 const CollapseContext = createContext<CollapseControls | null>(null);
 
 interface WorkerLibraryPreferences { query: string; state: string; runtime: string; sort: WorkerSort }
-interface ModelLibraryPreferences { query: string; sort: ModelSort }
+interface ModelLibraryPreferences { query: string; status: ModelStatusFilter; sort: ModelSort }
 
 const WORKER_SORTS: WorkerSort[] = ["name-asc", "name-desc", "model-asc", "runtime-asc", "state"];
 const MODEL_SORTS: ModelSort[] = ["name-asc", "name-desc", "size-desc", "size-asc", "readiness", "workers"];
+const MODEL_STATUS_FILTERS: ModelStatusFilter[] = ["", "runtime-available", "runtime-missing", "workers-configured", "workers-missing"];
 
 function storedObject(key: string): Record<string, unknown> {
   try {
@@ -75,6 +77,7 @@ function loadModelLibraryPreferences(): ModelLibraryPreferences {
   const stored = storedObject(MODEL_LIBRARY_STORAGE_KEY);
   return {
     query: typeof stored.query === "string" ? stored.query : "",
+    status: MODEL_STATUS_FILTERS.includes(stored.status as ModelStatusFilter) ? stored.status as ModelStatusFilter : "",
     sort: MODEL_SORTS.includes(stored.sort as ModelSort) ? stored.sort as ModelSort : "name-asc",
   };
 }
@@ -821,6 +824,34 @@ function workersForModel(model: ModelEntry, workers: Worker[]) {
   ).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function runtimeTemplateIdsForModel(model: ModelEntry): string[] {
+  return [...new Set(model.potential_capabilities.flatMap((capability) => capability.available_runtime_template_ids))];
+}
+
+function ModelExecutionStatus({ model, workers, templates }: { model: ModelEntry; workers: Worker[]; templates: RuntimeTemplate[] }) {
+  const configured = workersForModel(model, workers);
+  const runtimeIds = runtimeTemplateIdsForModel(model);
+  const runtimeNames = runtimeIds.map((runtimeId) => templates.find((template) => template.id === runtimeId)?.display_name ?? runtimeId);
+  const workerIds = new Set(configured.map((worker) => worker.id));
+  const qualificationStatuses = [...new Set(model.potential_capabilities.flatMap((capability) => capability.qualifying_workers)
+    .filter((qualification) => workerIds.has(qualification.worker_id)).map((qualification) => qualification.status))];
+  const workerStates = [...new Set(configured.map((worker) => humanise(worker.state)))];
+  const cacheStatus = model.download_state === "partial" ? "Partial snapshot" : "Complete snapshot";
+  const runtimeStatus = runtimeNames.length
+    ? `Available · ${runtimeNames.join(", ")}`
+    : model.download_state === "partial" ? "Pending · complete the local snapshot" : "Missing · runtime implementation required";
+  const workerStatus = configured.length
+    ? `${configured.length} configured · ${workerStates.join(", ")}`
+    : "None configured";
+  const qualificationStatus = configured.length
+    ? qualificationStatuses.length ? qualificationStatuses.map(humanise).join(", ") : "Not tested"
+    : "No configured Worker";
+  return <section className={`model-execution-status${runtimeNames.length ? " has-runtime" : " missing-runtime"}`} aria-label={`Execution status for ${model.model_id}`}>
+    <strong>Execution status</strong>
+    <DefinitionList rows={[["Cache", cacheStatus], ["Runtime", runtimeStatus], ["Workers", workerStatus], ["Qualification", qualificationStatus]]} />
+  </section>;
+}
+
 function ModelWorkerSummary({ model, workers, openDay, removingWorker, onRemove }: { model: ModelEntry; workers: Worker[]; openDay: boolean; removingWorker: string | null; onRemove: (worker: Worker) => Promise<void> }) {
   const configured = workersForModel(model, workers);
   const { collapsed, toggle } = useCollapse(`model-workers-${model.model_id}@${model.revision}`);
@@ -836,14 +867,14 @@ function ModelWorkerSummary({ model, workers, openDay, removingWorker, onRemove 
 function ModelCardShell({ model, children }: { model: ModelEntry; children: ReactNode }) {
   const { collapsed, toggle } = useCollapse(`model-${model.model_id}@${model.revision}`);
   return <article className={`model-row${collapsed ? " collapsed" : ""}`}>
-    <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unclassified"} · {formatBytes(model.physical_size_bytes)}</p></div><div className="model-card-heading-actions"><StateBadge state={model.runnable ? "recognised" : model.download_state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Model ${model.model_id}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>
+    <div className="model-main"><div><h3>{model.model_id}</h3><p>{model.generation_family_hint ?? "Unclassified"} · {formatBytes(model.physical_size_bytes)}</p></div><div className="model-card-heading-actions"><StateBadge state={model.download_state} /><button className="secondary compact-button" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} Model ${model.model_id}`} onClick={toggle}>{collapsed ? "Expand" : "Collapse"}</button></div></div>
     <div className="model-card-body" hidden={collapsed}>{children}</div>
   </article>;
 }
 
 function ModelsView({ models, workers, templates, refresh, openDay }: { models: ModelEntry[]; workers: Worker[]; templates: RuntimeTemplate[]; refresh: () => Promise<void>; openDay: boolean }) {
   const [libraryPreferences, setLibraryPreferences] = useStoredPreferences(MODEL_LIBRARY_STORAGE_KEY, loadModelLibraryPreferences);
-  const { query, sort } = libraryPreferences;
+  const { query, status, sort } = libraryPreferences;
   const [configuring, setConfiguring] = useState<string | null>(null);
   const [configuringCapability, setConfiguringCapability] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -855,8 +886,19 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   const [approvingCandidate, setApprovingCandidate] = useState<string | null>(null);
   const sorted = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    return models.filter((model) => !needle || [model.model_id, model.generation_family_hint, model.runnable_reason, ...model.capability_hints, ...model.potential_capabilities.flatMap((capability) => [capability.id, capability.display_name, capability.description, capability.qualification_status, capability.runtime_status])].some((value) => value?.toLocaleLowerCase().includes(needle))).sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id));
-  }, [models, query, sort]);
+    return models.filter((model) => {
+      const matchesQuery = !needle || [model.model_id, model.generation_family_hint, model.runnable_reason, ...model.capability_hints, ...model.potential_capabilities.flatMap((capability) => [capability.id, capability.display_name, capability.description, capability.qualification_status, capability.runtime_status])].some((value) => value?.toLocaleLowerCase().includes(needle));
+      const hasRuntime = runtimeTemplateIdsForModel(model).length > 0;
+      const hasWorkers = workersForModel(model, workers).length > 0;
+      const matchesStatus = !status
+        || (status === "runtime-available" && hasRuntime)
+        || (status === "runtime-missing" && !hasRuntime)
+        || (status === "workers-configured" && hasWorkers)
+        || (status === "workers-missing" && !hasWorkers);
+      return matchesQuery && matchesStatus;
+    }).sort((a, b) => sort === "name-desc" ? b.model_id.localeCompare(a.model_id) : sort === "size-desc" ? b.physical_size_bytes - a.physical_size_bytes : sort === "size-asc" ? a.physical_size_bytes - b.physical_size_bytes : sort === "readiness" ? Number(b.runnable) - Number(a.runnable) : sort === "workers" ? b.worker_count - a.worker_count : a.model_id.localeCompare(b.model_id));
+  }, [models, query, sort, status, workers]);
+  const filtersActive = Boolean(query.trim() || status);
   const begin = (model: ModelEntry, capabilityId: string) => {
     const capability = model.potential_capabilities.find((item) => item.id === capabilityId);
     const template = templates.find((item) => item.id === capability?.available_runtime_template_ids[0]);
@@ -942,21 +984,23 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
     const selectedTemplate = availableTemplates.find((template) => template.id === runtime);
     if (model) return <div className="view-stack"><section className="panel model-configuration"><div className="runtime-form-heading"><p className="eyebrow">{capability?.display_name ?? model.generation_family_hint ?? "Model"}</p><h2>Create a Worker</h2><small>{model.model_id} at pinned revision {model.revision}</small></div><div className="runtime-fields"><label>Worker name<input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /></label><label>Runtime<select value={runtime} onChange={(event) => { const nextRuntime = event.target.value; setRuntime(nextRuntime); setParameters(runtimeParameterDefaults(availableTemplates.find((item) => item.id === nextRuntime))); }}>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label>{model.artifacts && model.artifacts.length > 0 && <label>Model artefact<select value={artifact} onChange={(event) => setArtifact(event.target.value)}>{model.artifacts.map((item) => <option key={item.artifact_id} value={item.artifact_id}>{item.artifact_id} · {item.filenames.join(", ")}</option>)}</select></label>}</div>{selectedTemplate ? <WorkerParameterFields template={selectedTemplate} values={parameters} onChange={setParameters} prefixCacheAvailable={APPLICATION_MANAGED_PREFIX_CACHE_MODELS.has(model.model_id)} capabilityId={configuringCapability} /> : <div className="configuration-feedback bad">No compatible trusted runtime is installed for this capability.</div>}<div className="runtime-form-actions"><button disabled={openDay || !name.trim() || !selectedTemplate || (selectedTemplate ? !parametersAreValid(selectedTemplate, parameters) : true)} onClick={() => selectedTemplate && void create(model, selectedTemplate).catch((reason) => setFeedback(messageFrom(reason)))}>Create Worker</button><button className="secondary" onClick={() => { setConfiguring(null); setConfiguringCapability(null); }}>Cancel</button></div>{feedback && <div className="configuration-feedback bad">{feedback}</div>}</section></div>;
   }
-  return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Create as many Workers as a Model needs.</p><div className="model-library-toolbar"><label>Search models<input type="search" value={query} placeholder="Name or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>Sort models<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as ModelSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label></div></div>{openDay && <div className="configuration-feedback">Local deployment policy locks configuration. Restart ModelDeck without <code>-LockConfiguration</code> to create Workers.</div>}{feedback && <div className="configuration-feedback good">{feedback}</div>}
-    <section className="panel"><StaticPanelHeading title="Discovered Models" detail={query.trim() ? `${sorted.length} of ${models.length} cached` : `${models.length} cached`} />{sorted.length ? <div className="model-list">{sorted.map((model) => {
+  const clearFilters = () => setLibraryPreferences((current) => ({ ...current, query: "", status: "" }));
+  return <div className="view-stack"><div className="view-actions"><p>Models are read-only discoveries from the local Hugging Face cache. Runtime availability, configured Workers and qualification are reported separately.</p><div className="model-library-toolbar"><label>Search models<input type="search" value={query} placeholder="Name or capability" onChange={(event) => setLibraryPreferences((current) => ({ ...current, query: event.target.value }))} /></label><label>Status<select value={status} onChange={(event) => setLibraryPreferences((current) => ({ ...current, status: event.target.value as ModelStatusFilter }))}><option value="">All models</option><option value="runtime-available">Runtime available</option><option value="runtime-missing">Runtime missing</option><option value="workers-configured">Workers configured</option><option value="workers-missing">No Workers configured</option></select></label><label>Sort models<select value={sort} onChange={(event) => setLibraryPreferences((current) => ({ ...current, sort: event.target.value as ModelSort }))}><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="readiness">Runnable first</option><option value="workers">Most Workers</option><option value="size-desc">Largest</option><option value="size-asc">Smallest</option></select></label><div className="model-filter-summary" role="status"><span>{sorted.length} of {models.length} Model{models.length === 1 ? "" : "s"}</span><button className="secondary compact-button" disabled={!filtersActive} onClick={clearFilters}>Clear filters</button></div></div></div>{openDay && <div className="configuration-feedback">Local deployment policy locks configuration. Restart ModelDeck without <code>-LockConfiguration</code> to create Workers.</div>}{feedback && <div className="configuration-feedback good">{feedback}</div>}
+    <section className="panel"><StaticPanelHeading title="Discovered Models" detail={filtersActive ? `${sorted.length} of ${models.length} cached` : `${models.length} cached`} />{sorted.length ? <div className="model-list">{sorted.map((model) => {
       return <ModelCardShell model={model} key={`${model.model_id}@${model.revision}`}>
+        <ModelExecutionStatus model={model} workers={workers} templates={templates} />
         <div className="tag-list">{model.capability_hints.map((hint) => <span className="tag" key={hint}>{humanise(hint)}</span>)}</div>
         <div className="model-policy"><span><strong>ModelDeck master policy</strong><small>{model.modeldeck_allowed ? "Allowed" : "Disallowed · capability choices retained"}</small></span><button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setModelAllowed(model, !model.modeldeck_allowed).catch((reason) => setFeedback(messageFrom(reason)))}>{model.modeldeck_allowed ? "Disallow model" : "Allow model"}</button></div>
         {model.candidate_registration?.eligible && <div className="model-policy"><span><strong>Local Qwen3.5 candidate</strong><small>{model.candidate_registration.reason}{model.candidate_registration.filename ? ` · ${model.candidate_registration.filename}` : ""}</small></span>{model.candidate_registration.approved ? <StateBadge state="qualified" /> : <button className="secondary compact-button" disabled={openDay || !model.revision || approvingCandidate === `${model.model_id}@${model.revision}`} onClick={() => void approveCandidate(model)}>{approvingCandidate === `${model.model_id}@${model.revision}` ? "Verifying SHA-256…" : "Verify and approve"}</button>}</div>}
         <div className="potential-capability-list">{model.potential_capabilities.length ? model.potential_capabilities.map((capability) => {
           const hasRuntime = capability.available_runtime_template_ids.length > 0;
           const readyToConfigure = hasRuntime && model.modeldeck_allowed;
-          return <article key={capability.id} className={`potential-capability ${capability.effective_allowed ? "allowed" : ""} ${hasRuntime ? "runnable" : "unavailable"}`}><div className="potential-capability-heading"><span><strong>{capability.display_name}</strong><small>{capability.description}</small></span><div><StateBadge state={hasRuntime ? capability.policy_allowed ? capability.qualification_status : "disallowed" : "runtime-unavailable"} /></div></div><div className="tag-list">{capability.traits.map((trait) => <span className="tag" key={trait}>{humanise(trait)}</span>)}</div>{hasRuntime ? <><p className="capability-reason"><strong>Worker available.</strong> {capability.policy_allowed ? "Choose its runtime settings and create a local Worker." : "Set it up to allow this capability and choose its runtime settings."}</p><div className="model-actions"><button disabled={openDay || !readyToConfigure || !model.revision} onClick={() => void beginSupportedWorker(model, capability).catch((reason) => setFeedback(messageFrom(reason)))}>{capability.policy_allowed ? "Create Worker" : "Set up Worker"}</button>{capability.policy_allowed && <button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setCapabilityAllowed(model, capability.id, false).catch((reason) => setFeedback(messageFrom(reason)))}>Disallow</button>}</div></> : <><p className="capability-reason"><strong>No Worker is available yet.</strong> This Model’s local metadata recognises the capability, but ModelDeck has no compatible trusted runtime to launch it.</p><details className="capability-policy"><summary>{capability.policy_allowed ? "Allowed for a future runtime" : "Advanced: allow for a future runtime"}</summary><p>Allowing this records your permission only. It will not create or start a Worker until a compatible trusted runtime is installed.</p><button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setCapabilityAllowed(model, capability.id, !capability.policy_allowed).catch((reason) => setFeedback(messageFrom(reason)))}>{capability.policy_allowed ? "Disallow" : "Allow for future runtime"}</button></details></>}<details><summary>Evidence and provenance</summary>{capability.evidence.map((evidence, index) => <p className="manifest-note" key={`${evidence.source}-${index}`}><strong>{humanise(evidence.kind)} · {humanise(evidence.confidence)}</strong> — {evidence.detail}{evidence.reference && <> · <a href={evidence.reference} target="_blank" rel="noreferrer">Reviewed source</a></>}</p>)}</details></article>;
+          return <article key={capability.id} className={`potential-capability ${capability.effective_allowed ? "allowed" : ""} ${hasRuntime ? "runnable" : "unavailable"}`}><div className="potential-capability-heading"><span><strong>{capability.display_name}</strong><small>{capability.description}</small></span><div><StateBadge state={hasRuntime ? capability.policy_allowed ? capability.qualification_status : "disallowed" : "runtime-unavailable"} /></div></div><div className="tag-list">{capability.traits.map((trait) => <span className="tag" key={trait}>{humanise(trait)}</span>)}</div>{hasRuntime ? <><p className="capability-reason"><strong>Compatible runtime available.</strong> {capability.policy_allowed ? "Choose its runtime settings and create a local Worker." : "Set it up to allow this capability and choose its runtime settings."}</p><div className="model-actions"><button disabled={openDay || !readyToConfigure || !model.revision} onClick={() => void beginSupportedWorker(model, capability).catch((reason) => setFeedback(messageFrom(reason)))}>{capability.policy_allowed ? "Create Worker" : "Set up Worker"}</button>{capability.policy_allowed && <button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setCapabilityAllowed(model, capability.id, false).catch((reason) => setFeedback(messageFrom(reason)))}>Disallow</button>}</div></> : <><p className="capability-reason"><strong>Runtime implementation required.</strong> This Model’s local metadata recognises the capability, but ModelDeck has no compatible trusted runtime for it.</p><details className="capability-policy"><summary>{capability.policy_allowed ? "Allowed for a future runtime" : "Advanced: allow for a future runtime"}</summary><p>Allowing this records your permission only. It will not create or start a Worker until a compatible trusted runtime is installed.</p><button className="secondary compact-button" disabled={openDay || !model.revision} onClick={() => void setCapabilityAllowed(model, capability.id, !capability.policy_allowed).catch((reason) => setFeedback(messageFrom(reason)))}>{capability.policy_allowed ? "Disallow" : "Allow for future runtime"}</button></details></>}<details><summary>Evidence and provenance</summary>{capability.evidence.map((evidence, index) => <p className="manifest-note" key={`${evidence.source}-${index}`}><strong>{humanise(evidence.kind)} · {humanise(evidence.confidence)}</strong> — {evidence.detail}{evidence.reference && <> · <a href={evidence.reference} target="_blank" rel="noreferrer">Reviewed source</a></>}</p>)}</details></article>;
         }) : <p className="model-stage">No capability can be supported by the available local metadata yet.</p>}</div>
         <ModelWorkerSummary model={model} workers={workers} openDay={openDay} removingWorker={removingWorker} onRemove={removeWorker} />
-        <p className="model-stage">{model.runnable_reason}</p>
+        <p className="model-stage"><strong>Next action:</strong> {model.runnable_reason}</p>
       </ModelCardShell>;
-    })}</div> : <div className="empty-state compact"><h3>No Models match “{query.trim()}”</h3><p>Try a model name, generation family or capability.</p></div>}</section>
+    })}</div> : <div className="empty-state compact"><h3>No Models match these filters</h3><p>Try a different name, capability or status.</p><button className="secondary" onClick={clearFilters}>Clear filters</button></div>}</section>
   </div>;
 }
 

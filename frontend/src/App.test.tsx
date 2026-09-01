@@ -257,10 +257,17 @@ describe("ModelDeck routing profile operator console", () => {
 
     expect(await screen.findByText("Video understanding")).toBeInTheDocument();
     expect(screen.getByText("runtime unavailable")).toBeInTheDocument();
-    expect(screen.getByText(/No Worker is available yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Runtime implementation required/)).toBeInTheDocument();
+    expect(screen.getByText("Missing · runtime implementation required")).toBeInTheDocument();
+    expect(screen.getByText("None configured")).toBeInTheDocument();
     expect(screen.getByText(/Allowed for a future runtime/)).toBeInTheDocument();
     expect(screen.getByText("Evidence and provenance")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disallow" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "runtime-available" } });
+    expect(screen.getByRole("heading", { name: "No Models match these filters" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "runtime-missing" } });
+    expect(screen.getByText("Video understanding")).toBeInTheDocument();
   });
 
   it("sets up a supported Worker directly while leaving unavailable capabilities non-actionable", async () => {
@@ -285,6 +292,9 @@ describe("ModelDeck routing profile operator console", () => {
     await openAdvancedSection("Models");
 
     expect(await screen.findByRole("button", { name: "Set up Worker" })).toBeInTheDocument();
+    expect(screen.getByText(/Compatible runtime available/)).toBeInTheDocument();
+    expect(screen.getByText("Available · SceneChat Gemma 4 ROCm")).toBeInTheDocument();
+    expect(screen.getByText("None configured")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Worker" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up Worker" }));
 
