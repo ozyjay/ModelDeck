@@ -115,6 +115,33 @@ export interface RuntimeTemplate {
   digest: string;
 }
 
+export interface RuntimeInstallation {
+  installation_id: string;
+  display_name: string;
+  integrity_status: "verified" | "missing" | "receipt-missing" | "receipt-invalid" | "modified" | "feature-mismatch" | "inspection-failed";
+  currency_status: "recommended" | "accepted-older" | "accepted-alternative" | "different-unqualified" | "newer-unqualified" | "revoked" | "unknown";
+  start_allowed: boolean;
+  detected: {
+    source_revision: string | null;
+    executable_sha256: string | null;
+    executable_size_bytes: number | null;
+    receipt_sha256: string | null;
+    receipt_version: number | null;
+    backend: string | null;
+    operating_system: string;
+    architecture: string;
+    version_output: string | null;
+  };
+  recommended_source_revision: string;
+  required_features: string[];
+  missing_features: string[];
+  reason_codes: string[];
+  inspected_at: string;
+  implementation_ids: string[];
+  runtime_template_ids: string[];
+  worker_ids: string[];
+}
+
 export interface ModelArtifact { artifact_id: string; kind: "gguf"; format: string; filenames: string[] }
 export interface CapabilityEvidence {
   kind: "detected" | "asserted";

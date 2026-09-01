@@ -732,6 +732,39 @@ async def test_starting_exclusive_worker_stops_existing_exclusive_worker() -> No
 
 
 @pytest.mark.asyncio
+async def test_llama_worker_start_fails_before_process_launch_when_installation_is_untrusted(
+    monkeypatch, tmp_path
+) -> None:
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    profile = base.model_copy(
+        update={
+            "id": "gpt-oss-untrusted-runtime",
+            "preferred_runtime": "llama-vulkan",
+            "runtime_template_id": "gpt-oss-llama-vulkan",
+            "port": free_port(),
+            "settings": {
+                "artifact_path": str(tmp_path / "gpt-oss-120b-MXFP4.gguf"),
+                "execution_preset": "vulkan-full",
+                "context_length": 8192,
+            },
+        }
+    )
+    supervisor = WorkerSupervisor([profile])
+
+    async def reject_installation(*_args, **_kwargs):
+        raise ValueError("Pinned llama.cpp Vulkan runtime failed installation validation: modified")
+
+    monkeypatch.setattr(supervisor_service, "run_in_isolated_thread", reject_installation)
+
+    with pytest.raises(RuntimeError, match="installation validation: modified"):
+        await supervisor.start(profile.id)
+
+    worker = supervisor.workers[profile.id]
+    assert worker.state.value == "failed"
+    assert worker.process is None
+
+
+@pytest.mark.asyncio
 async def test_on_demand_worker_can_run_with_exclusive_worker() -> None:
     base = next(profile for profile in default_model_profiles() if profile.id == "mock-diffusion")
     exclusive_port = free_port()

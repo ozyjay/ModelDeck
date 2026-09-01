@@ -16,6 +16,13 @@ from typing import Any
 
 import httpx
 
+from modeldeck.async_execution import run_in_isolated_thread
+from modeldeck.llama_runtime import (
+    GPT_OSS_LLAMA_REQUIRED_FLAGS,
+    QWEN_LLAMA_REQUIRED_FLAGS,
+    QWEN_MTP_LLAMA_REQUIRED_FLAGS,
+    validate_llama_installation,
+)
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import GenerationFamily, WorkerEvent, WorkerState
 from modeldeck.qwen_candidates import load_candidate
@@ -176,6 +183,13 @@ class WorkerSupervisor:
                 raise RuntimeError(worker.last_error)
 
             try:
+                llama_features = {
+                    "llama-vulkan": GPT_OSS_LLAMA_REQUIRED_FLAGS,
+                    "qwen35-llamacpp-vulkan": QWEN_LLAMA_REQUIRED_FLAGS,
+                    "qwen38-llamacpp-vulkan": QWEN_MTP_LLAMA_REQUIRED_FLAGS,
+                }.get(worker.profile.preferred_runtime)
+                if llama_features is not None:
+                    await run_in_isolated_thread(validate_llama_installation, required_flags=llama_features)
                 launch = build_worker_launch(worker.profile, data_dir=self.data_dir)
             except ValueError as error:
                 worker.last_error = str(error)

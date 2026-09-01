@@ -47,6 +47,7 @@ function responses(configured = false): Record<string, unknown> {
     "/api/catalogue": { models: [], downloads_started: false },
     "/api/protocol-contracts": { contracts: [{ id: "native-ar-trace-v1", display_name: "Native autoregressive trace", generation_family: "autoregressive", required_capabilities: ["top_k_trace"], required_worker_settings: {}, surfaces: ["POST /native/v1/autoregressive/traces"] }] },
     "/api/runtime-templates": { templates: [] },
+    "/api/runtime-installations": { installations: [] },
     "/api/compatibility": { tests: [] },
     "/api/benchmark-history": { points: [], reports_scanned: 0, measurement: "median benchmark throughput" },
   };
@@ -73,6 +74,26 @@ async function openAdvancedSection(name: "Models" | "Workers" | "Routing profile
 describe("ModelDeck routing profile operator console", () => {
   beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("shows exact runtime installation identity and start policy", async () => {
+    const payloads = responses();
+    payloads["/api/runtime-installations"] = { installations: [{
+      installation_id: "llama-cpp-vulkan", display_name: "llama.cpp Vulkan",
+      integrity_status: "modified", currency_status: "recommended", start_allowed: false,
+      detected: { source_revision: "9d77fa17254e1dee4b9e92504c91611a60b1359f", executable_sha256: "a".repeat(64), executable_size_bytes: 42, receipt_sha256: "b".repeat(64), receipt_version: 1, backend: "Vulkan", operating_system: "linux", architecture: "x86_64", version_output: "test" },
+      recommended_source_revision: "9d77fa17254e1dee4b9e92504c91611a60b1359f",
+      required_features: ["--model"], missing_features: [], reason_codes: ["executable_checksum_mismatch"],
+      inspected_at: "2026-09-01T00:00:00Z", implementation_ids: ["llama-vulkan"],
+      runtime_template_ids: ["gpt-oss-llama-vulkan"], worker_ids: [],
+    }] };
+    mockFetch(payloads);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("link", { name: "Advanced" }));
+    expect(await screen.findByText("llama.cpp Vulkan")).toBeInTheDocument();
+    expect(screen.getByText("modified · recommended")).toBeInTheDocument();
+    expect(screen.getByText("0 of 1 ready to start")).toBeInTheDocument();
+  });
 
   it("starts with capability-oriented onboarding and no mock controls", async () => {
     const fetchMock = mockFetch(responses());

@@ -6,7 +6,7 @@ import type {
   BenchmarkHistory, BenchmarkThroughputPoint, CapabilityPublicationPreview, CapabilitySetup, CapabilitySetupPreview, CapabilitySetupSelection,
   CompatibilityTest, GatewayStatus, HardwareProbe, LiveCapability, LiveState, ManagementHealth, ModelEntry, PotentialCapability,
   ProtocolContract, RoutingProfile, RoutingProfileRecord,
-  RoutingProfileRevision, RoutingProfileValidation, RuntimeTemplate, Telemetry, ThermalStatus,
+  RoutingProfileRevision, RoutingProfileValidation, RuntimeInstallation, RuntimeTemplate, Telemetry, ThermalStatus,
   Worker, WorkerLog,
 } from "./types";
 
@@ -129,6 +129,7 @@ export default function App() {
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [contracts, setContracts] = useState<ProtocolContract[]>([]);
   const [templates, setTemplates] = useState<RuntimeTemplate[]>([]);
+  const [runtimeInstallations, setRuntimeInstallations] = useState<RuntimeInstallation[]>([]);
   const [compatibility, setCompatibility] = useState<CompatibilityTest[]>([]);
   const [benchmarkHistory, setBenchmarkHistory] = useState<BenchmarkHistory>({ points: [], reports_scanned: 0, measurement: "median benchmark throughput" });
   const [loading, setLoading] = useState(true);
@@ -156,7 +157,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     const [nextHealth, nextGateway, nextHardware, nextTelemetry, nextThermal, nextLive, nextWorkers,
-      nextProfiles, catalogue, contractResponse, templateResponse, tests, history] = await Promise.all([
+      nextProfiles, catalogue, contractResponse, templateResponse, installationResponse, tests, history] = await Promise.all([
       getJson<ManagementHealth>("/api/health"),
       getJson<GatewayStatus>("/api/gateway/status"),
       getJson<HardwareProbe>("/api/hardware"),
@@ -168,6 +169,7 @@ export default function App() {
       getJson<{ models: ModelEntry[] }>("/api/catalogue"),
       getJson<{ contracts: ProtocolContract[] }>("/api/protocol-contracts"),
       getJson<{ templates: RuntimeTemplate[] }>("/api/runtime-templates"),
+      getJson<{ installations: RuntimeInstallation[] }>("/api/runtime-installations"),
       getJson<{ tests: CompatibilityTest[] }>("/api/compatibility"),
       getJson<BenchmarkHistory>("/api/benchmark-history"),
     ]);
@@ -175,6 +177,7 @@ export default function App() {
     setTelemetry(nextTelemetry); setThermal(nextThermal); setLive(nextLive); setWorkers(nextWorkers);
     setProfiles(nextProfiles.profiles); setModels(catalogue.models);
     setContracts(contractResponse.contracts); setTemplates(templateResponse.templates);
+    setRuntimeInstallations(installationResponse.installations);
     setCompatibility(tests.tests);
     setBenchmarkHistory(history);
   }, []);
@@ -270,7 +273,7 @@ export default function App() {
           : view === "profiles" ? <RoutingProfilesView profiles={profiles} workers={workers} contracts={contracts} openDay={health.configuration_locked} refresh={refresh} />
           : view === "workers" ? <WorkersView workers={workers} models={models} templates={templates} thermal={thermal} operationErrors={workerOperationErrors} pending={pending} operate={operate} refresh={refresh} openDay={health.configuration_locked} />
           : view === "models" ? <ModelsView models={models} workers={workers} templates={templates} refresh={refresh} openDay={health.configuration_locked} />
-          : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} compatibility={compatibility} workers={workers} benchmarkHistory={benchmarkHistory} />}
+          : <AdvancedView hardware={hardware} telemetry={telemetry} thermal={thermal} contracts={contracts} templates={templates} runtimeInstallations={runtimeInstallations} compatibility={compatibility} workers={workers} benchmarkHistory={benchmarkHistory} />}
       </main>
     </div>
     </CollapseContext.Provider>
@@ -916,12 +919,25 @@ function ModelsView({ models, workers, templates, refresh, openDay }: { models: 
   </div>;
 }
 
-function AdvancedView({ hardware, telemetry, thermal, contracts, templates, compatibility, workers, benchmarkHistory }: { hardware: HardwareProbe; telemetry: Telemetry; thermal: ThermalStatus; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; compatibility: CompatibilityTest[]; workers: Worker[]; benchmarkHistory: BenchmarkHistory }) {
+function AdvancedView({ hardware, telemetry, thermal, contracts, templates, runtimeInstallations, compatibility, workers, benchmarkHistory }: { hardware: HardwareProbe; telemetry: Telemetry; thermal: ThermalStatus; contracts: ProtocolContract[]; templates: RuntimeTemplate[]; runtimeInstallations: RuntimeInstallation[]; compatibility: CompatibilityTest[]; workers: Worker[]; benchmarkHistory: BenchmarkHistory }) {
   return <div className="view-stack">
     <ThroughputHistory history={benchmarkHistory} />
     <section className="panel"><PanelHeading title="Detected hardware" detail="Reported, never assumed" /><DefinitionList rows={[["Configured target", `${hardware.configured.gpu} (${hardware.configured.gpu_architecture})`], ["Detected Fedora", hardware.detected.fedora_release ?? "Not detected"], ["Kernel", hardware.detected.kernel], ["ROCm packages", hardware.detected.rocm_packages.join(", ") || "Not detected"], ["Available memory", formatBytes(telemetry.memory.available_bytes)]]} /></section>
     <section className="panel"><PanelHeading title="Thermal workload policy" detail={thermal.enabled ? "ModelDeck self-throttling active" : "Disabled by configuration"} /><DefinitionList rows={[["ModelDeck thermal state", humanise(thermal.state)], ["APU temperature", thermal.temperature_c == null ? "Unavailable" : `${thermal.temperature_c.toFixed(1)}°C`], ["Control sensor", thermal.sensor_id ?? "Awaiting selection"], ["Heavy concurrency", `${thermal.active_heavy_concurrency ?? "Unknown"} active · limit ${thermal.heavy_concurrency_limit}`], ["Background benchmarks", thermal.background_paused ? "Paused" : "Permitted"], ["Model loading", thermal.model_loading_allowed ? "Permitted" : "Blocked"], ["Scene refresh interval", `${thermal.scenechat_degradation.minimum_frame_interval_seconds} seconds`], ["Reason", humanise(thermal.reason_code)], ["Host power policy", thermal.host_power_policy.service_active === true ? "Active · external read-only" : "Unavailable or inactive · external read-only"], ["TuneD profile", thermal.host_power_policy.tuned_profile ?? "Unavailable"]]} /></section>
-    <div className="two-column"><section className="panel"><PanelHeading title="Trusted protocol contracts" detail={`${contracts.length} code-owned`} /><ul className="status-list">{contracts.map((contract) => <li key={contract.id}><StatusDot state="good" /><span><strong>{contract.display_name}</strong><small>{contract.id} · {contract.surfaces.join(", ")}</small></span></li>)}</ul></section><section className="panel"><PanelHeading title="Trusted runtimes" detail={`${templates.length} installed`} /><ul className="status-list">{templates.map((template) => <li key={template.id}><StatusDot state="good" /><span><strong>{template.display_name}</strong><small>{template.id} · {template.package_version}</small></span></li>)}</ul></section></div>
+    <div className="two-column"><section className="panel"><PanelHeading title="Trusted protocol contracts" detail={`${contracts.length} code-owned`} /><ul className="status-list">{contracts.map((contract) => <li key={contract.id}><StatusDot state="good" /><span><strong>{contract.display_name}</strong><small>{contract.id} · {contract.surfaces.join(", ")}</small></span></li>)}</ul></section><section className="panel"><PanelHeading title="Trusted runtime templates" detail={`${templates.length} registered`} /><ul className="status-list">{templates.map((template) => <li key={template.id}><StatusDot state="good" /><span><strong>{template.display_name}</strong><small>{template.id} · {template.package_version}</small></span></li>)}</ul></section></div>
+    <section className="panel"><PanelHeading title="Runtime installations" detail={`${runtimeInstallations.filter((installation) => installation.start_allowed).length} of ${runtimeInstallations.length} ready to start`} /><div className="evidence-list">{runtimeInstallations.map((installation) => <details className="evidence-row" key={installation.installation_id}><summary><span><StatusDot state={installation.start_allowed ? "good" : installation.integrity_status === "missing" ? "neutral" : "bad"} /><strong>{installation.display_name}</strong><small>{humanise(installation.integrity_status)} · {humanise(installation.currency_status)}</small></span><code>{installation.detected.source_revision?.slice(0, 12) ?? "not detected"}</code></summary><DefinitionList rows={[
+      ["Start policy", installation.start_allowed ? "Allowed" : "Blocked"],
+      ["Detected revision", installation.detected.source_revision ?? "Unavailable"],
+      ["Recommended revision", installation.recommended_source_revision],
+      ["Executable SHA-256", installation.detected.executable_sha256 ?? "Unavailable"],
+      ["Build receipt SHA-256", installation.detected.receipt_sha256 ?? "Unavailable"],
+      ["Backend", installation.detected.backend ?? "Unavailable"],
+      ["Platform", `${installation.detected.operating_system} · ${installation.detected.architecture}`],
+      ["Consumers", `${installation.runtime_template_ids.length} templates · ${installation.worker_ids.length} Workers`],
+      ["Missing features", installation.missing_features.join(", ") || "None"],
+      ["Reason codes", installation.reason_codes.map(humanise).join(", ") || "None"],
+      ["Inspected", new Date(installation.inspected_at).toLocaleString()],
+    ]} /></details>)}</div></section>
     <section className="panel"><PanelHeading title="Compatibility evidence" detail={`${compatibility.length} records`} /><div className="evidence-list">{compatibility.length ? compatibility.map((test) => <details className="evidence-row" key={test.id}><summary><span><StateBadge state={test.result} /><strong>{String(test.evidence.model_id ?? "Unknown Model")}</strong><small>{new Date(test.tested_at).toLocaleString()}</small></span><code>{test.fingerprint.slice(0, 12)}</code></summary><DefinitionList rows={Object.entries(test.evidence).slice(0, 16).map(([key, value]) => [humanise(key), String(value ?? "—")])} /></details>) : <p className="muted">Qualify a Worker capability to record evidence.</p>}</div></section>
     <LogsPanel workers={workers} />
   </div>;

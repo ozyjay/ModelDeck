@@ -29,6 +29,7 @@ from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
 from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
+from modeldeck.llama_runtime import ALL_LLAMA_REQUIRED_FLAGS, inspect_llama_installation
 from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
@@ -469,6 +470,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
             "installation": "local-admin-only",
         }
+
+    @app.get("/api/runtime-installations")
+    async def runtime_installations(request: Request):
+        llama_implementations = {
+            "llama-vulkan",
+            "qwen35-llamacpp-vulkan",
+            "qwen38-llamacpp-vulkan",
+        }
+        installation = await run_in_isolated_thread(
+            inspect_llama_installation, required_flags=ALL_LLAMA_REQUIRED_FLAGS
+        )
+        payload = installation.model_dump(mode="json")
+        payload.update(
+            {
+                "implementation_ids": sorted(llama_implementations),
+                "runtime_template_ids": sorted(
+                    registration.template.id
+                    for registration in request.app.state.runtime_registrations.values()
+                    if registration.template.runtime in llama_implementations
+                ),
+                "worker_ids": sorted(
+                    worker.id
+                    for worker in request.app.state.worker_definitions.values()
+                    if worker.runtime in llama_implementations and not worker.archived
+                ),
+            }
+        )
+        return {"installations": [payload]}
 
     @app.get("/api/compatibility")
     async def compatibility(request: Request):

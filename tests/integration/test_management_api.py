@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -29,6 +30,46 @@ def worker_definition(*, name: str = "Qwen trace", port: int = 8630) -> WorkerDe
         capabilities={"chat": True, "completions": True, "top_k_trace": True},
         settings={},
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_installations_reports_detected_identity_and_consumers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "inspect_llama_installation",
+        lambda **_: SimpleNamespace(
+            model_dump=lambda **__: {
+                "installation_id": "llama-cpp-vulkan",
+                "display_name": "llama.cpp Vulkan",
+                "integrity_status": "verified",
+                "currency_status": "recommended",
+                "start_allowed": True,
+                "detected": {"source_revision": "9" * 40},
+                "recommended_source_revision": "9" * 40,
+                "required_features": ["--model"],
+                "missing_features": [],
+                "reason_codes": [],
+                "inspected_at": "2026-09-01T00:00:00Z",
+            }
+        ),
+    )
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/runtime-installations")
+
+    assert response.status_code == 200
+    installation = response.json()["installations"][0]
+    assert installation["integrity_status"] == "verified"
+    assert installation["start_allowed"] is True
+    assert "gpt-oss-llama-vulkan" in installation["runtime_template_ids"]
+    assert installation["implementation_ids"] == [
+        "llama-vulkan",
+        "qwen35-llamacpp-vulkan",
+        "qwen38-llamacpp-vulkan",
+    ]
 
 
 def test_allowlisted_wayfinder_worker_normalises_persisted_cache_capability() -> None:

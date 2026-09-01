@@ -1,9 +1,23 @@
 # Trusted runtime currency and qualification
 
-**Status:** architecture proposal; not implemented  
+**Status:** Phase 1 implemented; Phases 2–4 remain proposed
 **Recommendation:** implement local runtime inventory and exact identity reporting before adding
 any update workflow  
 **Proposed:** 1 September 2026
+
+## Implementation status
+
+Phase 1 is implemented for the single managed llama.cpp Vulkan installation. ModelDeck now:
+
+- inspects the fixed executable and build receipt without loading a Model;
+- reports integrity, trust currency, exact hashes, required features and consumer identities at
+  `GET /api/runtime-installations` and in the Advanced console;
+- validates the same installation immediately before GPT-OSS or Qwen llama.cpp Worker launch and
+  blocks missing, modified, unaccepted or feature-incompatible builds; and
+- includes the executable and receipt identities in llama.cpp Worker configuration fingerprints.
+
+This implementation does not claim per-Worker qualification currency, inspect Python
+environments, contact upstream services or perform upgrades. Those remain the later phases below.
 
 ## Executive recommendation
 
@@ -59,13 +73,9 @@ ModelDeck already has useful pieces of this design:
 - Qwen llama.cpp startup validates the receipt and re-hashes `llama-server`; and
 - failed evidence is retained rather than overwritten by a later result.
 
-The behaviour is not yet uniform. In particular, the GPT-OSS llama.cpp path verifies a fixed
-executable location and fixed arguments but does not currently bind startup to the build receipt
-and executable digest. The management API lists installed Runtime Templates, not detected Runtime
-installations, and the console cannot explain whether one binary is exact, changed, unqualified or
-merely different from a recommendation.
-
-This proposal extends those foundations. It does not describe a current product capability.
+Phase 1 makes this behaviour uniform for the managed llama.cpp installation. Other managed and
+external Runtime implementations do not yet have an equivalent installation inventory, and
+qualification currency is not yet resolved against each affected Worker and capability.
 
 ## 3. Terminology
 
@@ -316,7 +326,7 @@ acceptable.
 
 ## 11. Acceptance criteria
 
-The proposal is implemented only when tests demonstrate that:
+The complete multi-phase proposal is implemented only when tests demonstrate that:
 
 - exact receipt and executable identities are reported without loading a Model;
 - a modified binary, missing receipt and missing feature are distinguishable;

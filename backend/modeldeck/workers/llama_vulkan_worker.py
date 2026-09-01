@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -19,8 +20,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.llama_runtime import (
+    GPT_OSS_LLAMA_REQUIRED_FLAGS,
+    ValidatedLlamaInstallation,
     ValidatedQwenRuntime,
     configuration_fingerprint,
+    validate_llama_installation,
     validate_qwen_runtime,
 )
 from modeldeck.protocol import GenerationFamily
@@ -65,10 +69,27 @@ def fixed_llama_server() -> Path:
     return Path(".runtime-tools/llama.cpp/bin/llama-server").resolve()
 
 
-def llama_command(*, model: Path, port: int, context_length: int, preset: str) -> list[str]:
+def gpt_oss_configuration_fingerprint(
+    args: argparse.Namespace, installation: ValidatedLlamaInstallation
+) -> str:
+    payload = {
+        "model_id": args.model_id,
+        "model_revision": args.revision,
+        "context_length": args.context_length,
+        "execution_preset": args.execution_preset,
+        "llama_cpp_commit": installation.receipt.commit,
+        "llama_server_sha256": installation.executable_sha256,
+        "llama_build_receipt_sha256": installation.receipt_sha256,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def llama_command(
+    *, model: Path, port: int, context_length: int, preset: str, executable: Path | None = None
+) -> list[str]:
     if preset != "vulkan-full":
         raise ValueError("Unknown allowlisted GPT-OSS execution preset")
-    executable = fixed_llama_server()
+    executable = executable or fixed_llama_server()
     if not executable.is_file():
         raise ValueError(
             "Pinned llama.cpp Vulkan runtime is missing; run "
@@ -451,6 +472,7 @@ class LlamaProcess:
         self.restart_lock = asyncio.Lock()
         self.evidence = LlamaEvidence()
         self.qwen_runtime: ValidatedQwenRuntime | None = None
+        self.llama_installation: ValidatedLlamaInstallation | None = None
         self.memory_task: asyncio.Task[None] | None = None
         self.peak_gtt_used_bytes: int | None = None
         self.started = time.monotonic()
@@ -478,11 +500,13 @@ class LlamaProcess:
                 thinking_mode=self.args.thinking_mode,
             )
         else:
+            self.llama_installation = validate_llama_installation(required_flags=GPT_OSS_LLAMA_REQUIRED_FLAGS)
             command = llama_command(
                 model=self.artifact_path,
                 port=self.internal_port,
                 context_length=self.args.context_length,
                 preset=self.args.execution_preset,
+                executable=self.llama_installation.executable,
             )
         environment = dict(os.environ)
         environment["GGML_VK_VISIBLE_DEVICES"] = "0"
@@ -631,6 +655,21 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         ready = await runtime.ready()
         failure = runtime.child_failure()
         manifest = runtime.qwen_runtime.manifest if runtime.qwen_runtime else None
+        installation_identity = (
+            {
+                "llama_cpp_commit": runtime.qwen_runtime.source_revision,
+                "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
+                "llama_build_receipt_sha256": runtime.qwen_runtime.receipt_sha256,
+            }
+            if runtime.qwen_runtime
+            else {
+                "llama_cpp_commit": runtime.llama_installation.receipt.commit,
+                "llama_server_sha256": runtime.llama_installation.executable_sha256,
+                "llama_build_receipt_sha256": runtime.llama_installation.receipt_sha256,
+            }
+            if getattr(runtime, "llama_installation", None)
+            else {}
+        )
         return {
             "protocol_version": "1",
             "worker_id": args.worker_id,
@@ -643,6 +682,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "device_name": "AMD Radeon 8060S (Vulkan)" if manifest else "AMD Vulkan",
             "rocm_version": None,
             "ready": ready,
+            **installation_identity,
             **(failure or {}),
             **(
                 {
@@ -665,6 +705,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     ),
                 }
                 if manifest
+                else {
+                    "configuration_fingerprint": gpt_oss_configuration_fingerprint(
+                        args, runtime.llama_installation
+                    )
+                }
+                if getattr(runtime, "llama_installation", None)
                 else {}
             ),
         }
@@ -705,6 +751,18 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "quantization": manifest.quantisation if manifest else "mxfp4",
             **(
                 {
+                    "llama_cpp_commit": runtime.llama_installation.receipt.commit,
+                    "llama_server_sha256": runtime.llama_installation.executable_sha256,
+                    "llama_build_receipt_sha256": runtime.llama_installation.receipt_sha256,
+                    "configuration_fingerprint": gpt_oss_configuration_fingerprint(
+                        args, runtime.llama_installation
+                    ),
+                }
+                if runtime.llama_installation
+                else {}
+            ),
+            **(
+                {
                     "original_model_id": manifest.original_model_id,
                     "original_model_revision": manifest.original_model_revision,
                     "artefact_model_id": manifest.artefact_model_id,
@@ -714,6 +772,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     **({"mtp_model_sha256": manifest.mtp_model.sha256} if manifest.mtp_model else {}),
                     "llama_cpp_commit": manifest.llama_cpp_commit,
                     "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
+                    "llama_build_receipt_sha256": runtime.qwen_runtime.receipt_sha256,
                     "backend": manifest.backend,
                     "context_length": manifest.context_length,
                     "cache_type_k": manifest.cache_type_k,
