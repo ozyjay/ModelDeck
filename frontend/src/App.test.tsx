@@ -272,6 +272,19 @@ describe("ModelDeck routing profile operator console", () => {
 
   it("sets up a supported Worker directly while leaving unavailable capabilities non-actionable", async () => {
     const payloads = responses();
+    const gemmaWorker: Worker = {
+      ...worker,
+      id: "f7fd3546-7a2e-47bd-b20f-5ca861ebd466",
+      name: "Gemma 4 12B General Chat Worker",
+      model_id: "google/gemma-4-E2B-it",
+      revision: "revision-1",
+      generation_family: "vision-language",
+      runtime: "gemma4-general-chat-transformers-rocm",
+      runtime_template_id: "gemma4-general-chat-rocm",
+      capabilities: { chat: true, image_input: true },
+      settings: { visual_token_budget: 280 },
+    };
+    payloads["/api/workers"] = [gemmaWorker];
     payloads["/api/catalogue"] = { downloads_started: false, models: [{
       model_id: "google/gemma-4-E2B-it", revision: "revision-1", cache_location: "/cache/model",
       snapshot_location: "/cache/model/snapshots/revision-1", physical_size_bytes: 1,
@@ -294,7 +307,8 @@ describe("ModelDeck routing profile operator console", () => {
     expect(await screen.findByRole("button", { name: "Set up Worker" })).toBeInTheDocument();
     expect(screen.getByText(/Compatible runtime available/)).toBeInTheDocument();
     expect(screen.getByText("Available · SceneChat Gemma 4 ROCm")).toBeInTheDocument();
-    expect(screen.getByText("None configured")).toBeInTheDocument();
+    expect(screen.getByText("1 configured · stopped")).toBeInTheDocument();
+    expect(screen.queryByText(/280 visual tokens/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Worker" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up Worker" }));
 
