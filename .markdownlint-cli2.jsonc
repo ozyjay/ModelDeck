@@ -1,0 +1,13 @@
+{
+  "config": {
+    "MD013": false,
+    "MD060": false
+  },
+  "ignores": [
+    ".runtime-tools/**",
+    ".venv/**",
+    ".venv-rocm72/**",
+    "frontend/node_modules/**",
+    "var/**"
+  ]
+}
