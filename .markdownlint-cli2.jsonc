@@ -6,7 +6,7 @@
   "ignores": [
     ".runtime-tools/**",
     ".venv/**",
-    ".venv-rocm72/**",
+    ".venv-*/**",
     "frontend/node_modules/**",
     "var/**"
   ]
