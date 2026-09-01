@@ -61,4 +61,3 @@ the available local project roots are recorded as unavailable rather than guesse
    ModelDeck diffusion API is job/frame based.
 5. Some demos may allow model library constructors to acquire missing weights. ModelDeck
    Open Day mode must enforce local files only and will never start a download.
-
