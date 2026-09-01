@@ -168,6 +168,13 @@ nav { display: grid; gap: 0.3rem; }
 .event-heading p:last-child { color: var(--muted); }
 .event-actions { margin-bottom: 1rem; }
 .active-gateway-routes { border-color: #315744; }
+.live-visibility-actions { display: flex; gap: 0.4rem; }
+.live-capability-visibility { margin: 0 0 0.85rem; padding: 0.75rem 0.8rem; border: 1px solid var(--line-soft); border-radius: 0.6rem; background: #0c141e; }
+.live-capability-visibility summary { font-weight: 700; }
+.capability-visibility-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.5rem; margin-top: 0.65rem; }
+.capability-visibility-list label { display: flex; align-items: center; gap: 0.55rem; padding: 0.55rem 0.65rem; border: 1px solid var(--line-soft); border-radius: 0.5rem; color: var(--text); text-transform: none; }
+.capability-visibility-list label span, .capability-visibility-list label strong, .capability-visibility-list label small { display: block; min-width: 0; }
+.capability-visibility-list label small { margin-top: 0.1rem; color: var(--muted); overflow-wrap: anywhere; }
 .active-route-table-wrap { overflow-x: auto; }
 .active-route-table { width: 100%; min-width: 960px; border-collapse: collapse; }
 .active-route-table th { padding: 0.55rem 0.7rem; color: var(--muted); font-size: 0.72rem; text-align: left; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); }

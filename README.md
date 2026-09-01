@@ -101,7 +101,8 @@ docker compose exec dashboard sprintbot-inference-check
 
 The operator console can collapse individual sections or every section at once. These
 display preferences are retained in local browser storage and do not change ModelDeck
-configuration.
+configuration. The **Live** tab can also show or hide individual published capabilities;
+this changes presentation only and never changes the published routing snapshot.
 
 Use **Models** to create a Worker from a recognised cached revision. Use **Routing profiles** to
 define published capabilities, assign primary and ordered backup Workers, validate the

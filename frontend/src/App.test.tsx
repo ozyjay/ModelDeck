@@ -40,7 +40,7 @@ function responses(configured = false): Record<string, unknown> {
     "/api/live": configured ? {
       active_profile: { id: profile.definition.id, name: profile.definition.name, revision: 1 },
       active_profiles: [{ id: profile.definition.id, name: profile.definition.name, revision: 1 }],
-      capabilities: [{ ...profile.definition.capabilities[0], workers, effective_worker: null, ready: false }],
+      capabilities: [{ ...profile.definition.capabilities[0], profile_id: profile.definition.id, workers, effective_worker: null, ready: false }],
     } : { active_profile: null, active_profiles: [], capabilities: [] },
     "/api/workers": workers,
     "/api/routing-profiles": { profiles: configured ? [profile] : [] },
@@ -135,6 +135,27 @@ describe("ModelDeck routing profile operator console", () => {
     expect(within(status).getByText("Not serving")).toBeInTheDocument();
     expect(screen.getByLabelText("Primary Worker Qwen token trace")).toBeInTheDocument();
     expect(screen.getByText("No ready Worker")).toHaveClass("unavailable");
+  });
+
+  it("hides published capabilities locally without changing routing state", async () => {
+    mockFetch(responses(true));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Live" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Hide capability Token trace" }));
+
+    expect(screen.queryByRole("status", { name: "Token trace capability status" })).not.toBeInTheDocument();
+    expect(screen.getByText("All published capabilities are hidden in this browser. Use Capability visibility or Show all to restore them.")).toBeInTheDocument();
+    expect(screen.getByText("0 of 1 shown · 1 published")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("modeldeck-live-capability-visibility-v1") ?? "[]")).toEqual([
+      `${profile.definition.id}:${profile.definition.capabilities[0].id}`,
+    ]);
+
+    fireEvent.click(screen.getByText("Capability visibility · 0 shown"));
+    const visibility = screen.getByRole("checkbox", { name: /Token trace/ });
+    expect(visibility).not.toBeChecked();
+    fireEvent.click(visibility);
+    expect(await screen.findByRole("status", { name: "Token trace capability status" })).toBeInTheDocument();
   });
 
   it("starts primary and backup Workers directly from the Live tab", async () => {

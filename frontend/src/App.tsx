@@ -29,6 +29,7 @@ interface CollapseControls {
 const COLLAPSE_STORAGE_KEY = "modeldeck-collapse-preferences-v1";
 const WORKER_LIBRARY_STORAGE_KEY = "modeldeck-worker-library-preferences-v1";
 const MODEL_LIBRARY_STORAGE_KEY = "modeldeck-model-library-preferences-v1";
+const LIVE_CAPABILITY_VISIBILITY_STORAGE_KEY = "modeldeck-live-capability-visibility-v1";
 const CollapseContext = createContext<CollapseControls | null>(null);
 
 interface WorkerLibraryPreferences { query: string; state: string; runtime: string; sort: WorkerSort }
@@ -55,6 +56,19 @@ function loadWorkerLibraryPreferences(): WorkerLibraryPreferences {
     runtime: typeof stored.runtime === "string" ? stored.runtime : "",
     sort: WORKER_SORTS.includes(stored.sort as WorkerSort) ? stored.sort as WorkerSort : "name-asc",
   };
+}
+
+function loadHiddenLiveCapabilities(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(LIVE_CAPABILITY_VISIBILITY_STORAGE_KEY) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function liveCapabilityVisibilityKey(capability: LiveCapability): string {
+  return `${capability.profile_id ?? "unknown-profile"}:${capability.id}`;
 }
 
 function loadModelLibraryPreferences(): ModelLibraryPreferences {
@@ -430,6 +444,33 @@ function LiveView({ live, workers, models, thermal, operate, pending, refresh }:
 }) {
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
   const [smokingRoute, setSmokingRoute] = useState<string | null>(null);
+  const [hiddenCapabilities, setHiddenCapabilities] = useState<Set<string>>(loadHiddenLiveCapabilities);
+  const capabilityKeys = useMemo(() => live.capabilities.map(liveCapabilityVisibilityKey), [live.capabilities]);
+  const visibleCapabilities = useMemo(
+    () => live.capabilities.filter((capability) => !hiddenCapabilities.has(liveCapabilityVisibilityKey(capability))),
+    [hiddenCapabilities, live.capabilities],
+  );
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LIVE_CAPABILITY_VISIBILITY_STORAGE_KEY, JSON.stringify([...hiddenCapabilities].sort()));
+    } catch {
+      console.warn("Live capability visibility preferences could not be saved locally.");
+    }
+  }, [hiddenCapabilities]);
+  const setCapabilityVisible = (capability: LiveCapability, visible: boolean) => {
+    const key = liveCapabilityVisibilityKey(capability);
+    setHiddenCapabilities((current) => {
+      const next = new Set(current);
+      if (visible) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const showAllCapabilities = () => setHiddenCapabilities((current) => {
+    const next = new Set(current);
+    for (const key of capabilityKeys) next.delete(key);
+    return next;
+  });
+  const hideAllCapabilities = () => setHiddenCapabilities((current) => new Set([...current, ...capabilityKeys]));
   const smokeCapability = async (capability: LiveCapability) => {
     if (!capability.profile_id) return;
     setSmokingRoute(capability.id); setRouteFeedback(null);
@@ -450,17 +491,17 @@ function LiveView({ live, workers, models, thermal, operate, pending, refresh }:
   );
   return <div className="view-stack">
     <section className="hero-panel"><div><p className="eyebrow">Published Routing Profiles · {live.active_profiles.length} active</p><h2>{live.active_profiles.map((profile) => `${profile.name} · revision ${profile.revision}`).join(" · ")}</h2><p>Publishing controls routing only. Worker processes remain under explicit operator control.</p></div><div className="hero-status"><StatusDot state={live.capabilities.every((capability) => capability.ready) ? "good" : "warn"} /><span>{live.capabilities.filter((capability) => capability.ready).length} of {live.capabilities.length} capabilities ready</span></div></section>
-    <CollapsiblePanel sectionId="live-capabilities" title="Live capabilities" detail={`${live.capabilities.length} published`} className="table-panel">
+    <CollapsiblePanel sectionId="live-capabilities" title="Live capabilities" detail={`${visibleCapabilities.length} of ${live.capabilities.length} shown · ${live.capabilities.length} published`} className="table-panel" accessory={<div className="live-visibility-actions"><button className="secondary compact-button" disabled={!visibleCapabilities.length} onClick={hideAllCapabilities}>Hide all</button><button className="secondary compact-button" disabled={visibleCapabilities.length === live.capabilities.length} onClick={showAllCapabilities}>Show all</button></div>}>
       {routeFeedback && <div className="configuration-feedback">{routeFeedback}</div>}
-      {live.capabilities.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Published capability</th><th>Capability status</th><th>Protocol</th><th>Worker order and control</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
-        {live.capabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={capability.id}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code><small className="tool-calling-state">Tool calling: {!capability.tool_calling_enabled ? "not enabled" : capability.tool_calling?.supported ? "verified" : capability.tool_calling?.rehearsed ? `failed (${capability.tool_calling.failure_code ?? "probe"})` : "not rehearsed"}</small></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => {
+      {live.capabilities.length ? <><details className="live-capability-visibility"><summary>Capability visibility · {visibleCapabilities.length} shown</summary><p className="manifest-note">This browser-only preference does not change published routing or create a Routing Profile draft.</p><div className="capability-visibility-list">{live.capabilities.map((capability) => <label key={liveCapabilityVisibilityKey(capability)}><input type="checkbox" checked={!hiddenCapabilities.has(liveCapabilityVisibilityKey(capability))} onChange={(event) => setCapabilityVisible(capability, event.target.checked)} /><span><strong>{capability.display_name}</strong><small>{capability.public_name}</small></span></label>)}</div></details>{visibleCapabilities.length ? <div className="active-route-table-wrap"><table className="active-route-table"><thead><tr><th>Published capability</th><th>Capability status</th><th>Protocol</th><th>Worker order and control</th><th>Effective Worker</th><th>Actions</th></tr></thead><tbody>
+        {visibleCapabilities.map((capability) => <tr className={capability.ready ? "route-ready" : "route-unavailable"} key={liveCapabilityVisibilityKey(capability)}><td><strong>{capability.display_name}</strong><code>{capability.public_name}</code><small className="tool-calling-state">Tool calling: {!capability.tool_calling_enabled ? "not enabled" : capability.tool_calling?.supported ? "verified" : capability.tool_calling?.rehearsed ? `failed (${capability.tool_calling.failure_code ?? "probe"})` : "not rehearsed"}</small></td><td><div className={`route-readiness ${capability.ready ? "ready" : "unavailable"}`} role="status" aria-label={`${capability.display_name} capability status`}><StatusDot state={capability.ready ? "good" : "warn"} /><span><strong>{capability.ready ? "Ready" : "Not serving"}</strong><small>{capability.ready ? "Accepting requests" : "Start a Worker"}</small></span></div></td><td>{capability.protocol_contract}</td><td><div className="active-worker-chain">{capability.workers.map((worker, index) => {
           const order = index === 0 ? "Primary" : `Backup ${index}`;
           const workerPending = workerOperationPending(pending, worker.id);
           const canStart = ["stopped", "failed"].includes(worker.state);
           const canStop = !["stopped", "stopping", "archived"].includes(worker.state);
           return <div className="active-worker-item" aria-label={`${order} Worker ${worker.name}`} key={worker.id}><span><small>{order}</small><strong>{worker.name}</strong></span><div className="active-worker-controls"><StateBadge state={worker.state} />{canStart ? <button className="compact-button" disabled={workerPending || !thermal.model_loading_allowed} title={thermal.model_loading_allowed ? `Start ${worker.name}` : thermalLoadingNotice(thermal)} aria-label={`Start Worker ${worker.name}`} onClick={() => void operate(worker, "start")}>{pending.has(`${worker.id}:start`) ? "Starting…" : "Start"}</button> : <button className="secondary compact-button" disabled={workerPending || !canStop} aria-label={`Stop Worker ${worker.name}`} onClick={() => void operate(worker, "stop")}>{pending.has(`${worker.id}:stop`) ? "Stopping…" : "Stop"}</button>}</div></div>;
-        })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td><div className="button-row"><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button></div></td></tr>)}
-      </tbody></table></div> : <p className="muted">This Routing Profile publishes no capabilities.</p>}
+        })}</div></td><td className={capability.effective_worker ? "effective-worker" : "effective-worker unavailable"}>{capability.effective_worker?.name ?? "No ready Worker"}</td><td><div className="button-row"><button className="secondary" disabled={smokingRoute !== null || !capability.ready} onClick={() => void smokeCapability(capability)}>Rehearse capability</button><button className="secondary" aria-label={`Hide capability ${capability.display_name}`} onClick={() => setCapabilityVisible(capability, false)}>Hide</button></div></td></tr>)}
+      </tbody></table></div> : <p className="muted">All published capabilities are hidden in this browser. Use Capability visibility or Show all to restore them.</p>}</> : <p className="muted">The published Routing Profiles contain no capabilities.</p>}
     </CollapsiblePanel>
   </div>;
 }
