@@ -154,8 +154,10 @@ nav { display: grid; gap: 0.3rem; }
 .route-backup-actions { display: grid; gap: 0.65rem; }
 .event-layout { display: grid; grid-template-columns: minmax(240px, 0.32fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
 .event-list { display: grid; gap: 0.65rem; position: sticky; top: 1rem; }
-.event-select { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; width: 100%; padding: 0.75rem; border: 1px solid var(--line-soft); background: #0e1621; text-align: left; }
+.event-select { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; width: 100%; padding: 0.75rem; border: 1px solid var(--line-soft); background: #0e1621; color: var(--text); text-align: left; }
+.event-select:hover:not(:disabled) { background: #172433; }
 .event-select.active { border-color: #3f725c; background: #12261e; }
+.event-select.active:hover:not(:disabled) { background: #183329; }
 .event-select strong, .event-select small { display: block; }
 .event-select small { margin-top: 0.2rem; color: var(--muted); }
 .event-editor label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
