@@ -317,6 +317,45 @@ describe("ModelDeck routing profile operator console", () => {
     expect(policyCall?.[1]).toMatchObject({ method: "POST" });
   });
 
+  it("keeps visual runtime settings out of the compact configured Worker summary", async () => {
+    const payloads = responses();
+    const gemmaWorker: Worker = {
+      ...worker,
+      id: "b884fc01-256a-41b9-8c57-f7ca8a6cbb36",
+      name: "Gemma 4 12B General Chat Worker",
+      model_id: "google/gemma-4-12B-it",
+      revision: "revision-1",
+      generation_family: "vision-language",
+      runtime: "gemma4-general-chat-transformers-rocm",
+      runtime_template_id: "gemma4-general-chat-rocm",
+      capabilities: { chat: true, image_input: true },
+      settings: { visual_token_budget: 280 },
+    };
+    payloads["/api/workers"] = [gemmaWorker];
+    payloads["/api/catalogue"] = { downloads_started: false, models: [{
+      model_id: gemmaWorker.model_id, revision: gemmaWorker.revision, cache_location: "/cache/model",
+      snapshot_location: "/cache/model/snapshots/revision-1", physical_size_bytes: 1,
+      download_state: "installed-untested", generation_family_hint: "vision-language",
+      capability_hints: ["chat", "image-input"], configuration_support: "scenechat-gemma4",
+      configuration_support_reason: "Gemma 4 available", modeldeck_allowed: true,
+      base_model_id: null, base_model_revision: null, runnable: true,
+      runnable_reason: "Ready", worker_count: 1, artifacts: [], potential_capabilities: [{
+        id: "general-image-chat", display_name: "General image chat", description: "Image conversation.",
+        protocol_contract_id: "openai-image-chat-v1", traits: ["text-input", "image-input", "text-output"],
+        evidence: [], runtime_template_ids: ["gemma4-general-chat-rocm"],
+        available_runtime_template_ids: ["gemma4-general-chat-rocm"], policy_allowed: true,
+        effective_allowed: true, runtime_status: "available", qualification_status: "not-tested",
+        qualifying_workers: [], published: false, creatable: true, reason: "Ready",
+      }],
+    }] };
+    mockFetch(payloads);
+    render(<App />);
+    await openAdvancedSection("Models");
+
+    expect(await screen.findByText("Gemma 4 12B General Chat Worker")).toBeInTheDocument();
+    expect(screen.queryByText(/280 visual tokens/)).not.toBeInTheDocument();
+  });
+
   it("reviews exact policy and Runtime identity before guided creation", async () => {
     const payloads = responses();
     payloads["/api/catalogue"] = { downloads_started: false, models: [{
