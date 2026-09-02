@@ -229,6 +229,39 @@ describe("ModelDeck routing profile operator console", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/routing-profiles")).toBe(true);
   });
 
+  it("disables a live Routing Profile without changing Worker control", async () => {
+    const payloads = responses(true);
+    payloads[`/api/routing-profiles/${profile.definition.id}/active`] = { ok: true, profile_id: profile.definition.id };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+
+    await openAdvancedSection("Routing profiles");
+    const disable = await screen.findByRole("button", { name: "Disable routing" });
+    fireEvent.click(disable);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/routing-profiles/${profile.definition.id}/active` && init?.method === "DELETE",
+    )).toBe(true));
+    expect(await screen.findByText("Routing Profile disabled. No Workers were stopped.")).toBeInTheDocument();
+  });
+
+  it("enables the latest published Routing Profile revision", async () => {
+    const inactiveProfile = { ...profile, active: false, active_revision: null };
+    const payloads = responses();
+    payloads["/api/routing-profiles"] = { profiles: [inactiveProfile] };
+    payloads[`/api/routing-profiles/${profile.definition.id}/revisions/1/publish`] = { profile_id: profile.definition.id, revision: 1, active: true };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+
+    await openAdvancedSection("Routing profiles");
+    fireEvent.click(await screen.findByRole("button", { name: "Enable routing" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input) === `/api/routing-profiles/${profile.definition.id}/revisions/1/publish` && init?.method === "POST",
+    )).toBe(true));
+    expect(await screen.findByText("Routing Profile enabled at revision 1. No Workers were started.")).toBeInTheDocument();
+  });
+
   it("explains missing runtimes without presenting capability policy as a Worker action", async () => {
     const payloads = responses();
     payloads["/api/catalogue"] = { downloads_started: false, models: [{

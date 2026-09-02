@@ -66,6 +66,7 @@ tools, not an operator feature.
 - `POST /api/routing-profiles/{profile_id}/validate|publish`
 - `GET /api/routing-profiles/{profile_id}/revisions`
 - `POST /api/routing-profiles/{profile_id}/revisions/{revision}/publish`
+- `DELETE /api/routing-profiles/{profile_id}/active`
 - `POST /api/routing-profiles/{profile_id}/capabilities/{capability_id}/smoke`
 - `GET /api/live`
 
@@ -75,7 +76,8 @@ protocol contract, and ordered compatible Worker IDs. Index zero is primary. Pub
 validates a draft, creates an immutable revision, and atomically activates that profile
 alongside other active profiles; it never starts Workers. Public model IDs must be unique
 across the active set. Earlier revisions can be made active again and an active profile can
-be deactivated with `DELETE /api/routing-profiles/{profile_id}/active`. The local
+be deactivated with `DELETE /api/routing-profiles/{profile_id}/active`; this removes only
+that profile's capabilities from live routing and never stops its Workers. The local
 configuration lock blocks profile mutation server-side while preserving reads and explicit
 Worker controls.
 

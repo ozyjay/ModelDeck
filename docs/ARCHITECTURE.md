@@ -11,7 +11,7 @@ capabilities are already implemented.
 Model (cached, read-only)
   └─ Worker (configured, trusted runtime)
        └─ Published capability (public model name + one protocol + ordered Workers)
-            └─ Routing Profile (immutable revisions; exactly one active)
+            └─ Routing Profile (immutable revisions; independently active)
 ```
 
 A Routing Profile may serve every concurrent local application: an Open Day demo,
@@ -54,8 +54,10 @@ project rather than expanding ModelDeck.
 
 Each profile has one mutable draft and immutable published revisions. Validation checks
 Worker existence, protocol compatibility, ordered Worker references, and where requested,
-matching tested-working evidence. Publishing atomically selects the active profile without
-starting or stopping a process; rollback selects an existing immutable revision.
+matching tested-working evidence. Publishing atomically enables that profile alongside any
+other active profiles without starting or stopping a process; rollback enables an existing
+immutable revision. Disabling a profile removes only its capabilities from live routing and
+does not stop its Workers.
 
 The gateway is local-only. It starts with no published capabilities, sends no cloud
 fallback, chooses a backup only before a request or job begins, and persists
@@ -68,8 +70,8 @@ readiness snapshots; future request-level observability must preserve the same d
 
 ## Database migrations
 
-SQLite schema v3 stores Workers, Routing Profile drafts and revisions, one active routing
-snapshot, model cache policy, compatibility evidence and gateway job assignments. A v2
+SQLite schema v3 stores Workers, Routing Profile drafts and revisions, active routing
+snapshots, model cache policy, compatibility evidence and gateway job assignments. A v2
 database is refused at startup. Run `scripts/migrations/migrate_v2_to_v3.ps1`: it backs up the
 database/WAL/SHM files, converts every Event revision into a profile revision, preserves
 routes as capabilities and the active routing selection, drops Demo membership, and leaves
