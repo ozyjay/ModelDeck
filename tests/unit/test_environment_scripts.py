@@ -144,7 +144,8 @@ def test_stop_script_recovers_project_local_services_without_pid_files() -> None
 def test_stale_worker_cleanup_covers_all_managed_workers_and_private_llama_server() -> None:
     script = STOP_STALE_WORKERS_SCRIPT.read_text(encoding="utf-8")
 
-    assert "@(8610..8624)" in script
+    assert "@(8610..8699)" in script
+    assert "modeldeck.workers.gemma4_chat_worker" in script
     assert "modeldeck.workers.llama_vulkan_worker" in script
     assert "modeldeck.workers.qwen35_chat_worker" in script
     assert "modeldeck.workers.scenechat_worker" in script

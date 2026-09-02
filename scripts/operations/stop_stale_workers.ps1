@@ -9,6 +9,7 @@ $WorkerModules = @(
     'modeldeck.workers.mock_worker',
     'modeldeck.workers.autoregressive_worker',
     'modeldeck.workers.embedding_worker',
+    'modeldeck.workers.gemma4_chat_worker',
     'modeldeck.workers.llama_vulkan_worker',
     'modeldeck.workers.moshiko_worker',
     'modeldeck.workers.qwen35_chat_worker',
@@ -19,7 +20,7 @@ $WorkerModules = @(
     'modeldeck.workers.translation_worker',
     'modeldeck.workers.tts_worker'
 )
-$WorkerPorts = @(8610..8624)
+$WorkerPorts = @(8610..8699)
 $TrustedLlamaServer = "$Root/.runtime-tools/llama.cpp/bin/llama-server"
 $Stopped = @()
 
