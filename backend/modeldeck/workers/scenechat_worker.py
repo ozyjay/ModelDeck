@@ -43,6 +43,7 @@ from modeldeck.gemma4_settings import (
     VisualTokenBudget,
 )
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
+from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
 
 LOGGER = logging.getLogger("modeldeck.scenechat")
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -51,7 +52,11 @@ MAX_IMAGE_DIMENSION = 4096
 MAX_IMAGE_PIXELS = 16_000_000
 SUPPORTED_MIME_TYPES = {"image/jpeg": "JPEG", "image/png": "PNG"}
 DEFAULT_MAXIMUM_NEW_TOKENS = 512
-SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT = 1024
+# Keep the Worker configuration and request contract aligned with the
+# project-wide allowlisted output ceiling.  The management API and console use
+# this value when creating Gemma 4 Workers, so a lower local limit would make a
+# saved configuration fail before the worker can start.
+SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT = MAXIMUM_NEW_TOKENS_LIMIT
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")
 APPROVED_FP32_BUFFER_SUFFIXES = (
     "input_min",
