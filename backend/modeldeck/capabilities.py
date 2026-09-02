@@ -40,6 +40,7 @@ CAPABILITY_DEFINITIONS = {
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
                 "gemma4-general-chat-rocm",
+                "gemma4-general-chat-rocm-adaptive",
             ),
         ),
         CapabilityDefinition(
@@ -85,6 +86,7 @@ CAPABILITY_DEFINITIONS = {
             ("text-input", "image-input", "text-output", "chat"),
             (
                 "gemma4-general-chat-rocm",
+                "gemma4-general-chat-rocm-adaptive",
                 "qwen38-llamacpp-q8-mtp-vulkan",
                 "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
             ),
@@ -207,8 +209,8 @@ QWEN_TEXT_CAPABILITY_TEMPLATES = {
         "scene-analysis": ("scenechat-qwen35",),
     },
     "scenechat-gemma4": {
-        "general-chat": ("gemma4-general-chat-rocm",),
-        "general-image-chat": ("gemma4-general-chat-rocm",),
+        "general-chat": ("gemma4-general-chat-rocm", "gemma4-general-chat-rocm-adaptive"),
+        "general-image-chat": ("gemma4-general-chat-rocm", "gemma4-general-chat-rocm-adaptive"),
         "scene-analysis": ("scenechat-gemma4",),
     },
     "scenechat-qwen38-fp8": {

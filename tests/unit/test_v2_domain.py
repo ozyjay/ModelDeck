@@ -61,6 +61,12 @@ def worker_definition() -> WorkerDefinition:
             "qwen35-llamacpp-q8-vulkan-adaptive",
             "adaptive",
         ),
+        ("gemma4-general-chat-transformers-rocm", "gemma4-general-chat-rocm", "disabled"),
+        (
+            "gemma4-general-chat-transformers-rocm",
+            "gemma4-general-chat-rocm-adaptive",
+            "adaptive",
+        ),
     ],
 )
 def test_legacy_qwen_llamacpp_workers_receive_their_immutable_thinking_default(

@@ -24,6 +24,7 @@ def test_packaged_runtime_registry_is_versioned(tmp_path) -> None:
         "embedding-transformers",
         "scenechat-gemma4",
         "gemma4-general-chat-rocm",
+        "gemma4-general-chat-rocm-adaptive",
         "scenechat-qwen35",
         "qwen35-chat-transformers-rocm",
         "scenechat-qwen38-fp8",
@@ -253,6 +254,35 @@ def test_scenechat_runtime_declares_safe_creation_defaults() -> None:
     assert template.settings["context_length"] == 8192
     assert template.settings["maximum_new_tokens"] == 512
     assert template.settings["visual_token_budget"] == 280
+
+
+def test_gemma4_general_chat_thinking_templates_are_distinct_and_immutable(tmp_path) -> None:
+    disabled = runtime_templates()["gemma4-general-chat-rocm"]
+    adaptive = runtime_templates()["gemma4-general-chat-rocm-adaptive"]
+
+    assert disabled.settings["thinking_mode"] == "disabled"
+    assert disabled.capabilities.reasoning is False
+    assert adaptive.settings["thinking_mode"] == "adaptive"
+    assert adaptive.capabilities.reasoning is True
+
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="google/gemma-4-12B-it",
+            revision="a" * 40,
+            alias="gemma4-adaptive",
+            context_length=8192,
+            maximum_new_tokens=1024,
+            runtime_template_id="gemma4-general-chat-rocm-adaptive",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="gemma4-general-chat-rocm-adaptive",
+    )
+
+    assert profile.runtime_template_id == "gemma4-general-chat-rocm-adaptive"
+    assert profile.settings["thinking_mode"] == "adaptive"
+    assert profile.settings["hardware_verification_required"] is True
+    assert profile.capabilities.reasoning is True
 
 
 def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verification() -> None:

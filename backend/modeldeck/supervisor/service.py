@@ -571,10 +571,19 @@ def _vision_language_launch(
 def _gemma4_general_chat_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
+    expected_thinking_mode = {
+        "gemma4-general-chat-rocm": "disabled",
+        "gemma4-general-chat-rocm-adaptive": "adaptive",
+    }.get(profile.runtime_template_id)
+    if expected_thinking_mode is None:
+        raise ValueError("Gemma 4 general chat requires an allowlisted thinking policy")
+    if profile.settings.get("thinking_mode") != expected_thinking_mode:
+        raise ValueError(f"Gemma 4 general chat requires thinking_mode={expected_thinking_mode}")
     launch = _vision_language_launch(profile, environment, common)
     launch.command[launch.command.index("modeldeck.workers.scenechat_worker")] = (
         "modeldeck.workers.gemma4_chat_worker"
     )
+    launch.command.extend(["--thinking-mode", expected_thinking_mode])
     return launch
 
 

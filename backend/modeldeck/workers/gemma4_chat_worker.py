@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--maximum-new-tokens", type=int, default=512)
     parser.add_argument("--generation-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--thinking-mode", choices=("disabled", "adaptive"), default="disabled")
     parser.add_argument(
         "--visual-token-budget",
         type=int,
@@ -40,6 +41,7 @@ def main() -> None:
         generation_timeout_seconds=arguments.generation_timeout_seconds,
         visual_token_budget=arguments.visual_token_budget,
         general_chat=True,
+        thinking_mode=arguments.thinking_mode,
     )
     app = create_app(
         worker_id=arguments.worker_id,

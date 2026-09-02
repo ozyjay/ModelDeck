@@ -80,6 +80,7 @@ class EngineConfig:
     generation_timeout_seconds: float = 60.0
     visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
     general_chat: bool = False
+    thinking_mode: Literal["disabled", "adaptive"] = "disabled"
 
     def __post_init__(self) -> None:
         if not 1 <= self.maximum_new_tokens <= SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT:
@@ -89,6 +90,8 @@ class EngineConfig:
                 "visual_token_budget must be one of "
                 + ", ".join(str(value) for value in ALLOWED_VISUAL_TOKEN_BUDGETS)
             )
+        if self.thinking_mode == "adaptive" and not self.general_chat:
+            raise ValueError("Adaptive thinking is supported only by the Gemma 4 general chat Worker")
 
 
 @dataclass(frozen=True)
@@ -416,7 +419,7 @@ class TransformersSceneChatEngine:
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=self.config.thinking_mode == "adaptive",
             **({"tools": tools} if tools else {}),
         )
         preprocessing_started = time.perf_counter()
@@ -453,8 +456,10 @@ class TransformersSceneChatEngine:
                 clean_up_tokenization_spaces=False,
             )
             tool_calls, content = _gemma_tool_calls(decoded, tools or [])
-            if not tool_calls and any(
-                marker in content.casefold() for marker in ("<think>", "</think>", "<|channel>")
+            if (
+                self.config.thinking_mode == "disabled"
+                and not tool_calls
+                and any(marker in content.casefold() for marker in ("<think>", "</think>", "<|channel>"))
             ):
                 raise ValueError("Model output exposed a reasoning channel")
             return GenerationResult(
@@ -574,7 +579,8 @@ def create_app(
         "image_pooling_kernel_size": GEMMA4_POOLING_KERNEL_SIZE,
         "maximum_new_tokens": config.maximum_new_tokens,
         "generation_timeout_seconds": config.generation_timeout_seconds,
-        "enable_thinking": False,
+        "thinking_mode": config.thinking_mode,
+        "enable_thinking": config.thinking_mode == "adaptive",
         "do_sample": False,
         "use_cache": True,
         **(vision_settings or {}),
@@ -655,6 +661,7 @@ def create_app(
             "device": details.get("device", "cuda:0"),
             "device_name": details.get("device_name", "AMD GPU"),
             "rocm_version": details.get("hip_version"),
+            "thinking_mode": config.thinking_mode,
             "ready": request.app.state.ready and request.app.state.active_request_id is None,
             "busy": request.app.state.active_request_id is not None,
             "error": request.app.state.load_error,
@@ -669,6 +676,7 @@ def create_app(
             image_input=True,
             structured_output=not config.general_chat,
             tool_calling=config.general_chat,
+            reasoning=config.thinking_mode == "adaptive",
         )
         return {
             "protocol_version": "1",
@@ -707,6 +715,7 @@ def create_app(
             "local_files_only": True,
             "trust_remote_code": False,
             "dtype": config.dtype,
+            "thinking_mode": config.thinking_mode,
             "contract_version": CONTRACT_VERSION,
             **reported_vision_settings,
         }
