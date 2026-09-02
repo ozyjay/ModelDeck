@@ -344,6 +344,10 @@ def _setup_preview(selection: CapabilitySetupSelection, request: Request) -> dic
                 },
             )
     template_settings = registration.template.settings
+    context_length = selection.context_length or _integer_template_default(
+        template_settings, "context_length", 2048
+    )
+    _validate_model_context_length(cached, context_length)
     planned_worker = WorkerCreateRequest(
         name=" ".join(selection.worker_name.split()),
         model_id=selection.model_id,
@@ -353,8 +357,7 @@ def _setup_preview(selection: CapabilitySetupSelection, request: Request) -> dic
         capability_id=selection.capability_id,
         dtype=selection.dtype or registration.template.dtype or "float16",
         lifecycle=selection.lifecycle or registration.template.lifecycle or "on-demand",
-        context_length=selection.context_length
-        or _integer_template_default(template_settings, "context_length", 2048),
+        context_length=context_length,
         maximum_new_tokens=selection.maximum_new_tokens
         or _integer_template_default(template_settings, "maximum_new_tokens", 128),
         maximum_denoising_steps=selection.maximum_denoising_steps
@@ -612,6 +615,10 @@ def create_v3_router() -> APIRouter:
         selected = registrations.get(template_id) if template_id else None
         if selected is None:
             raise HTTPException(409, "Select an installed trusted runtime")
+        context_length = payload.context_length or _integer_template_default(
+            selected.template.settings, "context_length", 2048
+        )
+        _validate_model_context_length(cached, context_length)
         checkpoint_dir = (
             Path(cached["snapshot_location"])
             if selected.template.cache_setting == "q4_checkpoint_dir"
@@ -649,8 +656,7 @@ def create_v3_router() -> APIRouter:
             profile_name=internal_name,
             dtype=payload.dtype or selected.template.dtype or "float16",
             lifecycle=payload.lifecycle or selected.template.lifecycle or "on-demand",
-            context_length=payload.context_length
-            or _integer_template_default(selected.template.settings, "context_length", 2048),
+            context_length=context_length,
             maximum_new_tokens=payload.maximum_new_tokens
             or _integer_template_default(selected.template.settings, "maximum_new_tokens", 128),
             maximum_denoising_steps=payload.maximum_denoising_steps
@@ -666,18 +672,21 @@ def create_v3_router() -> APIRouter:
             prefix_cache_enabled=payload.prefix_cache_enabled,
         )
         cache_root = Path(cached["cache_location"]).parent
-        profile = create_local_profile(
-            profile_request,
-            cache_root=cache_root,
-            port=port,
-            configuration_support=template_id,
-            checkpoint_dir=checkpoint_dir,
-            base_model_id=cached.get("base_model_id"),
-            base_model_revision=cached.get("base_model_revision"),
-            artifact_path=artefact_path,
-            candidate_manifest_id=candidate_manifest_id,
-            template_registrations=registrations,
-        ).model_copy(update={"id": worker_id})
+        try:
+            profile = create_local_profile(
+                profile_request,
+                cache_root=cache_root,
+                port=port,
+                configuration_support=template_id,
+                checkpoint_dir=checkpoint_dir,
+                base_model_id=cached.get("base_model_id"),
+                base_model_revision=cached.get("base_model_revision"),
+                artifact_path=artefact_path,
+                candidate_manifest_id=candidate_manifest_id,
+                template_registrations=registrations,
+            ).model_copy(update={"id": worker_id})
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
         definition = WorkerDefinition.from_profile(profile, name=clean_name)
         store.save_worker_definition(definition.model_dump(mode="json"))
         try:
@@ -2070,6 +2079,12 @@ def _require_mutable(request: Request) -> None:
 def _integer_template_default(settings: dict[str, object], name: str, fallback: int) -> int:
     value = settings.get(name)
     return value if isinstance(value, int) and not isinstance(value, bool) else fallback
+
+
+def _validate_model_context_length(model: Mapping[str, object], context_length: int) -> None:
+    maximum = model.get("maximum_context_length")
+    if isinstance(maximum, int) and not isinstance(maximum, bool) and context_length > maximum:
+        raise HTTPException(422, f"The selected Model supports at most {maximum} context tokens.")
 
 
 def _capability_smoke_request(capability):

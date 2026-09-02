@@ -37,6 +37,25 @@ def test_discovers_complete_cache_without_claiming_compatibility(tmp_path: Path)
     assert models[0]["runnable"] is False
 
 
+def test_reports_the_model_declared_context_ceiling_for_worker_configuration(tmp_path: Path) -> None:
+    snapshot = tmp_path / "models--Qwen--Demo" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["DemoForCausalLM"],
+                "text_config": {"max_position_embeddings": 4096},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+
+    model = discover_huggingface_models([tmp_path])[0]
+
+    assert model["maximum_context_length"] == 4096
+
+
 def test_recognises_qwen_embedding_model_as_a_dedicated_embedding_worker(tmp_path: Path) -> None:
     snapshot = tmp_path / "models--Qwen--Qwen3-Embedding-0.6B" / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)

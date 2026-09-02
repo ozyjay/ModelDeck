@@ -104,6 +104,7 @@ export interface RuntimeTemplate {
   generation_family: string;
   cache_setting: "cache_root" | "q4_checkpoint_dir" | "artifact_path";
   uses_base_model_identity: boolean;
+  fixed_context_length?: boolean;
   lifecycle: "resident" | "on-demand" | "exclusive" | null;
   dtype: "float16" | "bfloat16" | "float32" | null;
   settings: Record<string, string | number | boolean>;
@@ -176,6 +177,7 @@ export interface ModelEntry {
   physical_size_bytes: number;
   download_state: "partial" | "installed-untested";
   generation_family_hint: string | null;
+  maximum_context_length: number | null;
   capability_hints: string[];
   configuration_support: string | null;
   configuration_support_reason: string;

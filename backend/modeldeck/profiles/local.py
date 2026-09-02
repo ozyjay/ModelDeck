@@ -71,6 +71,14 @@ def create_local_profile(
     if registration is None:
         raise ValueError("No allowlisted local worker supports this model architecture")
     template = registration.template
+    if template.fixed_context_length:
+        configured_context_length = template.settings.get("context_length")
+        if not isinstance(configured_context_length, int):
+            raise ValueError("The trusted runtime is missing its fixed context length")
+        if request.context_length != configured_context_length:
+            raise ValueError(
+                f"This trusted runtime requires a context length of {configured_context_length} tokens"
+            )
     if request.prefix_cache_enabled and (
         template.generation_family.value != "autoregressive"
         or not supports_application_managed_prefix_cache(request.model_id)

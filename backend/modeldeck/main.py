@@ -456,6 +456,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "generation_family": registration.template.generation_family,
                     "cache_setting": registration.template.cache_setting,
                     "uses_base_model_identity": registration.template.uses_base_model_identity,
+                    "fixed_context_length": registration.template.fixed_context_length,
                     "lifecycle": registration.template.lifecycle,
                     "dtype": registration.template.dtype,
                     "settings": registration.template.settings,

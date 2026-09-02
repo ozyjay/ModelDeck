@@ -489,6 +489,42 @@ async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monk
 
 
 @pytest.mark.asyncio
+async def test_new_worker_rejects_context_above_the_model_declared_limit(tmp_path, monkeypatch) -> None:
+    model = {
+        **discovered_model(runtime="autoregressive-transformers"),
+        "maximum_context_length": 2048,
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
+    monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    request = {
+        "name": "Overlong context Worker",
+        "model_id": model["model_id"],
+        "revision": model["revision"],
+        "runtime_template_id": "autoregressive-transformers",
+        "capability_id": "autoregressive-trace",
+        "context_length": 4096,
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "capability_id": "autoregressive-trace",
+                    "allowed": True,
+                },
+            )
+            response = await client.post("/api/workers", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The selected Model supports at most 2048 context tokens."
+
+
+@pytest.mark.asyncio
 async def test_management_ignores_persisted_untrusted_workers(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")

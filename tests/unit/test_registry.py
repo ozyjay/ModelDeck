@@ -285,6 +285,25 @@ def test_gemma4_general_chat_thinking_templates_are_distinct_and_immutable(tmp_p
     assert profile.capabilities.reasoning is True
 
 
+def test_qwen_llamacpp_templates_fix_the_qualified_context_length(tmp_path) -> None:
+    template = runtime_templates()["qwen35-llamacpp-q8-vulkan"]
+
+    assert template.fixed_context_length is True
+    with pytest.raises(ValueError, match="requires a context length of 8192"):
+        create_local_profile(
+            LocalProfileRequest(
+                model_id="bartowski/Qwen_Qwen3.5-4B-GGUF",
+                revision="a" * 40,
+                alias="qwen35-invalid-context",
+                context_length=4096,
+                runtime_template_id=template.id,
+            ),
+            cache_root=tmp_path,
+            port=8630,
+            configuration_support=template.id,
+        )
+
+
 def test_qwen35_scenechat_runtime_is_dedicated_and_requires_hardware_verification() -> None:
     template = runtime_templates()["scenechat-qwen35"]
 
