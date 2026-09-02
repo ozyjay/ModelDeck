@@ -81,6 +81,11 @@ class WorkerDefinition(BaseModel):
                 "qwen35-llamacpp-vulkan",
                 "qwen35-local-q8-vulkan-adaptive",
             ): "adaptive",
+            ("gemma4-general-chat-transformers-rocm", "gemma4-general-chat-rocm"): "disabled",
+            (
+                "gemma4-general-chat-transformers-rocm",
+                "gemma4-general-chat-rocm-adaptive",
+            ): "adaptive",
         }.get((self.runtime, self.runtime_template_id))
         if thinking_default is not None and "thinking_mode" not in self.settings:
             # Workers created before thinking policy became explicit retain the

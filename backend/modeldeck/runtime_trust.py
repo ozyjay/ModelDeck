@@ -76,13 +76,16 @@ TRUSTED_RUNTIME_IMPLEMENTATIONS = {
             id="gemma4-general-chat-transformers-rocm",
             display_name="Gemma 4 general chat Transformers ROCm",
             generation_family=GenerationFamily.VISION_LANGUAGE,
-            capabilities=frozenset({"chat", "streaming", "cancellation", "image_input", "tool_calling"}),
+            capabilities=frozenset(
+                {"chat", "streaming", "cancellation", "image_input", "tool_calling", "reasoning"}
+            ),
             template_settings=frozenset(
                 {
                     "context_length",
                     "maximum_new_tokens",
                     "generation_timeout_seconds",
                     "visual_token_budget",
+                    "thinking_mode",
                     "startup_timeout_seconds",
                     "warmup_timeout_seconds",
                     "hardware_verification_required",

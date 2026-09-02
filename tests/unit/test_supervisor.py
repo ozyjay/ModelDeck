@@ -327,6 +327,39 @@ def test_scenechat_launch_is_allowlisted_offline_and_api_key_scoped(monkeypatch,
     assert launch.environment["MODELDECK_SCENECHAT_API_KEY"] == "test-local-key"
 
 
+def test_gemma4_adaptive_general_chat_launch_enforces_the_selected_thinking_policy(
+    monkeypatch, tmp_path
+) -> None:
+    profile = create_local_profile(
+        LocalProfileRequest(
+            model_id="google/gemma-4-12B-it",
+            revision="a" * 40,
+            alias="gemma4-adaptive",
+            maximum_new_tokens=1024,
+            runtime_template_id="gemma4-general-chat-rocm-adaptive",
+        ),
+        cache_root=tmp_path,
+        port=8630,
+        configuration_support="gemma4-general-chat-rocm-adaptive",
+    )
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir()
+    runtime_python.symlink_to(sys.executable)
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile)
+
+    assert launch.command[:3] == [
+        str(runtime_python.absolute()),
+        "-m",
+        "modeldeck.workers.gemma4_chat_worker",
+    ]
+    assert launch.command[launch.command.index("--thinking-mode") + 1] == "adaptive"
+    profile.settings["thinking_mode"] = "disabled"
+    with pytest.raises(ValueError, match="thinking_mode=adaptive"):
+        build_worker_launch(profile)
+
+
 def test_qwen35_scenechat_launch_uses_dedicated_offline_adapter(monkeypatch, tmp_path) -> None:
     profile = create_local_profile(
         LocalProfileRequest(

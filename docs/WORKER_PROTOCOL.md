@@ -130,6 +130,13 @@ Gemma 4 unified snapshots use the same SceneChat contract through the explicitly
 `Gemma4UnifiedProcessor` and `Gemma4UnifiedForConditionalGeneration` loader adapter. Audio and
 video inputs remain outside the SceneChat contract.
 
+For open-ended Gemma 4 chat and image chat, the Models view offers two separate immutable
+general-chat Workers: `gemma4-general-chat-rocm` keeps thinking disabled, while
+`gemma4-general-chat-rocm-adaptive` renders the model template with thinking enabled and
+advertises reasoning. The selected policy is enforced at launch and reported by the health,
+model, capability and metrics endpoints. It forms part of the Worker configuration and must
+be qualified independently; changing the policy requires a replacement Worker.
+
 The dedicated Qwen3.5 adapter accepts only the official `Qwen/Qwen3.5-0.8B`,
 `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-4B`, and `Qwen/Qwen3.5-9B` repositories with the
 `Qwen3_5ForConditionalGeneration` architecture. It pairs `Qwen3VLProcessor` with

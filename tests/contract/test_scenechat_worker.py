@@ -332,6 +332,7 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
         "image_pooling_kernel_size": 3,
         "maximum_new_tokens": 512,
         "generation_timeout_seconds": 60.0,
+        "thinking_mode": "disabled",
         "enable_thinking": False,
         "do_sample": False,
         "use_cache": True,
@@ -351,6 +352,43 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
     assert "choices" not in diagnostic
     assert "messages" not in diagnostic
     assert engine.closed is True
+
+
+@pytest.mark.asyncio
+async def test_gemma4_adaptive_worker_attests_its_thinking_policy() -> None:
+    app = create_app(
+        worker_id="gemma-adaptive",
+        config=EngineConfig(
+            model_id="google/gemma-4-12B-it",
+            revision="pinned",
+            general_chat=True,
+            thinking_mode="adaptive",
+        ),
+        engine=FakeVisionEngine(output="A concise answer."),
+    )
+    async with app.router.lifespan_context(app):
+        await app.state.load_task
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            capabilities = await client.get("/capabilities")
+            health = await client.get("/health")
+            model = await client.get("/model")
+            metrics = await client.get("/metrics")
+
+    assert capabilities.json()["reasoning"] is True
+    assert health.json()["thinking_mode"] == "adaptive"
+    assert model.json()["thinking_mode"] == "adaptive"
+    assert metrics.json()["effective_settings"]["enable_thinking"] is True
+
+
+def test_adaptive_thinking_requires_the_gemma4_general_chat_worker() -> None:
+    with pytest.raises(ValueError, match="general chat"):
+        EngineConfig(
+            model_id="google/gemma-4-E2B-it",
+            revision="pinned",
+            thinking_mode="adaptive",
+        )
 
 
 @pytest.mark.asyncio
