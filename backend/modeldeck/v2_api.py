@@ -1544,20 +1544,19 @@ def create_v3_router() -> APIRouter:
         try:
             await smoke_routing_profile_capability(target.id, binding.id, request)
         except HTTPException as error:
+            store.deactivate_routing_profile(target.id)
             if previous:
-                snapshot = previous[0]
-                old = store.get_routing_profile_revision(
-                    str(snapshot["profile_id"]), int(snapshot["revision"])
-                )
-                if old:
-                    old_definition = RoutingProfile.model_validate(old["definition"])
-                    store.activate_routing_profile_revision(
-                        old_definition.id,
-                        int(snapshot["revision"]),
-                        routing_snapshot(old_definition, int(snapshot["revision"])),
+                for snapshot in previous:
+                    old = store.get_routing_profile_revision(
+                        str(snapshot["profile_id"]), int(snapshot["revision"])
                     )
-            else:
-                store.deactivate_routing_profile(target.id)
+                    if old:
+                        old_definition = RoutingProfile.model_validate(old["definition"])
+                        store.activate_routing_profile_revision(
+                            old_definition.id,
+                            int(snapshot["revision"]),
+                            routing_snapshot(old_definition, int(snapshot["revision"])),
+                        )
             setup["error"] = {
                 "code": "route_verification_failed",
                 "message": str(error.detail),

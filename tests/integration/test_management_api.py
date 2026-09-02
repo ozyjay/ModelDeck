@@ -568,7 +568,7 @@ async def test_profile_publish_rejects_incompatible_worker(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_publishing_a_profile_replaces_the_previous_live_profile(tmp_path) -> None:
+async def test_publishing_a_profile_keeps_existing_live_profiles_active(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
     store.initialise_v3()
@@ -592,9 +592,15 @@ async def test_publishing_a_profile_replaces_the_previous_live_profile(tmp_path)
                 ).status_code == 201
             live = (await client.get("/api/live")).json()
 
-    assert live["active_profile"] == {"id": second["id"], "name": "wayfinder-gate0", "revision": 1}
-    assert live["active_profiles"] == [live["active_profile"]]
-    assert [capability["public_name"] for capability in live["capabilities"]] == ["fast-local"]
+    assert live["active_profile"] is None
+    assert live["active_profiles"] == [
+        {"id": first["id"], "name": "Existing", "revision": 1},
+        {"id": second["id"], "name": "wayfinder-gate0", "revision": 1},
+    ]
+    assert [capability["public_name"] for capability in live["capabilities"]] == [
+        "existing-local",
+        "fast-local",
+    ]
 
 
 def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path) -> None:

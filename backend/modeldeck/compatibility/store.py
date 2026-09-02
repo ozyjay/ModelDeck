@@ -499,10 +499,8 @@ class CompatibilityStore:
         published_at: str,
     ) -> None:
         snapshot = {**dict(routing), "revision": revision}
-        # A live gateway exposes one selected Routing Profile. Keep every other
-        # profile and revision for later reactivation, but remove it from the
-        # public capability surface atomically with this activation.
-        database.execute("DELETE FROM active_routing_profiles WHERE profile_id != ?", (profile_id,))
+        # Each profile is independently live. Replacing a revision changes only
+        # this profile; all other active profiles stay exposed by the gateway.
         _ensure_no_active_capability_collisions(database, profile_id, snapshot)
         database.execute(
             "INSERT INTO active_routing_profiles "
