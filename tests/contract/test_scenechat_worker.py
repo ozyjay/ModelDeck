@@ -544,21 +544,17 @@ def test_closest_objects_question_keeps_its_bounded_internal_wording() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scenechat_worker_accepts_the_code_owned_1024_token_ceiling() -> None:
-    engine = FakeVisionEngine()
+async def test_gemma4_general_chat_worker_accepts_the_management_configured_2048_token_limit() -> None:
+    engine = ToolCallingVisionEngine()
     app = create_app(
         worker_id="scenechat-test",
         config=EngineConfig(
-            model_id="Qwen/Qwen3.5-0.8B",
+            model_id="google/gemma-4-12B-it",
             revision="pinned",
-            maximum_new_tokens=1024,
-            visual_token_budget=140,
+            maximum_new_tokens=2048,
+            general_chat=True,
         ),
         engine=engine,
-        vision_settings={
-            "image_patch_size": 16,
-            "image_pooling_kernel_size": 2,
-        },
     )
 
     async with app.router.lifespan_context(app):
@@ -571,16 +567,16 @@ async def test_scenechat_worker_accepts_the_code_owned_1024_token_ceiling() -> N
                 "/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},
                 json={
-                    **request_payload(max_tokens=1024),
-                    "model": "Qwen/Qwen3.5-0.8B",
+                    **request_payload(max_tokens=2048),
+                    "model": "google/gemma-4-12B-it",
+                    "response_format": None,
                 },
             )
             metrics = await client.get("/metrics")
 
     assert response.status_code == 200
-    assert engine.calls[0]["max_tokens"] == 1024
-    assert metrics.json()["effective_settings"]["maximum_new_tokens"] == 1024
-    assert metrics.json()["effective_settings"]["visual_token_budget"] == 140
+    assert engine.calls[0]["max_tokens"] == 2048
+    assert metrics.json()["effective_settings"]["maximum_new_tokens"] == 2048
 
 
 @pytest.mark.asyncio
