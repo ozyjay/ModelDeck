@@ -107,14 +107,15 @@ def test_run_script_loads_dotenv_before_configuration_lock_overrides() -> None:
     assert script.index("Import-ModelDeckEnvironment") < script.index("if ($LockConfiguration)")
 
 
-def test_run_script_starts_an_explicit_docker_bridge_companion() -> None:
+def test_run_script_starts_a_stateless_docker_bridge_forwarder() -> None:
     script = RUN_SCRIPT.read_text(encoding="utf-8")
 
     assert "MODELDECK_ENABLE_DOCKER_BRIDGE" in script
     assert "gateway-docker-bridge.pid" in script
-    assert "$Env:MODELDECK_GATEWAY_HOST = '172.17.0.1'" in script
+    assert "modeldeck.gateway.docker_bridge" in script
+    assert "$Env:MODELDECK_GATEWAY_HOST = '172.17.0.1'" not in script
     assert "Remove-Item var/run/gateway-loopback.pid" in script
-    assert "-m', 'modeldeck.gateway.app'" in script
+    assert script.count("-m', 'modeldeck.gateway.app'") == 1
     assert "-m', 'modeldeck'" in script
 
 
@@ -139,6 +140,7 @@ def test_stop_script_recovers_project_local_services_without_pid_files() -> None
     assert ".venv/bin/modeldeck-gateway" in script
     assert "recovered untracked" in script
     assert "modeldeck.gateway.app" in script
+    assert "modeldeck.gateway.docker_bridge" in script
 
 
 def test_stale_worker_cleanup_covers_all_managed_workers_and_private_llama_server() -> None:

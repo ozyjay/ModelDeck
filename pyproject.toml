@@ -28,6 +28,7 @@ dev = [
 [project.scripts]
 modeldeck = "modeldeck.__main__:main"
 modeldeck-gateway = "modeldeck.gateway.app:main"
+modeldeck-gateway-docker-bridge = "modeldeck.gateway.docker_bridge:main"
 modeldeck-probe = "modeldeck.hardware.probe:main"
 modeldeck-import-state = "modeldeck.state_import:main"
 modeldeck-export-state = "modeldeck.state_export:main"

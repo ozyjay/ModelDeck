@@ -204,6 +204,7 @@ try {
     Set-PackagedRuntimeLauncher -Runtime $Q4 -InstalledRuntime '/usr/libexec/modeldeck/rocm72-q4' -PythonVersion $BundledPythonVersion
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-gateway" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.gateway.app'
+    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-gateway-docker-bridge" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.gateway.docker_bridge'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-import-state" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.state_import'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-export-state" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.state_export'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-probe" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.hardware.probe'

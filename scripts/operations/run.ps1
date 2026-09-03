@@ -24,22 +24,14 @@ $management = Start-Process $PythonPath -ArgumentList @('-m', 'modeldeck') -Redi
 $gateway = Start-Process $PythonPath -ArgumentList @('-m', 'modeldeck.gateway.app') -RedirectStandardOutput var/log/gateway.log -RedirectStandardError var/log/gateway-error.log -PassThru
 $gatewayDockerBridge = $null
 if ($DockerBridgeEnabled) {
-    # The primary listener remains loopback-only. This companion preserves the
-    # Docker bridge endpoint for SprintBot without changing local desktop access.
-    $OriginalGatewayHost = $Env:MODELDECK_GATEWAY_HOST
-    try {
-        $Env:MODELDECK_GATEWAY_HOST = '172.17.0.1'
-        $gatewayDockerBridge = Start-Process $PythonPath -ArgumentList @('-m', 'modeldeck.gateway.app') -RedirectStandardOutput var/log/gateway-docker-bridge.log -RedirectStandardError var/log/gateway-docker-bridge-error.log -PassThru
-    }
-    finally {
-        if ($null -eq $OriginalGatewayHost) { Remove-Item Env:MODELDECK_GATEWAY_HOST -ErrorAction SilentlyContinue }
-        else { $Env:MODELDECK_GATEWAY_HOST = $OriginalGatewayHost }
-    }
+    # This process only forwards TCP to the authoritative loopback gateway. It
+    # owns no routing, persistence, Worker lifecycle or thermal state.
+    $gatewayDockerBridge = Start-Process $PythonPath -ArgumentList @('-m', 'modeldeck.gateway.docker_bridge') -RedirectStandardOutput var/log/gateway-docker-bridge.log -RedirectStandardError var/log/gateway-docker-bridge-error.log -PassThru
 }
 Set-Content var/run/management.pid $management.Id
 Set-Content var/run/gateway.pid $gateway.Id
 if ($gatewayDockerBridge) { Set-Content var/run/gateway-docker-bridge.pid $gatewayDockerBridge.Id }
 Write-Host "Management: http://${ManagementHost}:${ManagementPort}"
 Write-Host "Gateway:    http://${GatewayHost}:${GatewayPort}/v1/health"
-if ($gatewayDockerBridge) { Write-Host "Gateway:    http://172.17.0.1:${GatewayPort}/v1/health (Docker bridge companion)" }
+if ($gatewayDockerBridge) { Write-Host "Gateway:    http://172.17.0.1:${GatewayPort}/v1/health (Docker bridge forwarder)" }
 Write-Host 'Workers:    Managed from the ModelDeck console; no Worker instances or public Routes are seeded.'

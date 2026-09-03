@@ -46,7 +46,7 @@ def _default_log_dir() -> Path:
     return Path("var/log/workers")
 
 
-def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
+def _gateway_host_from_env() -> str:
     """Return a gateway bind address permitted by the local-only policy."""
 
     raw_host = os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1").strip()
@@ -57,12 +57,10 @@ def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
     except ValueError as error:
         raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal") from error
 
-    docker_default_bridge = ip_address("172.17.0.1")
-    if not (host.is_loopback or (docker_bridge_enabled and host == docker_default_bridge)):
+    if not host.is_loopback:
         raise ValueError(
-            "MODELDECK_GATEWAY_HOST must be a loopback address; set "
-            "MODELDECK_ENABLE_DOCKER_BRIDGE=1 only for the launcher-managed Docker "
-            "bridge listener at 172.17.0.1"
+            "MODELDECK_GATEWAY_HOST must be a loopback address; "
+            "MODELDECK_ENABLE_DOCKER_BRIDGE=1 adds a separate restricted forwarder"
         )
     return str(host)
 
@@ -179,7 +177,7 @@ class Settings:
         )
         return cls(
             host=os.getenv("MODELDECK_HOST", "127.0.0.1"),
-            gateway_host=_gateway_host_from_env(docker_bridge_enabled=docker_bridge_enabled),
+            gateway_host=_gateway_host_from_env(),
             docker_bridge_enabled=docker_bridge_enabled,
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),

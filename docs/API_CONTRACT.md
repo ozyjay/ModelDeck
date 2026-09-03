@@ -84,11 +84,12 @@ Worker controls.
 ## Gateway (`:8600`)
 
 `MODELDECK_GATEWAY_HOST` defaults to `127.0.0.1` and must remain a loopback address.
-`MODELDECK_ENABLE_DOCKER_BRIDGE=1` starts an additional listener at Docker's default bridge
+`MODELDECK_ENABLE_DOCKER_BRIDGE=1` starts a narrow TCP forwarder at Docker's default bridge
 address, `172.17.0.1`, so containers can reach `http://host.docker.internal:8600/v1` while
-desktop applications use loopback. Wildcard (`0.0.0.0` or `::`) and LAN addresses are
-rejected during configuration parsing. Uvicorn reports an unavailable address or occupied
-port at startup.
+desktop applications use loopback. The forwarder targets the authoritative loopback gateway
+and owns no routing, persistence, Worker lifecycle or thermal accounting. Wildcard (`0.0.0.0`
+or `::`) and LAN addresses are rejected during configuration parsing. An unavailable address
+or occupied port is reported at startup.
 
 `/v1` contains standard model APIs. The `model` field must identify a compatible
 capability in an active Routing Profile. `GET /v1/models` lists only capabilities whose

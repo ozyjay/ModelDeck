@@ -46,6 +46,14 @@ def test_docker_bridge_is_an_explicit_secondary_listener_option(monkeypatch) -> 
     assert gateway_base_url(settings.gateway_host, settings.gateway_port) == "http://127.0.0.1:8600"
 
 
+def test_docker_bridge_does_not_allow_the_authoritative_gateway_to_bind_the_bridge(monkeypatch) -> None:
+    monkeypatch.setenv("MODELDECK_GATEWAY_HOST", "172.17.0.1")
+    monkeypatch.setenv("MODELDECK_ENABLE_DOCKER_BRIDGE", "1")
+
+    with pytest.raises(ValueError, match="must be a loopback address"):
+        Settings.from_env()
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "172.17.0.1", "not-an-address"])
 def test_gateway_host_rejects_unsafe_or_invalid_bind_addresses(monkeypatch, host: str) -> None:
     monkeypatch.setenv("MODELDECK_GATEWAY_HOST", host)

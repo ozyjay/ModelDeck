@@ -77,15 +77,16 @@ boundary.
 
 ### SprintBot in Docker
 
-Keep the management service and primary gateway on loopback. To give a local SprintBot
-container access to the stable gateway as well, enable its explicit bridge companion in `.env`:
+Keep the management service and authoritative gateway on loopback. To give a local SprintBot
+container access to the stable gateway as well, enable its explicit bridge forwarder in `.env`:
 
 ```text
 MODELDECK_ENABLE_DOCKER_BRIDGE=1
 ```
 
-ModelDeck then exposes the same local-only routing set at `http://host.docker.internal:8600/v1`
-for SprintBot and `http://127.0.0.1:8600/v1` for local desktop applications such as WayFinder.
+ModelDeck then forwards `http://host.docker.internal:8600/v1` to the authoritative gateway at
+`http://127.0.0.1:8600/v1`. The bridge process owns no routing, persistence, Worker lifecycle or
+thermal accounting, so both container and desktop requests pass through one gateway authority.
 Ensure host firewall rules permit TCP 8600 only from the Docker bridge and loopback traffic.
 ModelDeck deliberately rejects `0.0.0.0` and LAN addresses; use a separately approved restricted
 reverse proxy and firewall deployment if broader access is ever required.

@@ -195,6 +195,7 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "New-BundledPythonRuntime" in build_script
     assert "Set-PackagedRuntimeLauncher" in build_script
     assert "modeldeck-export-state" in build_script
+    assert "modeldeck-gateway-docker-bridge" in build_script
     assert "desktop-python" in build_script
     assert "absolute symbolic links" in build_script
     assert "direct_url.json" in build_script
