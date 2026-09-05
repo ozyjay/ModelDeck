@@ -136,7 +136,8 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 256, "thinking_mode": "disabled", "startup_timeout_seconds": 300, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-4b-q8-vulkan", "hardware_verification_required": true},
-      "cache_setting": "artifact_path"
+      "cache_setting": "artifact_path",
+      "fixed_context_length": true
     },
     {
       "id": "qwen35-llamacpp-q8-vulkan-adaptive",
@@ -145,7 +146,8 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "reasoning": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 1024, "thinking_mode": "adaptive", "startup_timeout_seconds": 300, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-4b-q8-vulkan", "hardware_verification_required": true},
-      "cache_setting": "artifact_path"
+      "cache_setting": "artifact_path",
+      "fixed_context_length": true
     },
     {
       "id": "qwen35-local-q8-vulkan",
@@ -154,7 +156,8 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 256, "thinking_mode": "disabled", "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-approved-q8-vulkan", "hardware_verification_required": true},
-      "cache_setting": "artifact_path"
+      "cache_setting": "artifact_path",
+      "fixed_context_length": true
     },
     {
       "id": "qwen35-local-q8-vulkan-adaptive",
@@ -163,7 +166,8 @@
       "generation_family": "autoregressive",
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "reasoning": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 1024, "thinking_mode": "adaptive", "startup_timeout_seconds": 600, "warmup_timeout_seconds": 120, "runtime_profile": "qwen35-approved-q8-vulkan", "hardware_verification_required": true},
-      "cache_setting": "artifact_path"
+      "cache_setting": "artifact_path",
+      "fixed_context_length": true
     },
     {
       "id": "qwen38-llamacpp-q8-mtp-vulkan",
@@ -173,7 +177,8 @@
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "image_input": true, "structured_output": true, "tool_calling": true, "reasoning": true, "mtp": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 512, "thinking_mode": "adaptive", "startup_timeout_seconds": 900, "warmup_timeout_seconds": 180, "runtime_profile": "qwen38-q8-mtp-vulkan", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
-      "lifecycle": "exclusive"
+      "lifecycle": "exclusive",
+      "fixed_context_length": true
     },
     {
       "id": "qwen38-llamacpp-q8-mtp-vulkan-no-thinking",
@@ -183,7 +188,8 @@
       "capabilities": {"chat": true, "completions": true, "streaming": true, "cancellation": true, "image_input": true, "structured_output": true, "tool_calling": true, "mtp": true},
       "settings": {"context_length": 8192, "maximum_new_tokens": 512, "thinking_mode": "disabled", "startup_timeout_seconds": 900, "warmup_timeout_seconds": 180, "runtime_profile": "qwen38-q8-mtp-vulkan", "hardware_verification_required": true},
       "cache_setting": "artifact_path",
-      "lifecycle": "exclusive"
+      "lifecycle": "exclusive",
+      "fixed_context_length": true
     },
     {
       "id": "moshiko-speech",

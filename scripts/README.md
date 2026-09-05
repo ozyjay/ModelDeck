@@ -5,7 +5,7 @@ root; PowerShell scripts set the working directory there before doing any work.
 
 | Directory | Purpose |
 | --- | --- |
-| `operations/` | Start, stop, environment, port, manifest, and frontend operations |
+| `operations/` | Start, stop, inactive-state import/export, environment, port, manifest, and frontend operations |
 | `setup/` | Control-plane and specialised runtime setup |
 | `smoke/` | Mock and hardware smoke checks |
 | `stability/` | Long-running ROCm and GPT-OSS stability checks |

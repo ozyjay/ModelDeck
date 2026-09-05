@@ -260,6 +260,11 @@ def compatible_runtime_template_ids(
     definition = CAPABILITY_DEFINITIONS.get(capability_id)
     if definition is None:
         return []
+    if configuration_support == "gpt-oss-llama-vulkan" and capability_id in {
+        "general-chat",
+        "text-completion",
+    }:
+        return ["gpt-oss-llama-vulkan"] if "gpt-oss-llama-vulkan" in registrations else []
     qwen_templates = QWEN_TEXT_CAPABILITY_TEMPLATES.get(configuration_support or "", {}).get(
         capability_id, ()
     )
@@ -426,6 +431,7 @@ def capability_evidence_status(
     fingerprint = worker_configuration_fingerprint(worker)
     stale = False
     failed: int | None = None
+    requires_v2 = int(worker.get("capability_policy_version") or 0) >= 5
     for test in tests:
         evidence = test.get("evidence", {})
         if not isinstance(evidence, Mapping):
@@ -441,7 +447,13 @@ def capability_evidence_status(
                 stale = True
                 continue
             if test.get("result") == "tested-working":
-                return "qualified", int(test["id"])
+                version = int(evidence.get("fingerprint_version") or test.get("fingerprint_version") or 1)
+                if version == 2:
+                    return "qualified", int(test["id"])
+                if requires_v2:
+                    stale = True
+                    continue
+                return "legacy", int(test["id"])
             failed = int(test["id"])
     if failed is not None:
         return "failed", failed

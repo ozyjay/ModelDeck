@@ -16,6 +16,13 @@ from typing import Any
 
 import httpx
 
+from modeldeck.async_execution import run_in_isolated_thread
+from modeldeck.llama_runtime import (
+    GPT_OSS_LLAMA_REQUIRED_FLAGS,
+    QWEN_LLAMA_REQUIRED_FLAGS,
+    QWEN_MTP_LLAMA_REQUIRED_FLAGS,
+    validate_llama_installation,
+)
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import GenerationFamily, WorkerEvent, WorkerState
 from modeldeck.qwen_candidates import load_candidate
@@ -43,6 +50,7 @@ class ManagedWorker:
     log_session_id: str | None = None
     launch_environment: dict[str, str] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    resolved_identity: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -60,7 +68,12 @@ class ManagedWorker:
             "last_error": self.last_error,
             "log_session_id": self.log_session_id,
             "capabilities": self.profile.capabilities.model_dump(),
+            "resolved_identity": self.resolved_identity,
         }
+
+
+class WorkerIdentityError(RuntimeError):
+    pass
 
 
 class WorkerSupervisor:
@@ -160,13 +173,23 @@ class WorkerSupervisor:
                         and other.process.returncode is None
                     ):
                         await self.stop(other_id)
+            worker.log_session_id = uuid.uuid4().hex
             await self._transition(worker, WorkerState.VALIDATING, "Validating allowlisted worker manifest")
-            if not port_available(worker.profile.port):
+            if not port_available(worker.profile.port) and not await self._reclaim_stale_worker_endpoint(
+                worker
+            ):
                 worker.last_error = f"Port {worker.profile.port} is already in use"
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 raise RuntimeError(worker.last_error)
 
             try:
+                llama_features = {
+                    "llama-vulkan": GPT_OSS_LLAMA_REQUIRED_FLAGS,
+                    "qwen35-llamacpp-vulkan": QWEN_LLAMA_REQUIRED_FLAGS,
+                    "qwen38-llamacpp-vulkan": QWEN_MTP_LLAMA_REQUIRED_FLAGS,
+                }.get(worker.profile.preferred_runtime)
+                if llama_features is not None:
+                    await run_in_isolated_thread(validate_llama_installation, required_flags=llama_features)
                 launch = build_worker_launch(worker.profile, data_dir=self.data_dir)
             except ValueError as error:
                 worker.last_error = str(error)
@@ -174,7 +197,6 @@ class WorkerSupervisor:
                 raise RuntimeError(worker.last_error) from error
             worker.launch_environment = dict(launch.environment)
             await self._transition(worker, WorkerState.STARTING, "Starting isolated worker process")
-            worker.log_session_id = uuid.uuid4().hex
             try:
                 worker.process = await asyncio.create_subprocess_exec(
                     *launch.command,
@@ -200,6 +222,7 @@ class WorkerSupervisor:
                     worker.profile.settings.get("startup_timeout_seconds", self.startup_timeout)
                 )
                 await asyncio.wait_for(self._wait_until_loaded(worker), timeout=startup_timeout)
+                await self._verify_identity(worker)
                 await self._transition(worker, WorkerState.WARMING, "Running configured warmup")
                 warmup_timeout = float(worker.profile.settings.get("warmup_timeout_seconds", 10.0))
                 async with httpx.AsyncClient(timeout=warmup_timeout) as client:
@@ -208,12 +231,56 @@ class WorkerSupervisor:
                     if response.json().get("ready") is not True:
                         raise RuntimeError("worker warmup did not report readiness")
                 await self._transition(worker, WorkerState.READY, "Worker passed health and warmup checks")
+            except WorkerIdentityError as error:
+                worker.last_error = str(error)
+                await self._transition(worker, WorkerState.INCOMPATIBLE, worker.last_error)
+                await self._terminate(worker)
+                raise RuntimeError(worker.last_error) from error
             except Exception as error:
                 worker.last_error = f"Startup failed: {type(error).__name__}: {error}"
                 await self._transition(worker, WorkerState.FAILED, worker.last_error)
                 await self._terminate(worker)
                 raise RuntimeError(worker.last_error) from error
             return worker.snapshot()
+
+    async def _reclaim_stale_worker_endpoint(self, worker: ManagedWorker) -> bool:
+        """Shut down only a non-ready endpoint with the exact persisted Worker identity."""
+        endpoint = f"http://127.0.0.1:{worker.profile.port}"
+        try:
+            async with httpx.AsyncClient(timeout=0.75) as client:
+                response = await client.get(f"{endpoint}/health")
+                response.raise_for_status()
+                payload = response.json()
+                expected = {
+                    "worker_id": worker.profile.id,
+                    "model_id": worker.profile.model_id,
+                    "model_revision": worker.profile.revision,
+                    "generation_family": worker.profile.generation_family.value,
+                    "runtime": worker.profile.preferred_runtime,
+                }
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("ready") is True
+                    or payload.get("state") not in {"loading", "failed"}
+                    or any(payload.get(key) != value for key, value in expected.items())
+                ):
+                    return False
+                shutdown = await client.post(f"{endpoint}/shutdown")
+                shutdown.raise_for_status()
+        except (httpx.HTTPError, TypeError, ValueError):
+            return False
+
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not port_available(worker.profile.port):
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+        self._append_log(
+            worker.profile.id,
+            "supervisor",
+            "Reclaimed a stale non-ready endpoint with the same Worker identity",
+        )
+        return True
 
     async def stop(self, worker_id: str) -> dict[str, Any]:
         worker = self._require(worker_id)
@@ -280,6 +347,65 @@ class WorkerSupervisor:
                 except (httpx.HTTPError, ValueError):
                     pass
                 await asyncio.sleep(0.5)
+
+    async def _verify_identity(self, worker: ManagedWorker) -> None:
+        endpoint = f"http://127.0.0.1:{worker.profile.port}"
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                health_response, model_response, metrics_response = await asyncio.gather(
+                    client.get(f"{endpoint}/health"),
+                    client.get(f"{endpoint}/model"),
+                    client.get(f"{endpoint}/metrics"),
+                )
+            for response in (health_response, model_response, metrics_response):
+                response.raise_for_status()
+            health = health_response.json()
+            model = model_response.json()
+            metrics = metrics_response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise WorkerIdentityError(f"Worker identity could not be verified: {error}") from error
+        expected = {
+            "model_id": worker.profile.model_id,
+            "revision": worker.profile.revision,
+        }
+        mismatches = [
+            f"{field} expected {value!r}, reported {model.get(field)!r}"
+            for field, value in expected.items()
+            if model.get(field) != value
+        ]
+        health_expected = {
+            "worker_id": worker.profile.id,
+            "model_id": worker.profile.model_id,
+            "model_revision": worker.profile.revision,
+            "generation_family": worker.profile.generation_family.value,
+        }
+        mismatches.extend(
+            f"health {field} expected {value!r}, reported {health.get(field)!r}"
+            for field, value in health_expected.items()
+            if health.get(field) != value
+        )
+        if mismatches:
+            raise WorkerIdentityError("Worker identity mismatch: " + "; ".join(mismatches))
+        runtime = str(health.get("runtime") or metrics.get("runtime") or worker.profile.preferred_runtime)
+        if health.get("rocm_version") or runtime.endswith("-rocm"):
+            backend = "rocm"
+        elif "vulkan" in runtime:
+            backend = "vulkan"
+        elif runtime.endswith("-cpu"):
+            backend = "cpu"
+        elif runtime == "mock":
+            backend = "mock"
+        else:
+            backend = "unknown"
+        worker.resolved_identity = {
+            "model_id": model["model_id"],
+            "revision": model["revision"],
+            "runtime": runtime,
+            "backend": backend,
+            "device": health.get("device") or health.get("device_name") or metrics.get("device") or "unknown",
+            "configuration_fingerprint": health.get("configuration_fingerprint")
+            or metrics.get("configuration_fingerprint"),
+        }
 
     async def _capture(
         self,
@@ -429,8 +555,17 @@ def build_worker_launch(profile: ModelProfile, *, data_dir: Path | None = None) 
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
-    if data_dir is not None:
-        environment["MODELDECK_DATA_DIR"] = str(data_dir)
+    managed_data_dir = data_dir or Path(os.environ.get("MODELDECK_DATA_DIR", ".modeldeck"))
+    environment["MODELDECK_DATA_DIR"] = str(managed_data_dir)
+    miopen_root = managed_data_dir / "runtime" / "miopen"
+    user_database = miopen_root / "user-db"
+    kernel_cache = miopen_root / "kernel-cache"
+    for path in (user_database, kernel_cache):
+        path.mkdir(parents=True, exist_ok=True)
+    # Fedora standalone services deliberately make $HOME read-only. MIOpen
+    # otherwise writes its user database and compiled-kernel cache below it.
+    environment["MIOPEN_USER_DB_PATH"] = str(user_database)
+    environment["MIOPEN_CUSTOM_CACHE_DIR"] = str(kernel_cache)
     common = [
         "--worker-id",
         profile.id,

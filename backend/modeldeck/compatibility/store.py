@@ -8,7 +8,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+FINGERPRINT_VERSION = 2
 FINGERPRINT_FIELDS = (
+    "fingerprint_version",
+    "requested_model_id",
+    "requested_model_revision",
+    "reported_model_id",
+    "reported_model_revision",
     "hardware_profile",
     "fedora_version",
     "kernel",
@@ -27,14 +33,30 @@ FINGERPRINT_FIELDS = (
     "vllm_version",
     "model_id",
     "model_revision",
+    "artifact_model_id",
+    "artifact_revision",
+    "artifact_id",
+    "artifact_format",
+    "artifact_sha256",
     "quantisation",
     "dtype",
     "runtime",
+    "resolved_backend",
+    "resolved_device",
     "capability_id",
     "protocol_contract_id",
     "runtime_template_id",
     "runtime_template_version",
     "worker_configuration_fingerprint",
+    "runtime_registration_digest",
+    "context_length",
+    "maximum_new_tokens",
+    "maximum_denoising_steps",
+    "visual_token_budget",
+    "prefix_cache_enabled",
+    "workload_id",
+    "measurement_path",
+    "thermal_policy",
     "environment_overrides",
 )
 
@@ -44,7 +66,10 @@ class LegacyDatabaseError(RuntimeError):
 
 
 def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
-    canonical = {field: evidence.get(field) for field in FINGERPRINT_FIELDS}
+    canonical = {
+        field: evidence.get(field, FINGERPRINT_VERSION if field == "fingerprint_version" else None)
+        for field in FINGERPRINT_FIELDS
+    }
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -86,13 +111,17 @@ class CompatibilityStore:
         self.path = path
 
     def initialise(self) -> None:
-        self.initialise_v4()
+        self.initialise_v5()
 
     def initialise_v3(self) -> None:
         """Compatibility alias for callers creating a new current database."""
-        self.initialise_v4()
+        self.initialise_v5()
 
     def initialise_v4(self) -> None:
+        """Compatibility alias retained for callers creating a current database."""
+        self.initialise_v5()
+
+    def initialise_v5(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as database:
             tables = {
@@ -115,8 +144,8 @@ class CompatibilityStore:
                     raise LegacyDatabaseError("Run scripts/migrate_v2_to_v3.ps1 before starting ModelDeck.")
                 if str(row[0]) == "3":
                     raise LegacyDatabaseError("Run scripts/migrate_v3_to_v4.ps1 before starting ModelDeck.")
-                if str(row[0]) != "4":
-                    raise LegacyDatabaseError("The ModelDeck database schema is not version 4")
+                if str(row[0]) not in {"4", "5"}:
+                    raise LegacyDatabaseError("The ModelDeck database schema is not version 4 or 5")
             database.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -206,13 +235,41 @@ class CompatibilityStore:
                 );
                 CREATE INDEX IF NOT EXISTS compatibility_fingerprint_idx
                     ON compatibility_tests(fingerprint, tested_at);
+                CREATE TABLE IF NOT EXISTS compatibility_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    test_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    FOREIGN KEY (test_id) REFERENCES compatibility_tests(id)
+                );
+                CREATE INDEX IF NOT EXISTS compatibility_observation_test_idx
+                    ON compatibility_observations(test_id, id);
+                CREATE TABLE IF NOT EXISTS capability_setups (
+                    id TEXT PRIMARY KEY,
+                    request_id TEXT NOT NULL UNIQUE,
+                    request_fingerprint TEXT NOT NULL,
+                    document_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS capability_setup_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    setup_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    event_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (setup_id) REFERENCES capability_setups(id)
+                );
+                CREATE INDEX IF NOT EXISTS capability_setup_event_idx
+                    ON capability_setup_events(setup_id, id);
                 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_name_idx
                     ON workers(name COLLATE NOCASE) WHERE archived_at IS NULL;
                 """
             )
             now = _now()
             database.execute(
-                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '4', ?) "
+                "INSERT INTO schema_metadata (key, value, updated_at) VALUES ('schema_version', '5', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 (now,),
             )
@@ -224,6 +281,21 @@ class CompatibilityStore:
                 "(profile_id, revision, routing_json, published_at) "
                 "SELECT profile_id, revision, routing_json, published_at "
                 "FROM active_routing_profile WHERE singleton_id = 1"
+            )
+
+    def get_configuration_value(self, key: str) -> str | None:
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT value FROM configuration_metadata WHERE key = ?", (key,)
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def set_configuration_value(self, key: str, value: str) -> None:
+        with sqlite3.connect(self.path) as database:
+            database.execute(
+                "INSERT INTO configuration_metadata (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, value, _now()),
             )
 
     def list_workers(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
@@ -427,6 +499,8 @@ class CompatibilityStore:
         published_at: str,
     ) -> None:
         snapshot = {**dict(routing), "revision": revision}
+        # Each profile is independently live. Replacing a revision changes only
+        # this profile; all other active profiles stay exposed by the gateway.
         _ensure_no_active_capability_collisions(database, profile_id, snapshot)
         database.execute(
             "INSERT INTO active_routing_profiles "
@@ -651,7 +725,7 @@ class CompatibilityStore:
                 "SELECT id, fingerprint, result, failure_class, evidence_json, tested_at "
                 "FROM compatibility_tests ORDER BY id DESC"
             ).fetchall()
-        return [
+        records = [
             {
                 "id": row[0],
                 "fingerprint": row[1],
@@ -662,14 +736,21 @@ class CompatibilityStore:
             }
             for row in rows
         ]
+        for record in records:
+            version = int(record["evidence"].get("fingerprint_version", 1))
+            record["fingerprint_version"] = version
+            record["evidence_status"] = "current" if version == FINGERPRINT_VERSION else "legacy"
+            record["observations"] = self.list_test_observations(int(record["id"]))
+        return records
 
     def record_test(
         self, evidence: Mapping[str, Any], *, result: str, failure_class: str | None = None
     ) -> dict[str, Any]:
         tested_at = _now()
-        fingerprint = evidence_fingerprint(evidence)
+        versioned_evidence = {"fingerprint_version": FINGERPRINT_VERSION, **dict(evidence)}
+        fingerprint = evidence_fingerprint(versioned_evidence)
         document = {
-            **dict(evidence),
+            **versioned_evidence,
             "result": result,
             "failure_class": failure_class,
             "tested_at": tested_at,
@@ -696,28 +777,135 @@ class CompatibilityStore:
             "tested_at": tested_at,
         }
 
-    def update_test_evidence(self, test_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
+    def record_test_observation(
+        self, test_id: int, observation: Mapping[str, Any], *, kind: str = "lifecycle"
+    ) -> dict[str, Any]:
+        observed_at = _now()
         with sqlite3.connect(self.path) as database:
             row = database.execute(
-                "SELECT fingerprint, result, failure_class, evidence_json, tested_at "
-                "FROM compatibility_tests WHERE id = ?",
+                "SELECT 1 FROM compatibility_tests WHERE id = ?",
                 (test_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Unknown compatibility test: {test_id}")
-            evidence = {**json.loads(row[3]), **dict(updates)}
-            database.execute(
-                "UPDATE compatibility_tests SET evidence_json = ? WHERE id = ?",
-                (json.dumps(evidence, sort_keys=True, default=str), test_id),
+            cursor = database.execute(
+                "INSERT INTO compatibility_observations "
+                "(test_id, kind, observation_json, observed_at) VALUES (?, ?, ?, ?)",
+                (test_id, kind, json.dumps(dict(observation), sort_keys=True, default=str), observed_at),
             )
         return {
-            "id": test_id,
-            "fingerprint": row[0],
-            "result": row[1],
-            "failure_class": row[2],
-            "evidence": evidence,
-            "tested_at": row[4],
+            "id": int(cursor.lastrowid),
+            "test_id": test_id,
+            "kind": kind,
+            "observation": dict(observation),
+            "observed_at": observed_at,
         }
+
+    def list_test_observations(self, test_id: int) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT id, kind, observation_json, observed_at FROM compatibility_observations "
+                "WHERE test_id = ? ORDER BY id",
+                (test_id,),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "test_id": test_id,
+                "kind": row[1],
+                "observation": json.loads(row[2]),
+                "observed_at": row[3],
+            }
+            for row in rows
+        ]
+
+    def create_capability_setup(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        now = _now()
+        payload = dict(document)
+        with sqlite3.connect(self.path) as database:
+            existing = database.execute(
+                "SELECT request_fingerprint, document_json FROM capability_setups WHERE request_id = ?",
+                (str(payload["request_id"]),),
+            ).fetchone()
+            if existing is not None:
+                if str(existing[0]) != str(payload["request_fingerprint"]):
+                    raise ValueError("That setup request identifier was already used for different inputs")
+                return json.loads(existing[1])
+            database.execute(
+                "INSERT INTO capability_setups "
+                "(id, request_id, request_fingerprint, document_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    str(payload["id"]),
+                    str(payload["request_id"]),
+                    str(payload["request_fingerprint"]),
+                    json.dumps(payload, sort_keys=True, default=str),
+                    now,
+                    now,
+                ),
+            )
+        return payload
+
+    def save_capability_setup(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        payload = dict(document)
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute(
+                "UPDATE capability_setups SET document_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(payload, sort_keys=True, default=str), _now(), str(payload["id"])),
+            )
+        if cursor.rowcount != 1:
+            raise KeyError(f"Unknown capability setup: {payload['id']}")
+        return payload
+
+    def get_capability_setup(self, setup_id: str) -> dict[str, Any] | None:
+        with sqlite3.connect(self.path) as database:
+            row = database.execute(
+                "SELECT document_json FROM capability_setups WHERE id = ?", (setup_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def list_capability_setups(self) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT document_json FROM capability_setups ORDER BY created_at DESC"
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def record_capability_setup_event(
+        self, setup_id: str, state: str, event: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        created_at = _now()
+        with sqlite3.connect(self.path) as database:
+            cursor = database.execute(
+                "INSERT INTO capability_setup_events (setup_id, state, event_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (setup_id, state, json.dumps(dict(event), sort_keys=True, default=str), created_at),
+            )
+        return {
+            "id": int(cursor.lastrowid),
+            "setup_id": setup_id,
+            "state": state,
+            "event": dict(event),
+            "created_at": created_at,
+        }
+
+    def list_capability_setup_events(self, setup_id: str, *, after: int = 0) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.path) as database:
+            rows = database.execute(
+                "SELECT id, state, event_json, created_at FROM capability_setup_events "
+                "WHERE setup_id = ? AND id > ? ORDER BY id",
+                (setup_id, after),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "setup_id": setup_id,
+                "state": row[1],
+                "event": json.loads(row[2]),
+                "created_at": row[3],
+            }
+            for row in rows
+        ]
 
 
 def _now() -> str:

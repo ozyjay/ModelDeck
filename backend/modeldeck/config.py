@@ -24,7 +24,29 @@ def _int_env(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
-def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
+def _desktop_path(kind: str) -> Path:
+    """Return the XDG location used by the packaged Fedora user services."""
+
+    if kind == "data":
+        root = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    elif kind == "state":
+        root = Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    else:  # pragma: no cover - defensive guard for fixed internal callers
+        raise ValueError(f"Unsupported XDG location: {kind}")
+    return root / "modeldeck"
+
+
+def _default_data_dir() -> Path:
+    return _desktop_path("data") if _bool_env("MODELDECK_DESKTOP") else Path(".modeldeck")
+
+
+def _default_log_dir() -> Path:
+    if _bool_env("MODELDECK_DESKTOP"):
+        return _desktop_path("state") / "logs" / "workers"
+    return Path("var/log/workers")
+
+
+def _gateway_host_from_env() -> str:
     """Return a gateway bind address permitted by the local-only policy."""
 
     raw_host = os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1").strip()
@@ -35,12 +57,10 @@ def _gateway_host_from_env(*, docker_bridge_enabled: bool) -> str:
     except ValueError as error:
         raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal") from error
 
-    docker_default_bridge = ip_address("172.17.0.1")
-    if not (host.is_loopback or (docker_bridge_enabled and host == docker_default_bridge)):
+    if not host.is_loopback:
         raise ValueError(
-            "MODELDECK_GATEWAY_HOST must be a loopback address; set "
-            "MODELDECK_ENABLE_DOCKER_BRIDGE=1 only for the launcher-managed Docker "
-            "bridge listener at 172.17.0.1"
+            "MODELDECK_GATEWAY_HOST must be a loopback address; "
+            "MODELDECK_ENABLE_DOCKER_BRIDGE=1 adds a separate restricted forwarder"
         )
     return str(host)
 
@@ -50,6 +70,22 @@ def gateway_base_url(host: str, port: int) -> str:
 
     formatted_host = f"[{host}]" if ":" in host else host
     return f"http://{formatted_host}:{port}"
+
+
+def state_store_metadata(data_dir: Path) -> dict[str, str]:
+    """Describe the intentionally separate desktop and checkout state stores."""
+
+    if _bool_env("MODELDECK_DESKTOP"):
+        return {
+            "kind": "desktop-standalone",
+            "label": "Desktop standalone state",
+            "directory": str(data_dir.resolve()),
+        }
+    return {
+        "kind": "checkout-development",
+        "label": "Checkout development state",
+        "directory": str(data_dir.resolve()),
+    }
 
 
 @dataclass(frozen=True)
@@ -141,12 +177,12 @@ class Settings:
         )
         return cls(
             host=os.getenv("MODELDECK_HOST", "127.0.0.1"),
-            gateway_host=_gateway_host_from_env(docker_bridge_enabled=docker_bridge_enabled),
+            gateway_host=_gateway_host_from_env(),
             docker_bridge_enabled=docker_bridge_enabled,
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),
             gateway_port=int(os.getenv("MODELDECK_GATEWAY_PORT", "8600")),
-            data_dir=Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")),
-            log_dir=Path(os.getenv("MODELDECK_LOG_DIR", "var/log/workers")),
+            data_dir=Path(os.getenv("MODELDECK_DATA_DIR", str(_default_data_dir()))),
+            log_dir=Path(os.getenv("MODELDECK_LOG_DIR", str(_default_log_dir()))),
             configuration_locked=configuration_locked,
             diagnostic_capture=_bool_env("MODELDECK_DIAGNOSTIC_CAPTURE"),
             diffusion_timeout_seconds=float(os.getenv("MODELDECK_DIFFUSION_TIMEOUT_SECONDS", "900")),

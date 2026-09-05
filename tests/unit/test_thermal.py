@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -272,3 +273,13 @@ def test_shared_workload_activity_expires_instead_of_reporting_false_idle(tmp_pa
     payload["published_monotonic"] = 0
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert read_thermal_workload_activity(path, configured, monotonic=lambda: 10) is None
+
+
+def test_atomic_status_writes_do_not_share_a_temporary_path(tmp_path: Path) -> None:
+    path = tmp_path / "thermal-workloads.json"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda value: write_thermal_status(path, {"value": value}), range(64)))
+
+    assert json.loads(path.read_text(encoding="utf-8"))["value"] in range(64)
+    assert list(tmp_path.glob("*.tmp")) == []

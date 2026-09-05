@@ -70,7 +70,10 @@ $ServiceDefinitions = @{
         Module = 'modeldeck.gateway.app'
         LegacyExecutable = (Join-Path (Get-Location) '.venv/bin/modeldeck-gateway')
     }
-    'gateway-docker-bridge' = (Join-Path (Get-Location) '.venv/bin/modeldeck-gateway')
+    'gateway-docker-bridge' = [pscustomobject]@{
+        Module = 'modeldeck.gateway.docker_bridge'
+        LegacyExecutable = (Join-Path (Get-Location) '.venv/bin/modeldeck-gateway-docker-bridge')
+    }
 }
 foreach ($Name in @('gateway-docker-bridge', 'gateway', 'gateway-loopback', 'management')) {
     $Path = "var/run/$Name.pid"
@@ -95,7 +98,7 @@ foreach ($Name in @('gateway-docker-bridge', 'gateway', 'gateway-loopback', 'man
     Remove-Item $Path -ErrorAction SilentlyContinue
 }
 
-foreach ($Name in @('gateway', 'management')) {
+foreach ($Name in @('gateway-docker-bridge', 'gateway', 'management')) {
     $Definition = $ServiceDefinitions[$Name]
     foreach ($ProcessId in Find-ModelDeckProcessIds -Module $Definition.Module -LegacyExecutable $Definition.LegacyExecutable) {
         if ($StoppedProcessIds.ContainsKey($ProcessId)) { continue }

@@ -21,11 +21,11 @@ Provision the allowlisted executable with:
 pwsh -NoProfile -File scripts/setup/setup_llama_vulkan.ps1
 ```
 
-The default preset uses full Vulkan offload. Compatibility testing may instead select the
-fixed `vulkan-cpu-moe` preset; arbitrary llama.cpp arguments are never accepted through the
-management API. The runtime does not advertise Token Trail traces and strips reasoning-only
-fields before returning responses. The tested full-offload fingerprint used llama.cpp
-revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon 8060S.
+The `gpt-oss-llama-vulkan` template uses full Vulkan offload. CPU and CPU-MoE presets are
+not registered or accepted by the management API. Arbitrary llama.cpp arguments are never
+accepted through the management API. The runtime does not advertise Token Trail traces and
+strips reasoning-only fields before returning responses. The tested full-offload fingerprint
+used llama.cpp revision `f08c4c0d`, Mesa RADV 26.1.4, and the Radeon 8060S.
 
 ## Speech model
 

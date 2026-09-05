@@ -65,13 +65,18 @@ def _validated_runtime(monkeypatch, tmp_path):
     runtime_root = tmp_path / "runtime"
     executable = runtime_root / "bin" / "llama-server"
     executable.parent.mkdir(parents=True)
-    executable.write_bytes(b"executable")
+    executable.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then echo \'commit 9d77fa172\'; exit 0; fi\n'
+        "printf '%s\\n' '" + " ".join(llama_runtime.ALL_LLAMA_REQUIRED_FLAGS) + "'\n",
+        encoding="utf-8",
+    )
     executable.chmod(0o755)
     receipt = LlamaBuildReceipt(
         format="modeldeck-llama-build",
         version=1,
         commit=llama_runtime.LLAMA_CPP_COMMIT,
-        executable_sha256=hashlib.sha256(b"executable").hexdigest(),
+        executable_sha256=llama_runtime.sha256_file(executable),
         backend="Vulkan",
         operating_system="linux",
         architecture="x86_64",
@@ -137,6 +142,8 @@ def test_qwen35_command_disables_thinking_without_vision_or_mtp_companions(tmp_p
         projector=None,
         mtp_model=None,
         executable_sha256="a" * 64,
+        receipt_sha256="b" * 64,
+        source_revision=llama_runtime.LLAMA_CPP_COMMIT,
     )
 
     command = qwen_llama_command(runtime=runtime, port=49152)
@@ -156,6 +163,22 @@ def test_qwen_runtime_rejects_a_tampered_artefact(monkeypatch, tmp_path) -> None
     runtime.model.write_bytes(b"tampered")
 
     with pytest.raises(ValueError, match="size mismatch"):
+        llama_runtime.validate_qwen_runtime(runtime.manifest.id, runtime.model.parent)
+
+
+def test_qwen_runtime_rejects_an_accepted_build_that_does_not_match_its_manifest(
+    monkeypatch, tmp_path
+) -> None:
+    runtime = _validated_runtime(monkeypatch, tmp_path)
+    older = "b" * 40
+    receipt_path = runtime.executable.parent / "modeldeck-build.json"
+    receipt = LlamaBuildReceipt.model_validate_json(receipt_path.read_bytes()).model_copy(
+        update={"commit": older}
+    )
+    receipt_path.write_text(receipt.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(llama_runtime, "LLAMA_ACCEPTED_OLDER_COMMITS", frozenset({older}))
+
+    with pytest.raises(ValueError, match="does not match the Qwen runtime manifest"):
         llama_runtime.validate_qwen_runtime(runtime.manifest.id, runtime.model.parent)
 
 

@@ -25,6 +25,18 @@ def test_autoregressive_worker_runs_through_mocked_management_and_gateway() -> N
     requests = {"start": 0, "stop": 0, "trace": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/thermal":
+            return httpx.Response(
+                200,
+                json={
+                    "enabled": True,
+                    "state": "normal",
+                    "temperature_c": 55,
+                    "sensor_id": "test:gpu",
+                    "reason_code": "thermal_capacity_available",
+                    "policy": {"hot_threshold_c": 80, "critical_threshold_c": 85},
+                },
+            )
         if request.url.path == "/api/telemetry":
             return httpx.Response(
                 200,
@@ -124,6 +136,7 @@ def test_autoregressive_worker_runs_through_mocked_management_and_gateway() -> N
     assert result["status"] == "success"
     assert result["summary"]["successful_requests"] == 2
     assert result["summary"]["throughput_tokens_per_second"]["median"] == 64.0
+    assert result["fingerprint_fields"]["thermal_policy"]["hot_threshold_c"] == 80
     rendered = json.dumps(result)
     assert "private generated output" not in rendered
     assert "/private" not in rendered

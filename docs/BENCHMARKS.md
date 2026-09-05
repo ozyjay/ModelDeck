@@ -9,6 +9,10 @@ remain distinct from later interpretation. This suite implements only the measur
 documented here; it does not yet provide a cross-runtime recommendation engine or universal
 usability score.
 
+Every standard report records the active ModelDeck thermal policy and bounded before/after
+thermal observations. A very-hot, critical, or degraded-telemetry finish is
+`thermal-invalid`, not a successful benchmark, even when inference returned output.
+
 ## Run the suite
 
 Run the standard suite across every configured non-mock Worker that has exactly one
@@ -48,6 +52,11 @@ It never changes Event routing or Worker configuration.
 
 Use `-JsonOutput` and `-MarkdownOutput` to override the default timestamped paths under
 `var/benchmarks/`. The paths must be different.
+
+The operator console's **Advanced** view reads the privacy-safe JSON reports in that
+directory and charts median tokens per second over time. It keeps different Model
+revisions, runtimes, data types and workload settings in separate series; it does not mix
+ordinary live requests or host telemetry into the benchmark trend.
 
 For a focused SceneChat comparison, run the committed 1280-by-720, 59,214-byte synthetic
 booth image through every curated question. The benchmark performs two warm-ups and ten

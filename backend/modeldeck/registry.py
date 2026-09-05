@@ -49,6 +49,7 @@ class RuntimeTemplate(BaseModel):
     lifecycle: LifecycleClass | None = None
     dtype: Literal["float16", "bfloat16", "float32"] | None = None
     uses_base_model_identity: bool = False
+    fixed_context_length: bool = False
 
     @model_validator(mode="after")
     def trusted_runtime(self) -> RuntimeTemplate:

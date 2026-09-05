@@ -122,7 +122,7 @@ class WorkerDefinition(BaseModel):
             dtype=profile.dtype,
             capabilities=profile.capabilities.model_dump(mode="json"),
             settings=profile.settings,
-            capability_policy_version=4,
+            capability_policy_version=5,
         )
 
     def to_profile(self) -> ModelProfile:
@@ -160,6 +160,7 @@ class CapabilityBinding(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     public_name: str = Field(pattern=r"^[a-z][a-z0-9._-]{1,127}$")
     protocol_contract: str
+    tool_calling_enabled: bool = False
     worker_ids: list[str] = Field(min_length=1)
 
     _valid_id = field_validator("id")(_uuid)
@@ -168,6 +169,8 @@ class CapabilityBinding(BaseModel):
     def trusted_contract_and_unique_workers(self) -> CapabilityBinding:
         if self.protocol_contract not in PROTOCOL_CONTRACTS:
             raise ValueError("capability protocol contract is not trusted")
+        if self.tool_calling_enabled and self.protocol_contract != "openai-chat-v1":
+            raise ValueError("tool calling is supported only by the OpenAI-compatible chat contract")
         if len(self.worker_ids) != len(set(self.worker_ids)):
             raise ValueError("capability workers must be unique")
         for worker_id in self.worker_ids:
@@ -242,6 +245,8 @@ def validate_routing_profile(
                 ]
                 if missing:
                     messages.append(f"Missing capabilities: {', '.join(missing)}")
+                if capability.tool_calling_enabled and worker.capabilities.get("tool_calling") is not True:
+                    messages.append("Tool calling is enabled, but this Worker does not support it")
                 mismatched_settings = [
                     f"{name}={expected}"
                     for name, expected in contract.required_worker_settings.items()
@@ -289,6 +294,7 @@ def routing_snapshot(definition: RoutingProfile, revision: int) -> dict[str, Any
                 "display_name": capability.display_name,
                 "public_name": capability.public_name,
                 "protocol_contract": capability.protocol_contract,
+                "tool_calling_enabled": capability.tool_calling_enabled,
                 "worker_ids": list(capability.worker_ids),
             }
             for capability in definition.capabilities

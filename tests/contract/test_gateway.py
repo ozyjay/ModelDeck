@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from modeldeck import __version__
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot
@@ -81,9 +82,11 @@ async def listed_model_revision(settings: Settings) -> str:
 async def test_gateway_has_no_routes_or_implicit_defaults_before_publication(tmp_path) -> None:
     app = create_gateway_app(settings=Settings(data_dir=tmp_path))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        health = await client.get("/v1/health")
         models = await client.get("/v1/models")
         unavailable = await client.post("/v1/completions", json={"prompt": "hello"})
 
+    assert health.json()["version"] == __version__
     assert models.json() == {"object": "list", "data": []}
     assert unavailable.status_code == 503
     assert unavailable.json()["error"] == {
@@ -299,6 +302,13 @@ def test_model_discovery_reports_ready_rocm_worker_accelerator_metadata() -> Non
     assert record["runtime"] == "transformers-rocm"
     assert record["accelerator"] == "rocm"
     assert record["ready"] is True
+
+
+def test_qwen_llamacpp_runtime_reports_vulkan_accelerator() -> None:
+    from modeldeck.gateway.app import accelerator_for_runtime
+
+    assert accelerator_for_runtime("qwen35-llamacpp-vulkan", {}) == "vulkan"
+    assert accelerator_for_runtime("qwen38-llamacpp-vulkan", {}) == "vulkan"
 
 
 def test_model_discovery_separates_primary_and_selected_worker_identities() -> None:
@@ -588,11 +598,15 @@ async def test_gateway_forwards_openai_tool_fields_without_semantic_routing(monk
         },
         "stream": False,
     }
-    response = await proxy_request(
-        gateway_request(payload), {"fast-local": [profile]}, "/v1/chat/completions", None
-    )
+    request = gateway_request(payload)
+    response = await proxy_request(request, {"fast-local": [profile]}, "/v1/chat/completions", None)
 
     assert response.status_code == 200
+    assert response.headers["x-modeldeck-worker-id"] == profile.id
+    assert response.headers["x-modeldeck-route-role"] == "primary"
+    assert len(response.headers["x-modeldeck-configuration-fingerprint"]) == 64
+    assert request.app.state.last_request_diagnostics["worker_id"] == profile.id
+    assert request.app.state.last_request_diagnostics["route_role"] == "primary"
     assert fake.last_request is not None
     forwarded = json.loads(fake.last_request.content)
     assert forwarded == {**payload, "model": "fast-local"}

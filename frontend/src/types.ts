@@ -37,6 +37,7 @@ export interface CapabilityBinding {
   display_name: string;
   public_name: string;
   protocol_contract: string;
+  tool_calling_enabled: boolean;
   worker_ids: string[];
 }
 export interface RoutingProfile {
@@ -103,6 +104,7 @@ export interface RuntimeTemplate {
   generation_family: string;
   cache_setting: "cache_root" | "q4_checkpoint_dir" | "artifact_path";
   uses_base_model_identity: boolean;
+  fixed_context_length?: boolean;
   lifecycle: "resident" | "on-demand" | "exclusive" | null;
   dtype: "float16" | "bfloat16" | "float32" | null;
   settings: Record<string, string | number | boolean>;
@@ -112,6 +114,33 @@ export interface RuntimeTemplate {
   publisher: string;
   source: "packaged" | "trusted-local";
   digest: string;
+}
+
+export interface RuntimeInstallation {
+  installation_id: string;
+  display_name: string;
+  integrity_status: "verified" | "missing" | "receipt-missing" | "receipt-invalid" | "modified" | "feature-mismatch" | "inspection-failed";
+  currency_status: "recommended" | "accepted-older" | "accepted-alternative" | "different-unqualified" | "newer-unqualified" | "revoked" | "unknown";
+  start_allowed: boolean;
+  detected: {
+    source_revision: string | null;
+    executable_sha256: string | null;
+    executable_size_bytes: number | null;
+    receipt_sha256: string | null;
+    receipt_version: number | null;
+    backend: string | null;
+    operating_system: string;
+    architecture: string;
+    version_output: string | null;
+  };
+  recommended_source_revision: string;
+  required_features: string[];
+  missing_features: string[];
+  reason_codes: string[];
+  inspected_at: string;
+  implementation_ids: string[];
+  runtime_template_ids: string[];
+  worker_ids: string[];
 }
 
 export interface ModelArtifact { artifact_id: string; kind: "gguf"; format: string; filenames: string[] }
@@ -148,6 +177,7 @@ export interface ModelEntry {
   physical_size_bytes: number;
   download_state: "partial" | "installed-untested";
   generation_family_hint: string | null;
+  maximum_context_length: number | null;
   capability_hints: string[];
   configuration_support: string | null;
   configuration_support_reason: string;
@@ -178,6 +208,67 @@ export interface CompatibilityTest {
   failure_class: string | null;
   evidence: Record<string, unknown>;
   tested_at: string;
+  fingerprint_version?: number;
+  evidence_status?: "current" | "legacy";
+  observations?: CompatibilityObservation[];
+}
+
+export interface CompatibilityObservation {
+  id: number;
+  test_id: number;
+  kind: string;
+  observation: Record<string, unknown>;
+  observed_at: string;
+}
+
+export interface CapabilitySetupSelection {
+  capability_id: string;
+  model_id: string;
+  revision: string;
+  worker_name: string;
+  artifact_id?: string | null;
+  runtime_template_id?: string | null;
+  dtype?: "float16" | "bfloat16" | "float32" | null;
+  lifecycle?: "resident" | "on-demand" | "exclusive" | null;
+  context_length?: number | null;
+  maximum_new_tokens?: number | null;
+  maximum_denoising_steps?: number | null;
+  visual_token_budget?: number | null;
+  prefix_cache_enabled?: boolean;
+}
+
+export interface CapabilitySetupPreview {
+  selection: CapabilitySetupSelection;
+  worker: Record<string, unknown>;
+  selection_basis: string;
+  runtime_registration_digest: string;
+  policy_changes: { model_allowed: boolean; capability_allowed: boolean };
+  warnings: string[];
+  preview_fingerprint: string;
+}
+
+export interface CapabilitySetup {
+  id: string;
+  request_id: string;
+  state: string;
+  current_step: string;
+  plan: CapabilitySetupPreview;
+  worker_id?: string;
+  evidence_id?: number;
+  qualification?: CompatibilityTest;
+  resolved_identity?: Record<string, unknown>;
+  error?: { code: string; message: string; component: string; step: string; retryable: boolean } | null;
+  publication?: { profile_id: string; revision: number; public_name: string };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapabilityPublicationPreview {
+  profile_id: string;
+  before: RoutingProfile;
+  after: RoutingProfile;
+  validation: RoutingProfileValidation;
+  publication_fingerprint: string;
 }
 
 export interface GatewayStatus {
@@ -188,6 +279,28 @@ export interface GatewayStatus {
   error: string | null;
 }
 
+export interface BenchmarkThroughputPoint {
+  series_key: string;
+  observed_at: string;
+  model_id: string;
+  model_revision: string;
+  runtime: string;
+  dtype: string;
+  generation_family: string;
+  worker_id: string | null;
+  worker_name: string | null;
+  tokens_per_second: number;
+  workload: string;
+  configuration_fingerprint: string | null;
+  sample_count: number | null;
+}
+
+export interface BenchmarkHistory {
+  points: BenchmarkThroughputPoint[];
+  reports_scanned: number;
+  measurement: string;
+}
+
 export interface ManagementHealth {
   status: string;
   service: string;
@@ -195,6 +308,11 @@ export interface ManagementHealth {
   configuration_locked: boolean;
   offline_only: boolean;
   gateway_url: string;
+  state_store: {
+    kind: "desktop-standalone" | "checkout-development";
+    label: string;
+    directory: string;
+  };
 }
 
 export interface MemoryReading { total_bytes: number; available_bytes: number; percent: number }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from modeldeck.config import Settings, gateway_base_url
+from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.gateway import app as gateway_app
 
 
@@ -9,6 +9,20 @@ def test_gateway_host_defaults_to_loopback(monkeypatch) -> None:
     monkeypatch.delenv("MODELDECK_GATEWAY_HOST", raising=False)
 
     assert Settings.from_env().gateway_host == "127.0.0.1"
+
+
+def test_state_store_metadata_distinguishes_desktop_and_checkout_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("MODELDECK_DESKTOP", raising=False)
+    assert state_store_metadata(tmp_path)["kind"] == "checkout-development"
+
+    monkeypatch.setenv("MODELDECK_DESKTOP", "1")
+    metadata = state_store_metadata(tmp_path)
+
+    assert metadata == {
+        "kind": "desktop-standalone",
+        "label": "Desktop standalone state",
+        "directory": str(tmp_path.resolve()),
+    }
 
 
 def test_gateway_host_does_not_change_legacy_settings_positional_arguments() -> None:
@@ -30,6 +44,14 @@ def test_docker_bridge_is_an_explicit_secondary_listener_option(monkeypatch) -> 
     assert settings.gateway_host == "127.0.0.1"
     assert settings.docker_bridge_enabled is True
     assert gateway_base_url(settings.gateway_host, settings.gateway_port) == "http://127.0.0.1:8600"
+
+
+def test_docker_bridge_does_not_allow_the_authoritative_gateway_to_bind_the_bridge(monkeypatch) -> None:
+    monkeypatch.setenv("MODELDECK_GATEWAY_HOST", "172.17.0.1")
+    monkeypatch.setenv("MODELDECK_ENABLE_DOCKER_BRIDGE", "1")
+
+    with pytest.raises(ValueError, match="must be a loopback address"):
+        Settings.from_env()
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "172.17.0.1", "not-an-address"])

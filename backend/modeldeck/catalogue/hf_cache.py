@@ -309,6 +309,22 @@ def _configuration_support(
     return None, "No allowlisted ModelDeck worker supports this architecture yet."
 
 
+def _maximum_context_length(config: dict[str, Any] | None) -> int | None:
+    if not isinstance(config, dict):
+        return None
+    text_config = config.get("text_config")
+    candidates = (
+        config.get("max_position_embeddings"),
+        config.get("n_positions"),
+        config.get("n_ctx"),
+        text_config.get("max_position_embeddings") if isinstance(text_config, dict) else None,
+    )
+    for value in candidates:
+        if not isinstance(value, bool) and isinstance(value, int) and value >= 256:
+            return value
+    return None
+
+
 def discover_huggingface_models(
     paths: Iterable[Path] | None = None,
     *,
@@ -381,6 +397,7 @@ def discover_huggingface_models(
                     "physical_size_bytes": _physical_size((model_dir,)),
                     "download_state": state,
                     "generation_family_hint": generation_family,
+                    "maximum_context_length": _maximum_context_length(config),
                     "capability_hints": _capability_hints(generation_family),
                     "potential_capabilities": potential_capabilities,
                     "configuration_support": support,

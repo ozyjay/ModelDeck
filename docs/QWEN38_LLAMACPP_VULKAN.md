@@ -25,7 +25,15 @@ build receipt; it must not reuse or weaken the stock Vulkan trust boundary.
 Run `pwsh -NoProfile -File scripts/setup/setup_llama_vulkan.ps1` to build the pinned
 Vulkan tools. The script checks the exact MTP flags and writes a receipt containing the
 resulting executable digest. At worker start, ModelDeck verifies the receipt and hashes all
-three model artefacts before executing the fixed binary at the fixed repository path.
+three model artefacts before executing the fixed binary at the configured local runtime path.
+To provision a desktop service independently of a source checkout, provide its runtime
+location explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/setup/setup_llama_vulkan.ps1 `
+  -RuntimeRoot ~/.runtime-tools/llama.cpp
+```
+
 Neither the management API nor a runtime template can supply a binary, projector, draft
 model, environment variable or llama.cpp argument.
 

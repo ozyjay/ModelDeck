@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ModelDeck
+Comment=Local model runtime manager and capability gateway
+Exec=modeldeck-desktop
+Icon=modeldeck
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=ModelDeck
+X-GNOME-UsesNotifications=true

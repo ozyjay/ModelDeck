@@ -11,6 +11,26 @@ Discovery is read-only: `GET /api/health`, `/api/hardware`, `/api/telemetry`,
 `/api/thermal`, `/api/gateway/status`, `/api/catalogue`, `/api/runtime-templates`,
 `/api/protocol-contracts`, and `/api/compatibility`.
 
+### Guided capability setup
+
+The intent-first setup surface uses durable, local-only operation resources:
+
+- `POST /api/capability-setups/preview` resolves one exact cached Model, Artifact,
+  trusted Runtime and immutable Worker plan without changing policy.
+- `POST|GET /api/capability-setups` creates or lists durable FIFO operations.
+- `GET /api/capability-setups/{setup_id}` and `/events` report persisted state and
+  replayable SSE progress.
+- `POST /api/capability-setups/{setup_id}/cancel|retry` controls work without deleting
+  its Worker or evidence.
+- `POST /api/capability-setups/{setup_id}/publication-preview|publish` separates
+  qualification from an explicit, stale-protected routing decision.
+
+Creation requires a caller UUID and the SHA-256 fingerprint of the reviewed preview.
+Model loading and qualification pause under thermal policy, resume after a management
+restart, and preserve positive or negative evidence. Publication reuses the managed
+**Local capabilities** profile, requires `tested-working` evidence, verifies the public
+route and restores the previous live revision when that verification fails.
+
 Workers use `GET|POST /api/workers`, `GET|PATCH|DELETE /api/workers/{worker_id}` and
 the bounded lifecycle, logs, smoke, usage, replacement and stop-all subroutes. Workers
 can be created only from a complete, cached model revision and an installed trusted
@@ -46,6 +66,7 @@ tools, not an operator feature.
 - `POST /api/routing-profiles/{profile_id}/validate|publish`
 - `GET /api/routing-profiles/{profile_id}/revisions`
 - `POST /api/routing-profiles/{profile_id}/revisions/{revision}/publish`
+- `DELETE /api/routing-profiles/{profile_id}/active`
 - `POST /api/routing-profiles/{profile_id}/capabilities/{capability_id}/smoke`
 - `GET /api/live`
 
@@ -55,18 +76,20 @@ protocol contract, and ordered compatible Worker IDs. Index zero is primary. Pub
 validates a draft, creates an immutable revision, and atomically activates that profile
 alongside other active profiles; it never starts Workers. Public model IDs must be unique
 across the active set. Earlier revisions can be made active again and an active profile can
-be deactivated with `DELETE /api/routing-profiles/{profile_id}/active`. The local
+be deactivated with `DELETE /api/routing-profiles/{profile_id}/active`; this removes only
+that profile's capabilities from live routing and never stops its Workers. The local
 configuration lock blocks profile mutation server-side while preserving reads and explicit
 Worker controls.
 
 ## Gateway (`:8600`)
 
 `MODELDECK_GATEWAY_HOST` defaults to `127.0.0.1` and must remain a loopback address.
-`MODELDECK_ENABLE_DOCKER_BRIDGE=1` starts an additional listener at Docker's default bridge
+`MODELDECK_ENABLE_DOCKER_BRIDGE=1` starts a narrow TCP forwarder at Docker's default bridge
 address, `172.17.0.1`, so containers can reach `http://host.docker.internal:8600/v1` while
-desktop applications use loopback. Wildcard (`0.0.0.0` or `::`) and LAN addresses are
-rejected during configuration parsing. Uvicorn reports an unavailable address or occupied
-port at startup.
+desktop applications use loopback. The forwarder targets the authoritative loopback gateway
+and owns no routing, persistence, Worker lifecycle or thermal accounting. Wildcard (`0.0.0.0`
+or `::`) and LAN addresses are rejected during configuration parsing. An unavailable address
+or occupied port is reported at startup.
 
 `/v1` contains standard model APIs. The `model` field must identify a compatible
 capability in an active Routing Profile. `GET /v1/models` lists only capabilities whose
@@ -198,6 +221,9 @@ The gateway selects an ordered backup only before a request or text-diffusion jo
 It does not fail over an interrupted stream or an existing job. Job-to-Worker ownership is
 stored durably so a restarted gateway can poll or cancel the same live Worker job.
 
+Successful routed responses include `X-ModelDeck-Worker-Id`,
+`X-ModelDeck-Configuration-Fingerprint`, and `X-ModelDeck-Route-Role` (`primary` or
+`backup`) so selection remains observable without exposing paths or environment values.
 When no matching local Worker is ready, the gateway returns HTTP 503
 `local_route_unavailable` with `cloud_fallback_attempted: false`. Gateway responses do not
 carry mock or fallback headers.

@@ -4,16 +4,61 @@ import hashlib
 import json
 import os
 import platform
+import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LLAMA_CPP_COMMIT = "9d77fa17254e1dee4b9e92504c91611a60b1359f"
+LLAMA_ACCEPTED_OLDER_COMMITS: frozenset[str] = frozenset()
+LLAMA_ACCEPTED_ALTERNATIVE_COMMITS: frozenset[str] = frozenset()
+LLAMA_REVOKED_COMMITS: frozenset[str] = frozenset()
 LLAMA_RUNTIME_ROOT = Path(".runtime-tools/llama.cpp")
 LLAMA_SERVER_RELATIVE_PATH = Path("bin/llama-server")
 LLAMA_BUILD_RECEIPT_RELATIVE_PATH = Path("bin/modeldeck-build.json")
+
+GPT_OSS_LLAMA_REQUIRED_FLAGS = (
+    "--host",
+    "--port",
+    "--model",
+    "--ctx-size",
+    "--parallel",
+    "--n-gpu-layers",
+    "--flash-attn",
+    "--jinja",
+)
+QWEN_LLAMA_REQUIRED_FLAGS = (
+    "--host",
+    "--port",
+    "--model",
+    "--ctx-size",
+    "--parallel",
+    "--device",
+    "--gpu-layers",
+    "--fit",
+    "--flash-attn",
+    "--cache-type-k",
+    "--cache-type-v",
+    "--jinja",
+    "--reasoning-format",
+    "--metrics",
+    "--slots",
+    "--offline",
+    "--no-mmproj",
+    "--reasoning-effort",
+)
+QWEN_MTP_LLAMA_REQUIRED_FLAGS = QWEN_LLAMA_REQUIRED_FLAGS + (
+    "--mmproj",
+    "--spec-type",
+    "--spec-draft-model",
+    "--spec-draft-device",
+    "--spec-draft-ngl",
+    "--spec-draft-n-max",
+)
+ALL_LLAMA_REQUIRED_FLAGS = tuple(dict.fromkeys(GPT_OSS_LLAMA_REQUIRED_FLAGS + QWEN_MTP_LLAMA_REQUIRED_FLAGS))
 
 
 class TrustedArtefact(BaseModel):
@@ -74,6 +119,61 @@ class LlamaBuildReceipt(BaseModel):
     architecture: Literal["x86_64"]
 
 
+class LlamaRuntimeIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_revision: str | None = None
+    executable_sha256: str | None = None
+    executable_size_bytes: int | None = None
+    receipt_sha256: str | None = None
+    receipt_version: int | None = None
+    backend: str | None = None
+    operating_system: str
+    architecture: str
+    version_output: str | None = None
+
+
+class LlamaRuntimeInstallation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    installation_id: Literal["llama-cpp-vulkan"] = "llama-cpp-vulkan"
+    display_name: Literal["llama.cpp Vulkan"] = "llama.cpp Vulkan"
+    integrity_status: Literal[
+        "verified",
+        "missing",
+        "receipt-missing",
+        "receipt-invalid",
+        "modified",
+        "feature-mismatch",
+        "inspection-failed",
+    ]
+    currency_status: Literal[
+        "recommended",
+        "accepted-older",
+        "accepted-alternative",
+        "different-unqualified",
+        "newer-unqualified",
+        "revoked",
+        "unknown",
+    ]
+    start_allowed: bool
+    detected: LlamaRuntimeIdentity
+    recommended_source_revision: str = LLAMA_CPP_COMMIT
+    required_features: tuple[str, ...]
+    missing_features: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    inspected_at: datetime
+
+
+@dataclass(frozen=True)
+class ValidatedLlamaInstallation:
+    executable: Path
+    receipt: LlamaBuildReceipt
+    executable_sha256: str
+    receipt_sha256: str
+    version_output: str
+
+
 @dataclass(frozen=True)
 class ValidatedQwenRuntime:
     manifest: QwenLlamaManifest
@@ -82,6 +182,8 @@ class ValidatedQwenRuntime:
     projector: Path | None
     mtp_model: Path | None
     executable_sha256: str
+    receipt_sha256: str
+    source_revision: str
 
 
 def manifest_path(profile: str) -> Path:
@@ -114,6 +216,175 @@ def sha256_file(path: Path, *, chunk_size: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _bounded_command_output(executable: Path, argument: str) -> str:
+    result = subprocess.run(
+        [str(executable), argument],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    if result.returncode != 0:
+        raise RuntimeError(f"llama-server {argument} exited with code {result.returncode}")
+    return output[:128_000]
+
+
+def inspect_llama_installation(
+    *,
+    runtime_root: Path | None = None,
+    required_flags: tuple[str, ...] = ALL_LLAMA_REQUIRED_FLAGS,
+) -> LlamaRuntimeInstallation:
+    root = (runtime_root or LLAMA_RUNTIME_ROOT).resolve()
+    executable = root / LLAMA_SERVER_RELATIVE_PATH
+    receipt_path = root / LLAMA_BUILD_RECEIPT_RELATIVE_PATH
+    os_name = platform.system().lower()
+    architecture = platform.machine().lower()
+    inspected_at = datetime.now(UTC)
+
+    def result(
+        integrity_status: str,
+        currency_status: str,
+        *,
+        identity: LlamaRuntimeIdentity,
+        missing_features: tuple[str, ...] = (),
+        reason_codes: tuple[str, ...] = (),
+    ) -> LlamaRuntimeInstallation:
+        return LlamaRuntimeInstallation(
+            integrity_status=integrity_status,
+            currency_status=currency_status,
+            start_allowed=integrity_status == "verified"
+            and currency_status in {"recommended", "accepted-older", "accepted-alternative"},
+            detected=identity,
+            required_features=required_flags,
+            missing_features=missing_features,
+            reason_codes=reason_codes,
+            inspected_at=inspected_at,
+        )
+
+    base_identity = LlamaRuntimeIdentity(operating_system=os_name, architecture=architecture)
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        return result("missing", "unknown", identity=base_identity, reason_codes=("executable_missing",))
+    try:
+        executable_size = executable.stat().st_size
+    except OSError:
+        return result(
+            "inspection-failed", "unknown", identity=base_identity, reason_codes=("executable_stat_failed",)
+        )
+    identity_values: dict[str, object] = {
+        "operating_system": os_name,
+        "architecture": architecture,
+        "executable_size_bytes": executable_size,
+    }
+    if not receipt_path.is_file():
+        return result(
+            "receipt-missing",
+            "unknown",
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("build_receipt_missing",),
+        )
+    try:
+        receipt_bytes = receipt_path.read_bytes()
+        receipt = LlamaBuildReceipt.model_validate_json(receipt_bytes)
+        identity_values.update(
+            source_revision=receipt.commit,
+            receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+            receipt_version=receipt.version,
+            backend=receipt.backend,
+        )
+    except (OSError, ValueError):
+        return result(
+            "receipt-invalid",
+            "unknown",
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("build_receipt_invalid",),
+        )
+    if receipt.commit in LLAMA_REVOKED_COMMITS:
+        currency_status = "revoked"
+    elif receipt.commit == LLAMA_CPP_COMMIT:
+        currency_status = "recommended"
+    elif receipt.commit in LLAMA_ACCEPTED_OLDER_COMMITS:
+        currency_status = "accepted-older"
+    elif receipt.commit in LLAMA_ACCEPTED_ALTERNATIVE_COMMITS:
+        currency_status = "accepted-alternative"
+    else:
+        currency_status = "different-unqualified"
+    try:
+        executable_digest = sha256_file(executable)
+        identity_values["executable_sha256"] = executable_digest
+    except OSError:
+        return result(
+            "inspection-failed",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("executable_hash_failed",),
+        )
+    if executable_digest != receipt.executable_sha256:
+        return result(
+            "modified",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("executable_checksum_mismatch",),
+        )
+    if os_name != receipt.operating_system or architecture not in {receipt.architecture, "amd64"}:
+        return result(
+            "feature-mismatch",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("platform_mismatch",),
+        )
+    if currency_status not in {"recommended", "accepted-older", "accepted-alternative"}:
+        return result(
+            "verified",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("source_revision_not_recommended",),
+        )
+    try:
+        version_output = _bounded_command_output(executable, "--version")[:1024]
+        help_output = _bounded_command_output(executable, "--help")
+        identity_values["version_output"] = version_output
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        return result(
+            "inspection-failed",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            reason_codes=("feature_inspection_failed",),
+        )
+    missing_features = tuple(flag for flag in required_flags if flag not in help_output)
+    if missing_features:
+        return result(
+            "feature-mismatch",
+            currency_status,
+            identity=LlamaRuntimeIdentity(**identity_values),
+            missing_features=missing_features,
+            reason_codes=("required_feature_missing",),
+        )
+    return result("verified", currency_status, identity=LlamaRuntimeIdentity(**identity_values))
+
+
+def validate_llama_installation(
+    *, required_flags: tuple[str, ...], runtime_root: Path | None = None
+) -> ValidatedLlamaInstallation:
+    installation = inspect_llama_installation(runtime_root=runtime_root, required_flags=required_flags)
+    if not installation.start_allowed:
+        detail = ", ".join(installation.reason_codes or installation.missing_features) or "untrusted identity"
+        raise ValueError(
+            "Pinned llama.cpp Vulkan runtime failed installation validation: "
+            f"{installation.integrity_status}; {installation.currency_status}; {detail}"
+        )
+    root = (runtime_root or LLAMA_RUNTIME_ROOT).resolve()
+    receipt_path = root / LLAMA_BUILD_RECEIPT_RELATIVE_PATH
+    receipt = LlamaBuildReceipt.model_validate_json(receipt_path.read_bytes())
+    return ValidatedLlamaInstallation(
+        executable=root / LLAMA_SERVER_RELATIVE_PATH,
+        receipt=receipt,
+        executable_sha256=installation.detected.executable_sha256 or "",
+        receipt_sha256=installation.detected.receipt_sha256 or "",
+        version_output=installation.detected.version_output or "",
+    )
+
+
 def _verify_artefact(path: Path, expected: TrustedArtefact) -> None:
     if path.name != expected.filename or not path.is_file():
         raise ValueError(f"Trusted llama.cpp artefact is missing: {expected.filename}")
@@ -142,19 +413,12 @@ def validate_qwen_runtime(
     if manifest.llama_cpp_commit != LLAMA_CPP_COMMIT:
         raise ValueError("The Qwen runtime manifest does not match the code-owned llama.cpp pin")
 
-    runtime_root = LLAMA_RUNTIME_ROOT.resolve()
-    executable = runtime_root / LLAMA_SERVER_RELATIVE_PATH
-    receipt_path = runtime_root / LLAMA_BUILD_RECEIPT_RELATIVE_PATH
-    if not executable.is_file() or not os.access(executable, os.X_OK):
-        raise ValueError("Pinned llama.cpp Vulkan runtime is missing or not executable")
-    if not receipt_path.is_file():
-        raise ValueError("Pinned llama.cpp build receipt is missing")
-    receipt = LlamaBuildReceipt.model_validate_json(receipt_path.read_bytes())
-    if receipt.commit != LLAMA_CPP_COMMIT:
-        raise ValueError("Installed llama.cpp build does not match the pinned commit")
-    executable_digest = sha256_file(executable)
-    if executable_digest != receipt.executable_sha256:
-        raise ValueError("Installed llama-server checksum does not match its build receipt")
+    required_flags = (
+        QWEN_MTP_LLAMA_REQUIRED_FLAGS if manifest.mtp_model is not None else QWEN_LLAMA_REQUIRED_FLAGS
+    )
+    installation = validate_llama_installation(required_flags=required_flags)
+    if installation.receipt.commit != manifest.llama_cpp_commit:
+        raise ValueError("Installed llama.cpp build does not match the Qwen runtime manifest")
 
     snapshot = snapshot.absolute()
     model = snapshot / manifest.model.filename
@@ -167,11 +431,13 @@ def validate_qwen_runtime(
         _verify_artefact(mtp_model, manifest.mtp_model)
     return ValidatedQwenRuntime(
         manifest=manifest,
-        executable=executable,
+        executable=installation.executable,
         model=model,
         projector=projector,
         mtp_model=mtp_model,
-        executable_sha256=executable_digest,
+        executable_sha256=installation.executable_sha256,
+        receipt_sha256=installation.receipt_sha256,
+        source_revision=installation.receipt.commit,
     )
 
 
@@ -179,6 +445,8 @@ def configuration_fingerprint(runtime: ValidatedQwenRuntime, *, thinking_mode: s
     payload = {
         "manifest": runtime.manifest.model_dump(mode="json"),
         "executable_sha256": runtime.executable_sha256,
+        "receipt_sha256": runtime.receipt_sha256,
+        "source_revision": runtime.source_revision,
         "thinking_mode": thinking_mode,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()

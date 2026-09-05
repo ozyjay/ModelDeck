@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import modeldeck.main as main_module
 import modeldeck.v2_api as v2_api_module
 import pytest
+from modeldeck import __version__
 from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot
@@ -28,6 +30,46 @@ def worker_definition(*, name: str = "Qwen trace", port: int = 8630) -> WorkerDe
         capabilities={"chat": True, "completions": True, "top_k_trace": True},
         settings={},
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_installations_reports_detected_identity_and_consumers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "inspect_llama_installation",
+        lambda **_: SimpleNamespace(
+            model_dump=lambda **__: {
+                "installation_id": "llama-cpp-vulkan",
+                "display_name": "llama.cpp Vulkan",
+                "integrity_status": "verified",
+                "currency_status": "recommended",
+                "start_allowed": True,
+                "detected": {"source_revision": "9" * 40},
+                "recommended_source_revision": "9" * 40,
+                "required_features": ["--model"],
+                "missing_features": [],
+                "reason_codes": [],
+                "inspected_at": "2026-09-01T00:00:00Z",
+            }
+        ),
+    )
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/runtime-installations")
+
+    assert response.status_code == 200
+    installation = response.json()["installations"][0]
+    assert installation["integrity_status"] == "verified"
+    assert installation["start_allowed"] is True
+    assert "gpt-oss-llama-vulkan" in installation["runtime_template_ids"]
+    assert installation["implementation_ids"] == [
+        "llama-vulkan",
+        "qwen35-llamacpp-vulkan",
+        "qwen38-llamacpp-vulkan",
+    ]
 
 
 def test_allowlisted_wayfinder_worker_normalises_persisted_cache_capability() -> None:
@@ -127,12 +169,72 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
             profiles = await client.get("/api/routing-profiles")
             live = await client.get("/api/live")
 
-    assert health.json()["schema_version"] == 4
+    assert health.json()["schema_version"] == 5
+    assert health.json()["version"] == __version__
+    assert isinstance(health.json()["build_id"], str)
     assert health.json()["configuration_locked"] is False
     assert health.json()["offline_only"] is True
+    assert health.json()["state_store"] == {
+        "kind": "checkout-development",
+        "label": "Checkout development state",
+        "directory": str(tmp_path.resolve()),
+    }
     assert workers.json() == []
     assert profiles.json() == {"profiles": []}
     assert live.json() == {"active_profile": None, "active_profiles": [], "capabilities": []}
+
+
+@pytest.mark.asyncio
+async def test_guided_setup_preview_resolves_one_trusted_runtime_and_explicit_policy(
+    tmp_path, monkeypatch
+) -> None:
+    model = discovered_model(runtime="autoregressive-transformers")
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/capability-setups/preview",
+                json={
+                    "capability_id": "autoregressive-trace",
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "worker_name": "Guided trace",
+                },
+            )
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["selection_basis"] == "only-compatible-runtime"
+    assert preview["worker"]["runtime_template_id"] == "autoregressive-transformers"
+    assert preview["policy_changes"] == {"model_allowed": False, "capability_allowed": True}
+    assert len(preview["preview_fingerprint"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_compatibility_lifecycle_observation_does_not_mutate_raw_evidence(tmp_path) -> None:
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    test = store.record_test({"model_id": "example/model", "runtime": "mock"}, result="tested-working")
+    app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"/api/compatibility/tests/{test['id']}/observations",
+                json={
+                    "shutdown_result": "success",
+                    "memory_recovery_result": "not-measured-process-exit-confirmed",
+                },
+            )
+            records = (await client.get("/api/compatibility")).json()["tests"]
+
+    assert response.status_code == 201
+    assert "shutdown_result" not in records[0]["evidence"]
+    assert records[0]["observations"][0]["observation"]["shutdown_result"] == "success"
 
 
 @pytest.mark.asyncio
@@ -383,7 +485,43 @@ async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monk
     assert denied.status_code == 409
     assert denied.json()["detail"] == "Allow this capability before creating a Worker"
     assert created.status_code == 201
-    assert created.json()["capability_policy_version"] == 4
+    assert created.json()["capability_policy_version"] == 5
+
+
+@pytest.mark.asyncio
+async def test_new_worker_rejects_context_above_the_model_declared_limit(tmp_path, monkeypatch) -> None:
+    model = {
+        **discovered_model(runtime="autoregressive-transformers"),
+        "maximum_context_length": 2048,
+    }
+    monkeypatch.setattr(main_module, "discover_huggingface_models", lambda **_: [model])
+    monkeypatch.setattr(v2_api_module, "discover_huggingface_models", lambda: [model])
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+    request = {
+        "name": "Overlong context Worker",
+        "model_id": model["model_id"],
+        "revision": model["revision"],
+        "runtime_template_id": "autoregressive-transformers",
+        "capability_id": "autoregressive-trace",
+        "context_length": 4096,
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            await client.post(
+                "/api/catalogue/capabilities/policy",
+                json={
+                    "model_id": model["model_id"],
+                    "revision": model["revision"],
+                    "capability_id": "autoregressive-trace",
+                    "allowed": True,
+                },
+            )
+            response = await client.post("/api/workers", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The selected Model supports at most 2048 context tokens."
 
 
 @pytest.mark.asyncio
@@ -466,7 +604,7 @@ async def test_profile_publish_rejects_incompatible_worker(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_profiles_are_active_together_and_reject_model_id_collisions(tmp_path) -> None:
+async def test_publishing_a_profile_keeps_existing_live_profiles_active(tmp_path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
     store.initialise_v3()
@@ -489,17 +627,16 @@ async def test_profiles_are_active_together_and_reject_model_id_collisions(tmp_p
                     await client.post(f"/api/routing-profiles/{profile['id']}/publish")
                 ).status_code == 201
             live = (await client.get("/api/live")).json()
-            duplicate = {**second, "id": str(uuid4()), "name": "collision"}
-            assert (await client.post("/api/routing-profiles", json=duplicate)).status_code == 201
-            rejected = await client.post(f"/api/routing-profiles/{duplicate['id']}/publish")
 
-    assert {profile["name"] for profile in live["active_profiles"]} == {"Existing", "wayfinder-gate0"}
-    assert {capability["public_name"] for capability in live["capabilities"]} == {
+    assert live["active_profile"] is None
+    assert live["active_profiles"] == [
+        {"id": first["id"], "name": "Existing", "revision": 1},
+        {"id": second["id"], "name": "wayfinder-gate0", "revision": 1},
+    ]
+    assert [capability["public_name"] for capability in live["capabilities"]] == [
         "existing-local",
         "fast-local",
-    }
-    assert rejected.status_code == 409
-    assert "unique API Model IDs" in rejected.json()["detail"]
+    ]
 
 
 def test_replacement_rebinds_profile_drafts_but_not_published_revisions(tmp_path) -> None:

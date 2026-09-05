@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +15,10 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from modeldeck import __version__
 from modeldeck.async_execution import run_in_isolated_thread
+from modeldeck.benchmark_history import read_benchmark_history
+from modeldeck.build_info import BUILD_ID
 from modeldeck.capabilities import (
     capability_evidence_status,
     compatible_runtime_template_ids,
@@ -22,9 +26,10 @@ from modeldeck.capabilities import (
 )
 from modeldeck.catalogue import discover_huggingface_models
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
-from modeldeck.config import Settings, gateway_base_url
+from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
+from modeldeck.llama_runtime import ALL_LLAMA_REQUIRED_FLAGS, inspect_llama_installation
 from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.supervisor import WorkerSupervisor
@@ -36,7 +41,7 @@ LOGGER = logging.getLogger(__name__)
 FRONTEND_FALLBACK = """<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>ModelDeck</title></head>
 <body><main><h1>ModelDeck operator console is not built</h1>
-<p>Run <code>pwsh -NoProfile -File scripts/build_frontend.ps1</code> and restart ModelDeck.</p>
+<p>Run <code>pwsh -NoProfile -File scripts/operations/build_frontend.ps1</code> and restart ModelDeck.</p>
 </main></body></html>"""
 
 
@@ -75,7 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     configured.data_dir.mkdir(parents=True, exist_ok=True)
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-    store.initialise_v4()
+    store.initialise_v5()
     definitions: dict[str, WorkerDefinition] = {}
     worker_profiles = []
     for record in store.list_workers():
@@ -101,15 +106,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await app.state.thermal_manager.start()
+        await app.state.reconcile_capability_setups(app)
         try:
             yield
         finally:
+            await app.state.shutdown_capability_setups()
             await app.state.supervisor.stop_all()
             await app.state.thermal_manager.stop()
 
     app = FastAPI(
         title="ModelDeck management API",
-        version="0.4.0",
+        version=__version__,
         description="Local-only management for Routing Profiles, capabilities and isolated model Workers.",
         lifespan=lifespan,
     )
@@ -130,7 +137,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     assets = FRONTEND_ROOT / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
-    app.include_router(create_v3_router())
+    management_router = create_v3_router()
+    app.state.reconcile_capability_setups = management_router.reconcile_capability_setups
+    app.state.shutdown_capability_setups = management_router.shutdown_capability_setups
+    app.include_router(management_router)
 
     @app.middleware("http")
     async def browser_security_headers(request: Request, call_next):
@@ -154,10 +164,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "status": "ok",
             "service": "modeldeck-management",
-            "schema_version": 4,
+            "version": __version__,
+            "build_id": BUILD_ID,
+            "schema_version": 5,
             "configuration_locked": configured.configuration_locked,
             "offline_only": True,
             "gateway_url": gateway_base_url(configured.gateway_host, configured.gateway_port),
+            "state_store": state_store_metadata(configured.data_dir),
         }
 
     @app.get("/api/gateway/status")
@@ -184,9 +197,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         }
 
+    @app.get("/api/benchmark-history")
+    async def benchmark_history():
+        return await run_in_isolated_thread(read_benchmark_history, Path("var/benchmarks"))
+
     @app.get("/api/thermal")
     async def thermal_status(request: Request):
-        return request.app.state.thermal_manager.status()
+        return {
+            **request.app.state.thermal_manager.status(),
+            "policy": asdict(request.app.state.settings.thermal_throttling),
+        }
 
     @app.get("/api/catalogue")
     async def catalogue(request: Request):
@@ -436,6 +456,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "generation_family": registration.template.generation_family,
                     "cache_setting": registration.template.cache_setting,
                     "uses_base_model_identity": registration.template.uses_base_model_identity,
+                    "fixed_context_length": registration.template.fixed_context_length,
                     "lifecycle": registration.template.lifecycle,
                     "dtype": registration.template.dtype,
                     "settings": registration.template.settings,
@@ -451,16 +472,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "installation": "local-admin-only",
         }
 
+    @app.get("/api/runtime-installations")
+    async def runtime_installations(request: Request):
+        llama_implementations = {
+            "llama-vulkan",
+            "qwen35-llamacpp-vulkan",
+            "qwen38-llamacpp-vulkan",
+        }
+        installation = await run_in_isolated_thread(
+            inspect_llama_installation, required_flags=ALL_LLAMA_REQUIRED_FLAGS
+        )
+        payload = installation.model_dump(mode="json")
+        payload.update(
+            {
+                "implementation_ids": sorted(llama_implementations),
+                "runtime_template_ids": sorted(
+                    registration.template.id
+                    for registration in request.app.state.runtime_registrations.values()
+                    if registration.template.runtime in llama_implementations
+                ),
+                "worker_ids": sorted(
+                    worker.id
+                    for worker in request.app.state.worker_definitions.values()
+                    if worker.runtime in llama_implementations and not worker.archived
+                ),
+            }
+        )
+        return {"installations": [payload]}
+
     @app.get("/api/compatibility")
     async def compatibility(request: Request):
         return {"tests": request.app.state.compatibility_store.list_tests()}
 
-    @app.put("/api/compatibility/tests/{test_id}/lifecycle")
-    async def compatibility_lifecycle(test_id: int, payload: LifecycleEvidence, request: Request):
+    @app.post("/api/compatibility/tests/{test_id}/observations", status_code=201)
+    async def compatibility_observation(test_id: int, payload: LifecycleEvidence, request: Request):
         _require_mutable(request)
         try:
-            return request.app.state.compatibility_store.update_test_evidence(
-                test_id, payload.model_dump(exclude_none=True)
+            return request.app.state.compatibility_store.record_test_observation(
+                test_id, payload.model_dump(exclude_none=True), kind="lifecycle"
             )
         except KeyError as error:
             raise HTTPException(404, str(error)) from error
@@ -623,7 +672,7 @@ try:
     app = create_app()
 except LegacyDatabaseError as startup_error:
     startup_error_message = str(startup_error)
-    app = FastAPI(title="ModelDeck database upgrade required", version="0.2.0")
+    app = FastAPI(title="ModelDeck database upgrade required", version=__version__)
 
     @app.get("/api/health", status_code=503)
     async def database_upgrade_required():

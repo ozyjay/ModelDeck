@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from modeldeck.async_execution import run_in_isolated_thread
@@ -44,7 +48,12 @@ from modeldeck.smoke_probes import (
     probe_for_contract,
     validate_probe_response,
 )
-from modeldeck.thermal import ThermalAdmissionError
+from modeldeck.thermal import (
+    AdmissionAction,
+    ThermalAdmissionError,
+    WorkloadClass,
+    WorkloadRequest,
+)
 
 NATIVE_FP8_RUNTIME_PREFIX = "qwen38-fp8-"
 NATIVE_FP8_MINIMUM_TOKENS_PER_SECOND = 3.20
@@ -213,8 +222,308 @@ class WorkerReplacementRequest(BaseModel):
     rebind_drafts: bool = True
 
 
+class CapabilitySetupSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    model_id: str = Field(min_length=3, max_length=256)
+    revision: str = Field(min_length=1, max_length=128)
+    worker_name: str = Field(min_length=1, max_length=80)
+    artifact_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    runtime_template_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    dtype: Literal["float16", "bfloat16", "float32"] | None = None
+    lifecycle: Literal["resident", "on-demand", "exclusive"] | None = None
+    context_length: int | None = Field(default=None, ge=256, le=32768)
+    maximum_new_tokens: int | None = Field(default=None, ge=1, le=MAXIMUM_NEW_TOKENS_LIMIT)
+    maximum_denoising_steps: int | None = Field(default=None, ge=1, le=48)
+    visual_token_budget: VisualTokenBudget | None = None
+    prefix_cache_enabled: bool = False
+
+
+class CapabilitySetupCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    preview_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    selection: CapabilitySetupSelection
+
+
+class CapabilityPublicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=80)
+    public_name: str = Field(pattern=r"^[a-z][a-z0-9._-]{1,127}$")
+    tool_calling_enabled: bool = False
+    route_action: Literal["add", "replace-primary"] = "add"
+
+
+class CapabilityPublishRequest(CapabilityPublicationRequest):
+    publication_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+def _document_fingerprint(document: Mapping[str, object]) -> str:
+    encoded = json.dumps(dict(document), sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _setup_preview(selection: CapabilitySetupSelection, request: Request) -> dict[str, object]:
+    cached = next(
+        (
+            model
+            for model in _discover_models(request)
+            if model["model_id"] == selection.model_id
+            and model["revision"] == selection.revision
+            and model["download_state"] == "installed-untested"
+        ),
+        None,
+    )
+    if cached is None:
+        raise HTTPException(409, "Select a complete pinned Model from the local cache")
+    capability = next(
+        (item for item in cached.get("potential_capabilities", []) if item["id"] == selection.capability_id),
+        None,
+    )
+    if capability is None:
+        raise HTTPException(409, "That capability is not recognised for this Model")
+    available = list(
+        capability.get("available_runtime_template_ids")
+        or compatible_runtime_template_ids(
+            selection.capability_id,
+            cached.get("configuration_support"),
+            request.app.state.runtime_registrations,
+        )
+    )
+    if not available:
+        raise HTTPException(409, "No installed trusted Runtime supports this Model capability")
+    template_id = selection.runtime_template_id
+    selection_basis = "operator-selected"
+    if template_id is None and len(available) == 1:
+        template_id = available[0]
+        selection_basis = "only-compatible-runtime"
+    if template_id is None:
+        matching = {
+            str(test["evidence"].get("runtime_template_id"))
+            for test in request.app.state.compatibility_store.list_tests()
+            if test.get("result") == "tested-working"
+            and test.get("fingerprint_version") == 2
+            and test["evidence"].get("model_id") == selection.model_id
+            and test["evidence"].get("model_revision") == selection.revision
+            and test["evidence"].get("capability_id") == selection.capability_id
+            and test["evidence"].get("runtime_template_id") in available
+        }
+        if len(matching) == 1:
+            template_id = matching.pop()
+            selection_basis = "matching-local-evidence"
+    if template_id is None:
+        raise HTTPException(
+            409,
+            {
+                "message": "Choose a trusted Runtime; no unique matching local evidence exists",
+                "code": "runtime_selection_required",
+                "runtime_template_ids": available,
+            },
+        )
+    if template_id not in available:
+        raise HTTPException(409, "Select a trusted Runtime listed for this Model capability")
+    registration = request.app.state.runtime_registrations.get(template_id)
+    if registration is None:
+        raise HTTPException(409, "The selected trusted Runtime is not installed")
+    artifact_id = selection.artifact_id
+    artifacts = list(cached.get("artifacts", []))
+    if registration.template.cache_setting == "artifact_path":
+        valid_artifacts = [str(item["artifact_id"]) for item in artifacts]
+        if artifact_id is None and len(valid_artifacts) == 1:
+            artifact_id = valid_artifacts[0]
+        if artifact_id not in valid_artifacts:
+            raise HTTPException(
+                409,
+                {
+                    "message": "Choose an allowlisted local Artifact",
+                    "code": "artifact_selection_required",
+                    "artifact_ids": valid_artifacts,
+                },
+            )
+    template_settings = registration.template.settings
+    context_length = selection.context_length or _integer_template_default(
+        template_settings, "context_length", 2048
+    )
+    _validate_model_context_length(cached, context_length)
+    planned_worker = WorkerCreateRequest(
+        name=" ".join(selection.worker_name.split()),
+        model_id=selection.model_id,
+        revision=selection.revision,
+        artifact_id=artifact_id,
+        runtime_template_id=template_id,
+        capability_id=selection.capability_id,
+        dtype=selection.dtype or registration.template.dtype or "float16",
+        lifecycle=selection.lifecycle or registration.template.lifecycle or "on-demand",
+        context_length=context_length,
+        maximum_new_tokens=selection.maximum_new_tokens
+        or _integer_template_default(template_settings, "maximum_new_tokens", 128),
+        maximum_denoising_steps=selection.maximum_denoising_steps
+        or _integer_template_default(template_settings, "maximum_denoising_steps", 24),
+        visual_token_budget=selection.visual_token_budget
+        or _integer_template_default(template_settings, "visual_token_budget", DEFAULT_VISUAL_TOKEN_BUDGET),
+        prefix_cache_enabled=selection.prefix_cache_enabled,
+    ).model_dump(mode="json")
+    plan = {
+        "selection": selection.model_dump(mode="json"),
+        "worker": planned_worker,
+        "selection_basis": selection_basis,
+        "runtime_registration_digest": registration.digest,
+        "policy_changes": {
+            "model_allowed": not request.app.state.compatibility_store.model_cache_allowed(
+                selection.model_id, selection.revision
+            ),
+            "capability_allowed": not request.app.state.compatibility_store.model_capability_allowed(
+                selection.model_id, selection.revision, selection.capability_id
+            ),
+        },
+        "warnings": [],
+    }
+    return {**plan, "preview_fingerprint": _document_fingerprint(plan)}
+
+
 def create_v3_router() -> APIRouter:
     router = APIRouter(prefix="/api")
+    setup_lock = asyncio.Lock()
+    setup_tasks: dict[str, asyncio.Task[None]] = {}
+
+    def transition_setup(request: Request, setup: dict[str, object], state: str, message: str) -> None:
+        setup["state"] = state
+        setup["current_step"] = state
+        setup["updated_at"] = datetime.now(UTC).isoformat()
+        request.app.state.compatibility_store.save_capability_setup(setup)
+        request.app.state.compatibility_store.record_capability_setup_event(
+            str(setup["id"]), state, {"message": message}
+        )
+
+    async def cancel_setup_worker(request: Request, setup: dict[str, object]) -> None:
+        worker_id = setup.get("worker_id")
+        if isinstance(worker_id, str):
+            snapshot = request.app.state.supervisor.get_worker(worker_id)
+            if snapshot["state"] not in {"stopped", "failed"}:
+                await request.app.state.supervisor.stop(worker_id)
+
+    async def run_setup(request: Request, setup_id: str) -> None:
+        async with setup_lock:
+            store = request.app.state.compatibility_store
+            setup = store.get_capability_setup(setup_id)
+            if setup is None or setup["state"] not in {"queued", "waiting-for-thermal-capacity"}:
+                return
+            try:
+                if setup.get("cancel_requested"):
+                    await cancel_setup_worker(request, setup)
+                    transition_setup(request, setup, "cancelled", "Setup cancelled; the Worker was retained")
+                    return
+                plan = setup["plan"]
+                worker_plan = plan["worker"]
+                transition_setup(request, setup, "applying-policy", "Allowing the exact Model capability")
+                model_id = str(worker_plan["model_id"])
+                revision = str(worker_plan["revision"])
+                capability_id = str(worker_plan["capability_id"])
+                store.set_model_cache_allowed(model_id, revision, allowed=True)
+                store.set_model_capability_allowed(model_id, revision, capability_id, allowed=True)
+                if not setup.get("worker_id"):
+                    transition_setup(request, setup, "creating-worker", "Creating the immutable Worker")
+                    worker = await create_worker(WorkerCreateRequest.model_validate(worker_plan), request)
+                    setup["worker_id"] = worker["id"]
+                    store.save_capability_setup(setup)
+                worker_id = str(setup["worker_id"])
+                if setup.get("cancel_requested"):
+                    await cancel_setup_worker(request, setup)
+                    transition_setup(request, setup, "cancelled", "Setup cancelled; the Worker was retained")
+                    return
+                while True:
+                    try:
+                        transition_setup(request, setup, "starting-worker", "Starting the isolated Worker")
+                        await request.app.state.supervisor.start(worker_id)
+                        break
+                    except ThermalAdmissionError:
+                        transition_setup(
+                            request,
+                            setup,
+                            "waiting-for-thermal-capacity",
+                            "Paused until fresh thermal telemetry permits model loading",
+                        )
+                        await asyncio.sleep(2)
+                        setup = store.get_capability_setup(setup_id) or setup
+                        if setup.get("cancel_requested"):
+                            await cancel_setup_worker(request, setup)
+                            transition_setup(
+                                request, setup, "cancelled", "Setup cancelled while waiting to cool"
+                            )
+                            return
+                transition_setup(request, setup, "verifying-identity", "Verifying resolved Worker identity")
+                snapshot = request.app.state.supervisor.get_worker(worker_id)
+                setup["resolved_identity"] = snapshot.get("resolved_identity") or {
+                    "runtime": worker_plan["runtime_template_id"],
+                    "backend": "awaiting-worker-report",
+                    "device": "awaiting-worker-report",
+                }
+                store.save_capability_setup(setup)
+                transition_setup(request, setup, "qualifying", "Running the bounded capability qualification")
+                while True:
+                    try:
+                        qualification = await qualify_worker_capability(worker_id, capability_id, request)
+                        break
+                    except ThermalAdmissionError:
+                        transition_setup(
+                            request,
+                            setup,
+                            "waiting-for-thermal-capacity",
+                            "Qualification paused until the machine returns to a safe thermal state",
+                        )
+                        await asyncio.sleep(2)
+                        setup = store.get_capability_setup(setup_id) or setup
+                        if setup.get("cancel_requested"):
+                            await cancel_setup_worker(request, setup)
+                            transition_setup(
+                                request,
+                                setup,
+                                "cancelled",
+                                "Setup cancelled while qualification was thermally paused",
+                            )
+                            return
+                        transition_setup(
+                            request,
+                            setup,
+                            "qualifying",
+                            "Retrying the bounded capability qualification",
+                        )
+                setup["evidence_id"] = qualification["test"]["id"]
+                setup["qualification"] = qualification["test"]
+                store.save_capability_setup(setup)
+                if not qualification["ok"]:
+                    raise RuntimeError("Capability qualification failed; the negative evidence was preserved")
+                transition_setup(
+                    request,
+                    setup,
+                    "awaiting-publication",
+                    "Qualification passed; review evidence before publishing",
+                )
+            except Exception as error:
+                setup = store.get_capability_setup(setup_id) or setup
+                setup["error"] = {
+                    "code": "setup_failed",
+                    "message": str(error.detail if isinstance(error, HTTPException) else error),
+                    "component": "capability-setup",
+                    "step": setup.get("current_step"),
+                    "retryable": isinstance(error, (ThermalAdmissionError, httpx.HTTPError, TimeoutError)),
+                }
+                transition_setup(request, setup, "failed", "Setup stopped with a recorded failure")
+
+    def schedule_setup(request: Request, setup_id: str) -> None:
+        task = setup_tasks.get(setup_id)
+        if task is None or task.done():
+            task = asyncio.create_task(run_setup(request, setup_id), name=f"modeldeck-setup-{setup_id}")
+            setup_tasks[setup_id] = task
+
+    def setup_or_404(request: Request, setup_id: str) -> dict[str, object]:
+        setup = request.app.state.compatibility_store.get_capability_setup(setup_id)
+        if setup is None:
+            raise HTTPException(404, "Unknown capability setup")
+        return setup
 
     @router.get("/protocol-contracts")
     async def protocol_contracts():
@@ -306,6 +615,10 @@ def create_v3_router() -> APIRouter:
         selected = registrations.get(template_id) if template_id else None
         if selected is None:
             raise HTTPException(409, "Select an installed trusted runtime")
+        context_length = payload.context_length or _integer_template_default(
+            selected.template.settings, "context_length", 2048
+        )
+        _validate_model_context_length(cached, context_length)
         checkpoint_dir = (
             Path(cached["snapshot_location"])
             if selected.template.cache_setting == "q4_checkpoint_dir"
@@ -343,8 +656,7 @@ def create_v3_router() -> APIRouter:
             profile_name=internal_name,
             dtype=payload.dtype or selected.template.dtype or "float16",
             lifecycle=payload.lifecycle or selected.template.lifecycle or "on-demand",
-            context_length=payload.context_length
-            or _integer_template_default(selected.template.settings, "context_length", 2048),
+            context_length=context_length,
             maximum_new_tokens=payload.maximum_new_tokens
             or _integer_template_default(selected.template.settings, "maximum_new_tokens", 128),
             maximum_denoising_steps=payload.maximum_denoising_steps
@@ -360,18 +672,21 @@ def create_v3_router() -> APIRouter:
             prefix_cache_enabled=payload.prefix_cache_enabled,
         )
         cache_root = Path(cached["cache_location"]).parent
-        profile = create_local_profile(
-            profile_request,
-            cache_root=cache_root,
-            port=port,
-            configuration_support=template_id,
-            checkpoint_dir=checkpoint_dir,
-            base_model_id=cached.get("base_model_id"),
-            base_model_revision=cached.get("base_model_revision"),
-            artifact_path=artefact_path,
-            candidate_manifest_id=candidate_manifest_id,
-            template_registrations=registrations,
-        ).model_copy(update={"id": worker_id})
+        try:
+            profile = create_local_profile(
+                profile_request,
+                cache_root=cache_root,
+                port=port,
+                configuration_support=template_id,
+                checkpoint_dir=checkpoint_dir,
+                base_model_id=cached.get("base_model_id"),
+                base_model_revision=cached.get("base_model_revision"),
+                artifact_path=artefact_path,
+                candidate_manifest_id=candidate_manifest_id,
+                template_registrations=registrations,
+            ).model_copy(update={"id": worker_id})
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
         definition = WorkerDefinition.from_profile(profile, name=clean_name)
         store.save_worker_definition(definition.model_dump(mode="json"))
         try:
@@ -649,6 +964,17 @@ def create_v3_router() -> APIRouter:
         worker = request.app.state.supervisor.get_worker(worker_id)
         if worker["state"] != "ready":
             raise HTTPException(409, "Worker must be ready before qualification")
+        thermal_manager = request.app.state.thermal_manager
+        thermal_start = thermal_manager.status()
+        thermal_decision = thermal_manager.admission.evaluate(
+            WorkloadRequest(worker_id, WorkloadClass.BENCHMARK, backend=definition.runtime),
+            thermal_manager.machine.state,
+            temperature_c=thermal_start["temperature_c"],
+            telemetry_age_seconds=thermal_start["telemetry_age_seconds"],
+            active_heavy_workloads=thermal_manager.active_heavy_workloads(),
+        )
+        if thermal_decision.action not in {AdmissionAction.ALLOW, AdmissionAction.ALLOW_DEGRADED}:
+            raise ThermalAdmissionError(thermal_decision)
         capability = CAPABILITY_DEFINITIONS[capability_id]
         if capability.protocol_contract_id is None:
             raise HTTPException(409, "This capability has no qualification contract")
@@ -737,12 +1063,29 @@ def create_v3_router() -> APIRouter:
             error_summary = f"{type(error).__name__}: {error}"
         probe = await run_in_isolated_thread(probe_environment)
         detected = probe["detected"]
+        thermal_end = thermal_manager.status()
+        if thermal_end["state"] in {"very_hot", "critical", "telemetry_degraded"}:
+            result = "transient-failure"
+            failure_class = "qualification-thermal-policy-breach"
+            error_summary = "Qualification became thermally invalid before completion"
+        registration = request.app.state.runtime_registrations.get(definition.runtime_template_id)
+        artifact = next(
+            (
+                item
+                for item in cached.get("artifacts", [])
+                if item.get("artifact_id") == definition.settings.get("artifact_id")
+            ),
+            None,
+        )
         evidence = {
+            "requested_model_id": definition.model_id,
+            "requested_model_revision": definition.revision,
             "worker_id": definition.id,
             "capability_id": capability_id,
             "protocol_contract_id": capability.protocol_contract_id,
             "runtime_template_id": definition.runtime_template_id,
             "runtime_template_version": definition.runtime_template_version,
+            "runtime_registration_digest": registration.digest if registration else None,
             "worker_configuration_fingerprint": worker_configuration_fingerprint(
                 definition.model_dump(mode="json")
             ),
@@ -766,9 +1109,29 @@ def create_v3_router() -> APIRouter:
             "model_revision": revision,
             "reported_model_id": model_payload.get("model_id", definition.model_id),
             "reported_model_revision": model_payload.get("revision", definition.revision),
+            "artifact_model_id": definition.artifact_model_id,
+            "artifact_revision": definition.artifact_revision,
+            "artifact_id": definition.settings.get("artifact_id"),
+            "artifact_format": (artifact or {}).get("format") or model_payload.get("format"),
+            "artifact_sha256": (artifact or {}).get("sha256"),
+            "resolved_backend": worker.get("resolved_identity", {}).get("backend")
+            if isinstance(worker.get("resolved_identity"), Mapping)
+            else None,
+            "resolved_device": worker.get("resolved_identity", {}).get("device")
+            if isinstance(worker.get("resolved_identity"), Mapping)
+            else None,
             "quantisation": model_payload.get("quantization", "none"),
             "dtype": model_payload.get("dtype", definition.dtype),
             "runtime": definition.runtime,
+            "context_length": definition.settings.get("context_length"),
+            "maximum_new_tokens": definition.settings.get("maximum_new_tokens"),
+            "maximum_denoising_steps": definition.settings.get("maximum_denoising_steps"),
+            "visual_token_budget": definition.settings.get("visual_token_budget"),
+            "prefix_cache_enabled": definition.settings.get("prefix_cache_enabled", False),
+            "workload_id": capability_id,
+            "measurement_path": "worker",
+            "thermal_policy": asdict(request.app.state.settings.thermal_throttling),
+            "thermal_observations": {"start": thermal_start, "end": thermal_end},
             "environment_overrides": request.app.state.supervisor.worker_environment(worker_id),
             "load_result": "success" if health_payload.get("ready") else "not-confirmed",
             "warmup_result": "success" if health_payload.get("ready") else "not-confirmed",
@@ -872,7 +1235,7 @@ def create_v3_router() -> APIRouter:
         )
         if capability is None:
             raise HTTPException(404, "The capability is not in the live Routing Profile revision")
-        if capability["protocol_contract"] == "openai-chat-v1":
+        if capability.get("tool_calling_enabled") is True:
             return await _rehearse_route_tool_calling(snapshot, capability, request)
         path, body = _capability_smoke_request(capability)
         timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
@@ -946,6 +1309,275 @@ def create_v3_router() -> APIRouter:
             "profile_id": profile_id,
         }
 
+    @router.post("/capability-setups/preview")
+    async def preview_capability_setup(payload: CapabilitySetupSelection, request: Request):
+        _require_mutable(request)
+        return _setup_preview(payload, request)
+
+    @router.get("/capability-setups")
+    async def list_capability_setups(request: Request):
+        setups = request.app.state.compatibility_store.list_capability_setups()
+        for setup in setups:
+            if setup["state"] in {"queued", "waiting-for-thermal-capacity"}:
+                schedule_setup(request, str(setup["id"]))
+        return {"setups": setups}
+
+    @router.post("/capability-setups", status_code=202)
+    async def create_capability_setup(payload: CapabilitySetupCreateRequest, request: Request):
+        _require_mutable(request)
+        preview = _setup_preview(payload.selection, request)
+        if preview["preview_fingerprint"] != payload.preview_fingerprint:
+            raise HTTPException(409, "The setup preview is stale; review the resolved configuration again")
+        request_fingerprint = _document_fingerprint(
+            {"selection": payload.selection.model_dump(mode="json"), "preview": payload.preview_fingerprint}
+        )
+        now = datetime.now(UTC).isoformat()
+        setup = {
+            "id": str(uuid4()),
+            "request_id": str(payload.request_id),
+            "request_fingerprint": request_fingerprint,
+            "preview_fingerprint": payload.preview_fingerprint,
+            "plan": {key: value for key, value in preview.items() if key != "preview_fingerprint"},
+            "previous_policy": {
+                "model_allowed": request.app.state.compatibility_store.model_cache_allowed(
+                    payload.selection.model_id, payload.selection.revision
+                ),
+                "capability_allowed": request.app.state.compatibility_store.model_capability_allowed(
+                    payload.selection.model_id,
+                    payload.selection.revision,
+                    payload.selection.capability_id,
+                ),
+            },
+            "state": "queued",
+            "current_step": "queued",
+            "cancel_requested": False,
+            "created_at": now,
+            "updated_at": now,
+            "error": None,
+        }
+        try:
+            stored = request.app.state.compatibility_store.create_capability_setup(setup)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        if stored["state"] in {"queued", "waiting-for-thermal-capacity"}:
+            schedule_setup(request, str(stored["id"]))
+        return stored
+
+    @router.get("/capability-setups/{setup_id}")
+    async def get_capability_setup(setup_id: str, request: Request):
+        setup = setup_or_404(request, setup_id)
+        if setup["state"] in {"queued", "waiting-for-thermal-capacity"}:
+            schedule_setup(request, setup_id)
+        return setup
+
+    @router.get("/capability-setups/{setup_id}/events")
+    async def capability_setup_events(setup_id: str, request: Request):
+        setup_or_404(request, setup_id)
+        raw_last_id = request.headers.get("last-event-id", "0")
+        last_id = int(raw_last_id) if raw_last_id.isdigit() else 0
+
+        async def stream():
+            nonlocal last_id
+            while True:
+                events = request.app.state.compatibility_store.list_capability_setup_events(
+                    setup_id, after=last_id
+                )
+                for event in events:
+                    last_id = int(event["id"])
+                    yield f"id: {last_id}\nevent: setup\ndata: {json.dumps(event)}\n\n"
+                current = setup_or_404(request, setup_id)
+                if current["state"] in {"succeeded", "failed", "cancelled", "awaiting-publication"}:
+                    return
+                if await request.is_disconnected():
+                    return
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @router.post("/capability-setups/{setup_id}/cancel")
+    async def cancel_capability_setup(setup_id: str, request: Request):
+        _require_mutable(request)
+        setup = setup_or_404(request, setup_id)
+        if setup["state"] in {"publishing", "verifying-route", "succeeded"}:
+            raise HTTPException(409, "Publishing has started and can no longer be cancelled")
+        if setup["state"] in {"cancelled", "failed", "awaiting-publication"}:
+            await cancel_setup_worker(request, setup)
+            transition_setup(request, setup, "cancelled", "Setup cancelled; the Worker was retained")
+            return setup
+        setup["cancel_requested"] = True
+        request.app.state.compatibility_store.save_capability_setup(setup)
+        return setup
+
+    @router.post("/capability-setups/{setup_id}/retry", status_code=202)
+    async def retry_capability_setup(setup_id: str, request: Request):
+        _require_mutable(request)
+        setup = setup_or_404(request, setup_id)
+        if setup["state"] not in {"failed", "cancelled"}:
+            raise HTTPException(409, "Only a failed or cancelled setup can be retried")
+        selection = CapabilitySetupSelection.model_validate(setup["plan"]["selection"])
+        preview = _setup_preview(selection, request)
+        if preview["preview_fingerprint"] != setup["preview_fingerprint"]:
+            raise HTTPException(409, "The exact configuration changed; create and review a new setup")
+        setup["state"] = "queued"
+        setup["current_step"] = "queued"
+        setup["cancel_requested"] = False
+        setup["error"] = None
+        request.app.state.compatibility_store.save_capability_setup(setup)
+        schedule_setup(request, setup_id)
+        return setup
+
+    def publication_preview(
+        setup: dict[str, object], payload: CapabilityPublicationRequest, request: Request
+    ) -> dict[str, object]:
+        if setup["state"] != "awaiting-publication":
+            raise HTTPException(409, "Complete qualification before preparing publication")
+        store = request.app.state.compatibility_store
+        guided_id = store.get_configuration_value("guided_profile_id")
+        existing = store.get_routing_profile(guided_id) if guided_id else None
+        if existing:
+            base_document = dict(existing["definition"])
+            base_updated_at = existing["updated_at"]
+        else:
+            active = store.active_routing_snapshots()
+            active_revision = (
+                store.get_routing_profile_revision(active[0]["profile_id"], int(active[0]["revision"]))
+                if active
+                else None
+            )
+            guided_id = str(uuid4())
+            base_document = (
+                dict(active_revision["definition"])
+                if active_revision
+                else {
+                    "id": guided_id,
+                    "name": "Local capabilities",
+                    "description": "Capabilities configured through guided setup.",
+                    "qualification": "tested-working",
+                    "capabilities": [],
+                }
+            )
+            base_document.update(
+                {"id": guided_id, "name": "Local capabilities", "qualification": "tested-working"}
+            )
+            base_updated_at = None
+        definition = WorkerDefinition.model_validate(
+            store.get_worker_definition(str(setup["worker_id"]))["definition"]
+        )
+        capability_id = str(setup["plan"]["worker"]["capability_id"])
+        contract_id = CAPABILITY_DEFINITIONS[capability_id].protocol_contract_id
+        if contract_id is None:
+            raise HTTPException(409, "This capability has no publishable protocol contract")
+        capabilities = [dict(item) for item in base_document.get("capabilities", [])]
+        existing_index = next(
+            (
+                index
+                for index, item in enumerate(capabilities)
+                if str(item.get("public_name", "")).casefold() == payload.public_name.casefold()
+            ),
+            None,
+        )
+        if existing_index is None and payload.route_action != "add":
+            raise HTTPException(409, "Use the add action for a new API Model ID")
+        if existing_index is not None:
+            current = capabilities[existing_index]
+            if payload.route_action != "replace-primary":
+                raise HTTPException(409, "Explicitly choose replace-primary for this existing API Model ID")
+            if current["protocol_contract"] != contract_id:
+                raise HTTPException(409, "The existing API Model ID uses a different protocol")
+            capabilities[existing_index] = {
+                **current,
+                "display_name": payload.display_name,
+                "tool_calling_enabled": payload.tool_calling_enabled,
+                "worker_ids": [definition.id, *current.get("worker_ids", [])[1:]],
+            }
+        else:
+            capabilities.append(
+                {
+                    "id": str(uuid4()),
+                    "display_name": payload.display_name,
+                    "public_name": payload.public_name,
+                    "protocol_contract": contract_id,
+                    "tool_calling_enabled": payload.tool_calling_enabled,
+                    "worker_ids": [definition.id],
+                }
+            )
+        target = RoutingProfile.model_validate({**base_document, "capabilities": capabilities})
+        validation = _validate(target, request)
+        document = {
+            "profile_id": guided_id,
+            "base_updated_at": base_updated_at,
+            "before": base_document,
+            "after": target.model_dump(mode="json"),
+            "validation": validation,
+        }
+        return {**document, "publication_fingerprint": _document_fingerprint(document)}
+
+    @router.post("/capability-setups/{setup_id}/publication-preview")
+    async def preview_capability_publication(
+        setup_id: str, payload: CapabilityPublicationRequest, request: Request
+    ):
+        return publication_preview(setup_or_404(request, setup_id), payload, request)
+
+    @router.post("/capability-setups/{setup_id}/publish", status_code=202)
+    async def publish_capability_setup(setup_id: str, payload: CapabilityPublishRequest, request: Request):
+        _require_mutable(request)
+        setup = setup_or_404(request, setup_id)
+        request_payload = CapabilityPublicationRequest.model_validate(
+            payload.model_dump(exclude={"publication_fingerprint"})
+        )
+        preview = publication_preview(setup, request_payload, request)
+        if preview["publication_fingerprint"] != payload.publication_fingerprint:
+            raise HTTPException(409, "The publication preview is stale; review routing changes again")
+        if not preview["validation"]["valid"]:
+            raise HTTPException(
+                409, {"message": "Routing Profile validation failed", "validation": preview["validation"]}
+            )
+        store = request.app.state.compatibility_store
+        current = store.get_routing_profile(str(preview["profile_id"]))
+        current_updated_at = current["updated_at"] if current else None
+        if current_updated_at != preview["base_updated_at"]:
+            raise HTTPException(409, "The Routing Profile changed; review publication again")
+        previous = store.active_routing_snapshots()
+        transition_setup(request, setup, "publishing", "Publishing the reviewed Routing Profile")
+        target = RoutingProfile.model_validate(preview["after"])
+        store.save_routing_profile_draft(target.model_dump(mode="json"))
+        revision = store.publish_routing_profile(target.model_dump(mode="json"), routing_snapshot(target, 0))
+        store.set_configuration_value("guided_profile_id", target.id)
+        setup["publication"] = {
+            "profile_id": target.id,
+            "revision": revision["revision"],
+            "public_name": payload.public_name,
+        }
+        transition_setup(request, setup, "verifying-route", "Exercising the published local route")
+        binding = next(item for item in target.capabilities if item.public_name == payload.public_name)
+        try:
+            await smoke_routing_profile_capability(target.id, binding.id, request)
+        except HTTPException as error:
+            store.deactivate_routing_profile(target.id)
+            if previous:
+                for snapshot in previous:
+                    old = store.get_routing_profile_revision(
+                        str(snapshot["profile_id"]), int(snapshot["revision"])
+                    )
+                    if old:
+                        old_definition = RoutingProfile.model_validate(old["definition"])
+                        store.activate_routing_profile_revision(
+                            old_definition.id,
+                            int(snapshot["revision"]),
+                            routing_snapshot(old_definition, int(snapshot["revision"])),
+                        )
+            setup["error"] = {
+                "code": "route_verification_failed",
+                "message": str(error.detail),
+                "component": "gateway",
+                "step": "verifying-route",
+                "retryable": True,
+            }
+            transition_setup(request, setup, "failed", "Route verification failed; prior routing restored")
+            return setup
+        transition_setup(request, setup, "succeeded", "Capability is published and serving locally")
+        return setup
+
     @router.get("/live")
     async def live(request: Request):
         snapshots = request.app.state.compatibility_store.active_routing_snapshots()
@@ -965,10 +1597,15 @@ def create_v3_router() -> APIRouter:
                         **capability,
                         "id": capability["capability_id"],
                         "profile_id": snapshot["profile_id"],
-                        "tool_calling": request.app.state.compatibility_store.route_tool_calling_state(
-                            str(snapshot["profile_id"]),
-                            int(snapshot["revision"]),
-                            str(capability["capability_id"]),
+                        "tool_calling_enabled": capability.get("tool_calling_enabled") is True,
+                        "tool_calling": (
+                            request.app.state.compatibility_store.route_tool_calling_state(
+                                str(snapshot["profile_id"]),
+                                int(snapshot["revision"]),
+                                str(capability["capability_id"]),
+                            )
+                            if capability.get("tool_calling_enabled") is True
+                            else None
                         ),
                         "workers": [worker for worker in chain if worker],
                         "effective_worker": effective,
@@ -984,6 +1621,69 @@ def create_v3_router() -> APIRouter:
             "active_profiles": active_profiles,
             "capabilities": capabilities,
         }
+
+    async def reconcile_setups(app) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "app": app,
+                "method": "GET",
+                "path": "/api/capability-setups",
+                "root_path": "",
+                "scheme": "http",
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 0),
+                "server": ("127.0.0.1", 3600),
+            }
+        )
+        for setup in app.state.compatibility_store.list_capability_setups():
+            state = str(setup["state"])
+            if state in {
+                "queued",
+                "applying-policy",
+                "creating-worker",
+                "starting-worker",
+                "verifying-identity",
+                "qualifying",
+                "waiting-for-thermal-capacity",
+            }:
+                setup["state"] = "queued"
+                setup["current_step"] = "queued"
+                app.state.compatibility_store.save_capability_setup(setup)
+                app.state.compatibility_store.record_capability_setup_event(
+                    str(setup["id"]),
+                    "queued",
+                    {"message": "Resuming after the management service restarted"},
+                )
+                schedule_setup(request, str(setup["id"]))
+            elif state in {"publishing", "verifying-route"}:
+                setup["error"] = {
+                    "code": "publication_interrupted",
+                    "message": (
+                        "The service restarted during publication; inspect the retained revision "
+                        "before retrying"
+                    ),
+                    "component": "routing-profile",
+                    "step": state,
+                    "retryable": False,
+                }
+                transition_setup(
+                    request,
+                    setup,
+                    "failed",
+                    "Publication was interrupted; retained routing requires explicit review",
+                )
+
+    async def shutdown_setups() -> None:
+        active = [task for task in setup_tasks.values() if not task.done()]
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
+
+    router.reconcile_capability_setups = reconcile_setups
+    router.shutdown_capability_setups = shutdown_setups
 
     return router
 
@@ -1379,6 +2079,12 @@ def _require_mutable(request: Request) -> None:
 def _integer_template_default(settings: dict[str, object], name: str, fallback: int) -> int:
     value = settings.get(name)
     return value if isinstance(value, int) and not isinstance(value, bool) else fallback
+
+
+def _validate_model_context_length(model: Mapping[str, object], context_length: int) -> None:
+    maximum = model.get("maximum_context_length")
+    if isinstance(maximum, int) and not isinstance(maximum, bool) and context_length > maximum:
+        raise HTTPException(422, f"The selected Model supports at most {maximum} context tokens.")
 
 
 def _capability_smoke_request(capability):

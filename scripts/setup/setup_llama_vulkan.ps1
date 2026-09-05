@@ -1,11 +1,13 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$RuntimeRoot = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '../..')
 
 $Revision = '9d77fa17254e1dee4b9e92504c91611a60b1359f'
-$Root = '.runtime-tools/llama.cpp'
+$Root = if ($RuntimeRoot) { [System.IO.Path]::GetFullPath($RuntimeRoot) } else { '.runtime-tools/llama.cpp' }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'git is required to acquire llama.cpp.' }
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { throw 'cmake is required to build llama.cpp.' }
 if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { throw 'ninja is required to build llama.cpp.' }

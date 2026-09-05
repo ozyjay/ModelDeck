@@ -44,10 +44,36 @@ loading. The checked-in defaults work without a `.env`; create one when local po
 storage, timeouts, runtime interpreters, cache location, or the SceneChat credential need
 to differ.
 
+### State stores
+
+Development launched from this checkout uses `.modeldeck`; the Fedora desktop package uses
+`~/.local/share/modeldeck`. These are intentionally separate and are not merged automatically:
+independently created Workers, Routing Profiles, policy choices and qualification evidence can
+conflict. The operator console always displays the active store as **Checkout development state**
+or **Desktop standalone state**; hover that badge to see its directory. Export and import state
+explicitly when moving an approved configuration between them.
+
 Use `MODELDECK_CONFIGURATION_LOCKED=1` (or `scripts/operations/run.ps1 -LockConfiguration`) for a
 prepared, read-only configuration. The former `MODELDECK_OPEN_DAY` and `-OpenDay` names are
 accepted temporarily while local launch files are updated. ModelDeck is always offline-only;
 `MODELDECK_ALLOW_DOWNLOADS` no longer changes runtime behaviour.
+
+### Exporting and importing checkout state
+
+State maintenance is deliberately available only while ModelDeck is deactivated. First stop the
+management service, gateway, bridge, and Workers, then create an archive or import a previous
+archive with the checkout commands:
+
+```powershell
+pwsh -NoProfile -File scripts/operations/stop.ps1
+pwsh -NoProfile -File scripts/operations/export_state.ps1 -Destination /path/to/new-modeldeck-state.tar
+pwsh -NoProfile -File scripts/operations/import_state.ps1 -Source /path/to/modeldeck-state.tar -ReplaceExisting
+```
+
+Export never overwrites an archive. Import validates the archive and its SQLite schema, then makes
+a timestamped backup of the existing checkout state before replacement. Both commands refuse to
+run while any ModelDeck service or managed Worker is active, and are disabled when configuration
+locking is enabled. Start ModelDeck normally after maintenance completes.
 
 ModelDeck deliberately uses three environments with different responsibilities:
 
@@ -68,15 +94,16 @@ boundary.
 
 ### SprintBot in Docker
 
-Keep the management service and primary gateway on loopback. To give a local SprintBot
-container access to the stable gateway as well, enable its explicit bridge companion in `.env`:
+Keep the management service and authoritative gateway on loopback. To give a local SprintBot
+container access to the stable gateway as well, enable its explicit bridge forwarder in `.env`:
 
 ```text
 MODELDECK_ENABLE_DOCKER_BRIDGE=1
 ```
 
-ModelDeck then exposes the same local-only routing set at `http://host.docker.internal:8600/v1`
-for SprintBot and `http://127.0.0.1:8600/v1` for local desktop applications such as WayFinder.
+ModelDeck then forwards `http://host.docker.internal:8600/v1` to the authoritative gateway at
+`http://127.0.0.1:8600/v1`. The bridge process owns no routing, persistence, Worker lifecycle or
+thermal accounting, so both container and desktop requests pass through one gateway authority.
 Ensure host firewall rules permit TCP 8600 only from the Docker bridge and loopback traffic.
 ModelDeck deliberately rejects `0.0.0.0` and LAN addresses; use a separately approved restricted
 reverse proxy and firewall deployment if broader access is ever required.
@@ -92,7 +119,8 @@ docker compose exec dashboard sprintbot-inference-check
 
 The operator console can collapse individual sections or every section at once. These
 display preferences are retained in local browser storage and do not change ModelDeck
-configuration.
+configuration. The **Live** tab can also show or hide individual published capabilities;
+this changes presentation only and never changes the published routing snapshot.
 
 Use **Models** to create a Worker from a recognised cached revision. Use **Routing profiles** to
 define published capabilities, assign primary and ordered backup Workers, validate the
@@ -251,6 +279,127 @@ running management service serves local static assets and does not start a Node 
 After changing `frontend/`, rebuild with
 `pwsh -NoProfile -File scripts/operations/build_frontend.ps1`. Verification rejects a stale
 committed bundle.
+
+## Build a Fedora standalone distribution
+
+The native Fedora 44 desktop package includes the GTK/WebKit desktop window, management service,
+gateway, and core isolated runtimes. It never includes Model weights; HuggingFacePull remains the
+only acquisition path.
+
+The wrapper has two modes. `-PrepareWheelhouse` downloads pinned package releases, builds wheels
+for the six Q4 dependencies published only as source archives, writes the complete wheelhouse
+SHA-256 inventory, and then creates the RPM. It requires a connected release machine, Python 3.12,
+and an empty wheelhouse directory. The default mode performs only the offline verification and
+build; it stops if a required wheel is missing or differs from the inventory. Neither mode
+downloads Models.
+
+On Fedora 44 x86_64 with `rpmbuild`, `patchelf`, Python 3.12, Node.js, npm, and the frontend dependencies
+already installed, create an unsigned RPM distribution from the repository root with the existing verified
+wheelhouse:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1
+```
+
+`-PrepareWheelhouse` is a deliberately slow preparation step: it downloads pinned packages and builds
+the Q4 source-only wheels. Run it only when creating or deliberately refreshing a wheelhouse, not for
+routine local builds:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
+  -Python /path/to/python3.12 -PrepareWheelhouse
+```
+
+The wrapper automatically finds an installed Python 3.12, including pyenv-managed versions. Pass
+`-Python /path/to/python3.12` to override that discovery for either mode.
+
+The package is written beneath `dist/fedora/`, normally as
+`dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm`. To use a wheelhouse stored elsewhere,
+pass its directory and matching manifest explicitly:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/build_fedora_standalone.ps1 `
+  -Wheelhouse /path/to/wheelhouse `
+  -WheelhouseManifest /path/to/wheelhouse.sha256 `
+  -OutputDirectory dist/fedora
+```
+
+Add `-PrepareWheelhouse` to that command only when deliberately refreshing a wheelhouse in a new,
+empty directory. To replace an incomplete wheelhouse, add `-ReplaceWheelhouse`; the script moves
+the old directory to a timestamped backup rather than deleting it. Review its generated SHA-256
+inventory before signing or distributing an RPM.
+
+RPM builds read the application version from `backend/modeldeck/__init__.py` and the RPM release
+number from `packaging/fedora/rpm-release`. Use the packaging CLIs to make auditable, validated
+bumps instead of editing those values by hand:
+
+```powershell
+# 2.0.0 → 2.0.1 and reset the RPM release to 1
+pwsh -NoProfile -File scripts/packaging/bump_version.ps1 -Part Patch
+
+# Packaging-only rebuild: 1 → 2
+pwsh -NoProfile -File scripts/packaging/bump_rpm_release.ps1 -Increment
+```
+
+Both commands support `-WhatIf`. Use `-Version 2.1.0` or `-Release 3` to set a specific greater
+value. `-RpmRelease` remains available on either build command as an explicit one-off override;
+it does not modify the canonical release file.
+
+For parameter descriptions and more examples, use PowerShell's built-in help:
+
+```powershell
+Get-Help ./scripts/packaging/bump_version.ps1 -Full
+Get-Help ./scripts/packaging/bump_rpm_release.ps1 -Full
+```
+
+### Install a local unsigned build
+
+Use an unsigned RPM only when installing the file you built locally or obtained through another
+verified local channel. `--nogpgcheck` deliberately bypasses RPM signature verification, so do not
+use it for a published release. Confirm the expected file and digest first, then install it:
+
+```bash
+sha256sum dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+sudo dnf install --nogpgcheck ./dist/fedora/x86_64/modeldeck-<version>-<release>.fc44.x86_64.rpm
+modeldeck-desktop
+```
+
+Sign a release RPM separately, then verify and install it. The release wrapper selects the
+only local secret key automatically. For a fresh signing workstation, it can create a protected
+key and proceed in one command (GPG opens pinentry for its passphrase):
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
+  -RpmPath dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm `
+  -CreateKey -SigningName 'ModelDeck Release' -SigningEmail 'release@example.com'
+```
+
+When the key already exists, supply its key ID if more than one secret key is present:
+
+```powershell
+pwsh -NoProfile -File scripts/packaging/release_fedora_rpm.ps1 `
+  -RpmPath dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm `
+  -KeyId <private-key-id-or-fingerprint>
+```
+
+```bash
+rpm --checksig --verbose dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
+sudo dnf install ./dist/fedora/x86_64/modeldeck-<version>-1.fc44.x86_64.rpm
+modeldeck-desktop
+```
+
+On a machine that has not yet trusted the release key, import its public key before verifying or
+installing the RPM. Publish the resulting `.asc` file with the release, never the private key:
+
+```bash
+gpg --armor --export <private-key-id-or-fingerprint> > modeldeck-release-signing-key.asc
+sudo rpm --import modeldeck-release-signing-key.asc
+```
+
+The RPM installs program files system-wide under `/usr`; its per-user state is stored in
+`~/.local/share/modeldeck` and Worker logs in `~/.local/state/modeldeck/logs/workers`. See
+[Fedora standalone ModelDeck](docs/FEDORA_STANDALONE.md) for the full packaging and lifecycle
+details.
 
 Test fixtures are not available in the operator UI or gateway as fallback choices. Stop all
 ModelDeck workers and services with `pwsh -NoProfile -File scripts/operations/stop.ps1`. See

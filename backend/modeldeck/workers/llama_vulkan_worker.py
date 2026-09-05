@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -19,8 +20,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from modeldeck.llama_runtime import (
+    GPT_OSS_LLAMA_REQUIRED_FLAGS,
+    ValidatedLlamaInstallation,
     ValidatedQwenRuntime,
     configuration_fingerprint,
+    validate_llama_installation,
     validate_qwen_runtime,
 )
 from modeldeck.protocol import GenerationFamily
@@ -65,10 +69,27 @@ def fixed_llama_server() -> Path:
     return Path(".runtime-tools/llama.cpp/bin/llama-server").resolve()
 
 
-def llama_command(*, model: Path, port: int, context_length: int, preset: str) -> list[str]:
-    if preset not in {"vulkan-full", "vulkan-cpu-moe"}:
+def gpt_oss_configuration_fingerprint(
+    args: argparse.Namespace, installation: ValidatedLlamaInstallation
+) -> str:
+    payload = {
+        "model_id": args.model_id,
+        "model_revision": args.revision,
+        "context_length": args.context_length,
+        "execution_preset": args.execution_preset,
+        "llama_cpp_commit": installation.receipt.commit,
+        "llama_server_sha256": installation.executable_sha256,
+        "llama_build_receipt_sha256": installation.receipt_sha256,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def llama_command(
+    *, model: Path, port: int, context_length: int, preset: str, executable: Path | None = None
+) -> list[str]:
+    if preset != "vulkan-full":
         raise ValueError("Unknown allowlisted GPT-OSS execution preset")
-    executable = fixed_llama_server()
+    executable = executable or fixed_llama_server()
     if not executable.is_file():
         raise ValueError(
             "Pinned llama.cpp Vulkan runtime is missing; run "
@@ -97,8 +118,6 @@ def llama_command(*, model: Path, port: int, context_length: int, preset: str) -
         "--flash-attn",
         "--jinja",
     ]
-    if preset == "vulkan-cpu-moe":
-        command.extend(["--n-cpu-moe", "20"])
     return command
 
 
@@ -453,16 +472,19 @@ class LlamaProcess:
         self.restart_lock = asyncio.Lock()
         self.evidence = LlamaEvidence()
         self.qwen_runtime: ValidatedQwenRuntime | None = None
+        self.llama_installation: ValidatedLlamaInstallation | None = None
         self.memory_task: asyncio.Task[None] | None = None
         self.peak_gtt_used_bytes: int | None = None
         self.started = time.monotonic()
         self.load_seconds: float | None = None
         self.last_time_to_first_token_seconds: float | None = None
+        self.startup_failure_category: str | None = None
 
     async def start(self) -> None:
         self.started = time.monotonic()
         self.internal_port = allocate_private_port()
         self.evidence = LlamaEvidence()
+        self.startup_failure_category = None
         if getattr(self.args, "runtime_profile", None):
             self.qwen_runtime = validate_qwen_runtime(
                 self.args.runtime_profile,
@@ -478,11 +500,13 @@ class LlamaProcess:
                 thinking_mode=self.args.thinking_mode,
             )
         else:
+            self.llama_installation = validate_llama_installation(required_flags=GPT_OSS_LLAMA_REQUIRED_FLAGS)
             command = llama_command(
                 model=self.artifact_path,
                 port=self.internal_port,
                 context_length=self.args.context_length,
                 preset=self.args.execution_preset,
+                executable=self.llama_installation.executable,
             )
         environment = dict(os.environ)
         environment["GGML_VK_VISIBLE_DEVICES"] = "0"
@@ -532,7 +556,30 @@ class LlamaProcess:
             return
         quantisation = self.qwen_runtime.manifest.quantisation if self.qwen_runtime else "mxfp4"
         while line := await stream.readline():
-            self.evidence.feed(line.decode(errors="replace").rstrip(), quantisation=quantisation)
+            message = line.decode(errors="replace").rstrip()
+            self.evidence.feed(message, quantisation=quantisation)
+            self.startup_failure_category = (
+                classify_llama_startup_failure(message) or self.startup_failure_category
+            )
+
+    def child_failure(self) -> dict[str, Any] | None:
+        if self.process is None or self.process.returncode is None:
+            return None
+        category = self.startup_failure_category or "llama_child_exited"
+        descriptions = {
+            "accelerator_memory_allocation_failed": "accelerator memory allocation failed",
+            "model_load_failed": "model loading failed",
+            "vulkan_initialisation_failed": "Vulkan initialisation failed",
+            "llama_child_exited": "the llama.cpp process exited",
+        }
+        return {
+            "failure_category": category,
+            "child_exit_code": self.process.returncode,
+            "error": (
+                f"llama.cpp child exited during model loading with code "
+                f"{self.process.returncode}: {descriptions[category]}"
+            ),
+        }
 
     def memory_metrics(self) -> dict[str, int]:
         metrics = amd_gpu_memory_metrics()
@@ -565,6 +612,28 @@ class LlamaProcess:
             return False
 
 
+def classify_llama_startup_failure(message: str) -> str | None:
+    """Return a safe failure category without retaining child-process log content."""
+    lowered = message.casefold()
+    if any(
+        marker in lowered
+        for marker in (
+            "out of memory",
+            "failed to allocate",
+            "allocation failed",
+            "cannot allocate memory",
+        )
+    ):
+        return "accelerator_memory_allocation_failed"
+    if any(marker in lowered for marker in ("failed to load model", "model load failed")):
+        return "model_load_failed"
+    if "vulkan" in lowered and any(
+        marker in lowered for marker in ("error", "failed", "failure", "initialization")
+    ):
+        return "vulkan_initialisation_failed"
+    return None
+
+
 def create_app(args: argparse.Namespace) -> FastAPI:
     runtime = LlamaProcess(args)
     is_qwen = bool(getattr(args, "runtime_profile", None))
@@ -584,19 +653,37 @@ def create_app(args: argparse.Namespace) -> FastAPI:
     @app.get("/health")
     async def health():
         ready = await runtime.ready()
+        failure = runtime.child_failure()
         manifest = runtime.qwen_runtime.manifest if runtime.qwen_runtime else None
+        installation_identity = (
+            {
+                "llama_cpp_commit": runtime.qwen_runtime.source_revision,
+                "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
+                "llama_build_receipt_sha256": runtime.qwen_runtime.receipt_sha256,
+            }
+            if runtime.qwen_runtime
+            else {
+                "llama_cpp_commit": runtime.llama_installation.receipt.commit,
+                "llama_server_sha256": runtime.llama_installation.executable_sha256,
+                "llama_build_receipt_sha256": runtime.llama_installation.receipt_sha256,
+            }
+            if getattr(runtime, "llama_installation", None)
+            else {}
+        )
         return {
             "protocol_version": "1",
             "worker_id": args.worker_id,
             "runtime": "llama-vulkan",
             "generation_family": GenerationFamily.AUTOREGRESSIVE,
-            "state": "ready" if ready else "loading",
+            "state": "failed" if failure else "ready" if ready else "loading",
             "model_id": args.model_id,
             "model_revision": args.revision,
             "device": "vulkan:0",
             "device_name": "AMD Radeon 8060S (Vulkan)" if manifest else "AMD Vulkan",
             "rocm_version": None,
             "ready": ready,
+            **installation_identity,
+            **(failure or {}),
             **(
                 {
                     "runtime_profile": manifest.id,
@@ -618,6 +705,12 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     ),
                 }
                 if manifest
+                else {
+                    "configuration_fingerprint": gpt_oss_configuration_fingerprint(
+                        args, runtime.llama_installation
+                    )
+                }
+                if getattr(runtime, "llama_installation", None)
                 else {}
             ),
         }
@@ -658,6 +751,18 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "quantization": manifest.quantisation if manifest else "mxfp4",
             **(
                 {
+                    "llama_cpp_commit": runtime.llama_installation.receipt.commit,
+                    "llama_server_sha256": runtime.llama_installation.executable_sha256,
+                    "llama_build_receipt_sha256": runtime.llama_installation.receipt_sha256,
+                    "configuration_fingerprint": gpt_oss_configuration_fingerprint(
+                        args, runtime.llama_installation
+                    ),
+                }
+                if runtime.llama_installation
+                else {}
+            ),
+            **(
+                {
                     "original_model_id": manifest.original_model_id,
                     "original_model_revision": manifest.original_model_revision,
                     "artefact_model_id": manifest.artefact_model_id,
@@ -667,6 +772,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
                     **({"mtp_model_sha256": manifest.mtp_model.sha256} if manifest.mtp_model else {}),
                     "llama_cpp_commit": manifest.llama_cpp_commit,
                     "llama_server_sha256": runtime.qwen_runtime.executable_sha256,
+                    "llama_build_receipt_sha256": runtime.qwen_runtime.receipt_sha256,
                     "backend": manifest.backend,
                     "context_length": manifest.context_length,
                     "cache_type_k": manifest.cache_type_k,
@@ -716,6 +822,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
             "throughput_basis": "effective_mtp" if runtime.qwen_runtime else "backend_reported",
             "startup_checks": startup_checks,
             "startup_errors": [name for name, passed in startup_checks.items() if not passed],
+            **(runtime.child_failure() or {}),
             **runtime.memory_metrics(),
         }
 
@@ -830,7 +937,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thinking-mode", choices=("adaptive", "disabled"), default="adaptive")
     parser.add_argument(
         "--execution-preset",
-        choices=("vulkan-full", "vulkan-cpu-moe"),
+        choices=("vulkan-full",),
         default="vulkan-full",
     )
     return parser.parse_args()

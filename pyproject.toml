@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modeldeck"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first model runtime manager and capability gateway"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -28,7 +28,14 @@ dev = [
 [project.scripts]
 modeldeck = "modeldeck.__main__:main"
 modeldeck-gateway = "modeldeck.gateway.app:main"
+modeldeck-gateway-docker-bridge = "modeldeck.gateway.docker_bridge:main"
 modeldeck-probe = "modeldeck.hardware.probe:main"
+modeldeck-import-state = "modeldeck.state_import:main"
+modeldeck-export-state = "modeldeck.state_export:main"
+modeldeck-desktop = "modeldeck.desktop.app:main"
+
+[tool.hatch.version]
+path = "backend/modeldeck/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend/modeldeck"]

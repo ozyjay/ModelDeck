@@ -4,6 +4,7 @@ import hashlib
 import socket
 import sys
 
+import modeldeck.supervisor.service as supervisor_service
 import pytest
 from modeldeck.llama_runtime import LLAMA_CPP_COMMIT, QwenLlamaManifest, TrustedArtefact
 from modeldeck.profiles import LocalProfileRequest, create_local_profile
@@ -86,6 +87,22 @@ def test_rocm_launch_requires_project_local_runtime(monkeypatch, tmp_path) -> No
         build_worker_launch(profile)
 
 
+def test_rocm_launch_uses_managed_miopen_state(monkeypatch, tmp_path) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "qwen-small-rocm")
+    runtime_python = tmp_path / "bin/python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(sys.executable)
+    data_dir = tmp_path / "modeldeck-data"
+    monkeypatch.setenv("MODELDECK_ROCM72_PYTHON", str(runtime_python))
+
+    launch = build_worker_launch(profile, data_dir=data_dir)
+
+    assert launch.environment["MIOPEN_USER_DB_PATH"] == str(data_dir / "runtime/miopen/user-db")
+    assert launch.environment["MIOPEN_CUSTOM_CACHE_DIR"] == str(data_dir / "runtime/miopen/kernel-cache")
+    assert (data_dir / "runtime/miopen/user-db").is_dir()
+    assert (data_dir / "runtime/miopen/kernel-cache").is_dir()
+
+
 @pytest.mark.asyncio
 async def test_supervisor_registers_and_removes_only_stopped_profiles() -> None:
     base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
@@ -109,6 +126,109 @@ def test_supervisor_reports_the_environment_passed_to_the_worker() -> None:
         "TRANSFORMERS_OFFLINE": "1",
         "LD_PRELOAD": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_reclaims_only_an_exact_non_ready_worker_endpoint(monkeypatch) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile])
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            requests.append(("GET", url))
+            return FakeResponse(
+                {
+                    "worker_id": profile.id,
+                    "model_id": profile.model_id,
+                    "model_revision": profile.revision,
+                    "generation_family": profile.generation_family.value,
+                    "runtime": profile.preferred_runtime,
+                    "state": "failed",
+                    "ready": False,
+                }
+            )
+
+        async def post(self, url):
+            requests.append(("POST", url))
+            return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(supervisor_service.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(supervisor_service, "port_available", lambda _port: True)
+
+    assert await supervisor._reclaim_stale_worker_endpoint(supervisor.workers[profile.id]) is True
+    assert requests == [
+        ("GET", f"http://127.0.0.1:{profile.port}/health"),
+        ("POST", f"http://127.0.0.1:{profile.port}/shutdown"),
+    ]
+    assert supervisor.logs(profile.id)[-1]["source"] == "supervisor"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "ready", "worker_id"),
+    [
+        ("ready", True, "exact"),
+        ("loading", False, "different-worker"),
+    ],
+)
+async def test_supervisor_does_not_reclaim_ready_or_mismatched_endpoints(
+    monkeypatch, state, ready, worker_id
+) -> None:
+    profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    supervisor = WorkerSupervisor([profile])
+    posted = False
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "worker_id": profile.id if worker_id == "exact" else worker_id,
+                "model_id": profile.model_id,
+                "model_revision": profile.revision,
+                "generation_family": profile.generation_family.value,
+                "runtime": profile.preferred_runtime,
+                "state": state,
+                "ready": ready,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return FakeResponse()
+
+        async def post(self, _url):
+            nonlocal posted
+            posted = True
+            return FakeResponse()
+
+    monkeypatch.setattr(supervisor_service.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+
+    assert await supervisor._reclaim_stale_worker_endpoint(supervisor.workers[profile.id]) is False
+    assert posted is False
 
 
 def test_rocm_launch_preserves_virtual_environment_entrypoint(monkeypatch, tmp_path) -> None:
@@ -642,6 +762,39 @@ async def test_starting_exclusive_worker_stops_existing_exclusive_worker() -> No
         assert supervisor.get_worker(second.id)["state"] == "ready"
     finally:
         await supervisor.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_llama_worker_start_fails_before_process_launch_when_installation_is_untrusted(
+    monkeypatch, tmp_path
+) -> None:
+    base = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
+    profile = base.model_copy(
+        update={
+            "id": "gpt-oss-untrusted-runtime",
+            "preferred_runtime": "llama-vulkan",
+            "runtime_template_id": "gpt-oss-llama-vulkan",
+            "port": free_port(),
+            "settings": {
+                "artifact_path": str(tmp_path / "gpt-oss-120b-MXFP4.gguf"),
+                "execution_preset": "vulkan-full",
+                "context_length": 8192,
+            },
+        }
+    )
+    supervisor = WorkerSupervisor([profile])
+
+    async def reject_installation(*_args, **_kwargs):
+        raise ValueError("Pinned llama.cpp Vulkan runtime failed installation validation: modified")
+
+    monkeypatch.setattr(supervisor_service, "run_in_isolated_thread", reject_installation)
+
+    with pytest.raises(RuntimeError, match="installation validation: modified"):
+        await supervisor.start(profile.id)
+
+    worker = supervisor.workers[profile.id]
+    assert worker.state.value == "failed"
+    assert worker.process is None
 
 
 @pytest.mark.asyncio

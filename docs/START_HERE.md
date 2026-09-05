@@ -16,6 +16,9 @@ applications. It begins with no configured Workers or routing profile.
    To restart locally, run `pwsh -NoProfile -File scripts/operations/stop.ps1` first, then run the
    start command again. The stop script is limited to this checkout's ModelDeck services
    even when a PID record is stale or missing.
+   To open the native GTK desktop shell from this checkout without building or installing an RPM,
+   use `pwsh -NoProfile -File scripts/operations/run_desktop.ps1`. It connects to the development
+   services started by the script; use `scripts/operations/stop.ps1` after closing the window.
 5. In **Models**, inspect the potential capabilities and their detected or reviewed
    evidence, then explicitly allow the capabilities you intend to use. An allowed
    capability with no trusted runtime records intent but is not runnable.
