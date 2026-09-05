@@ -116,6 +116,7 @@ def llama_command(
         "--n-gpu-layers",
         "999",
         "--flash-attn",
+        "on",
         "--jinja",
     ]
     return command

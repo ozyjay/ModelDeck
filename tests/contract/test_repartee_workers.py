@@ -27,7 +27,7 @@ def test_llama_command_uses_only_fixed_vulkan_presets(monkeypatch, tmp_path) -> 
     assert full[0] == str(executable)
     assert full[full.index("--host") + 1] == "127.0.0.1"
     assert full.count("--flash-attn") == 1
-    assert "on" not in full
+    assert full[full.index("--flash-attn") + 1] == "on"
     assert "--n-cpu-moe" not in full
     with pytest.raises(ValueError, match="allowlisted"):
         llama_command(model=model, port=9630, context_length=8192, preset="vulkan-cpu-moe")
