@@ -229,6 +229,18 @@ describe("ModelDeck routing profile operator console", () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/routing-profiles")).toBe(true);
   });
 
+  it("explains why a published Routing Profile cannot be deleted", async () => {
+    mockFetch(responses(true));
+    render(<App />);
+
+    await openAdvancedSection("Routing profiles");
+
+    const remove = await screen.findByRole("button", { name: "Delete Routing Profile" });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute("title", "Published Routing Profiles are retained as immutable revision history and cannot be deleted. Disable routing to remove it from the live gateway.");
+    expect(screen.getByText(/Published Routing Profiles are retained as immutable revision history/i)).toBeInTheDocument();
+  });
+
   it("disables a live Routing Profile without changing Worker control", async () => {
     const payloads = responses(true);
     payloads[`/api/routing-profiles/${profile.definition.id}/active`] = { ok: true, profile_id: profile.definition.id };
