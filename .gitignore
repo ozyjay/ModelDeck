@@ -8,7 +8,7 @@ __pycache__/
 build/
 dist/
 var/
-.modeldeck/
+/.modeldeck*/
 *.log
 *.pid
 .env
@@ -17,3 +17,5 @@ frontend/coverage/
 frontend/*.tsbuildinfo
 .booth-browser-profile/
 .runtime-tools/
+/packaging/fedora/wheelhouse/
+/packaging/fedora/wheelhouse.backup-*/
