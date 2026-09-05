@@ -2131,10 +2131,19 @@ def _worker_capability_request(
         )
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
+    body = probe_request.body
+    if (
+        definition.runtime_template_id == "gpt-oss-llama-vulkan"
+        and capability_id in {"general-chat", "text-completion"}
+        and isinstance(body, dict)
+    ):
+        # GPT-OSS may use the first few generated tokens for private reasoning.
+        # Keep the probe bounded while allowing enough room for visible output.
+        body = {**body, "max_tokens": 64}
     headers = probe_request.headers
     if definition.runtime == "gemma4-general-chat-transformers-rocm":
         headers = {"Authorization": f"Bearer {os.environ.get('MODELDECK_SCENECHAT_API_KEY', 'local')}"}
-    return probe_request.path, probe_request.body, headers
+    return probe_request.path, body, headers
 
 
 def _image_chat_smoke_body(model: str) -> dict[str, object]:

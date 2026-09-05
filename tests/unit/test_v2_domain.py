@@ -391,6 +391,18 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert body["max_tokens"] == 4
     assert headers is None
 
+    gpt_oss = autoregressive.model_copy(
+        update={
+            "model_id": "ggml-org/gpt-oss-120b-GGUF",
+            "runtime": "llama-vulkan",
+            "runtime_template_id": "gpt-oss-llama-vulkan",
+        }
+    )
+    path, body, headers = _worker_smoke_request(gpt_oss)
+    assert path == "/v1/chat/completions"
+    assert body["max_tokens"] == 64
+    assert headers is None
+
     qwen_llama = autoregressive.model_copy(
         update={
             "runtime": "qwen38-llamacpp-vulkan",
