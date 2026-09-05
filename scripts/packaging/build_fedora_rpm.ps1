@@ -205,8 +205,6 @@ try {
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-gateway" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.gateway.app'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-gateway-docker-bridge" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.gateway.docker_bridge'
-    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-import-state" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.state_import'
-    New-PythonModuleLauncher -Path "$Control/bin/modeldeck-export-state" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.state_export'
     New-PythonModuleLauncher -Path "$Control/bin/modeldeck-probe" -Runtime '/usr/libexec/modeldeck/control' -Module 'modeldeck.hardware.probe'
 
     New-Item -ItemType Directory -Force -Path "$PayloadRoot/bin", "$PayloadRoot/lib/systemd/user", "$PayloadRoot/share/applications", "$PayloadRoot/share/icons/hicolor/scalable/apps", "$PayloadRoot/share/modeldeck", "$PayloadRoot/share/doc/modeldeck" | Out-Null

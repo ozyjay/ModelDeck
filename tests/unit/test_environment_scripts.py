@@ -11,6 +11,9 @@ RUN_SCRIPT = PROJECT_ROOT / "scripts/operations/run.ps1"
 STOP_SCRIPT = PROJECT_ROOT / "scripts/operations/stop.ps1"
 STOP_STALE_WORKERS_SCRIPT = PROJECT_ROOT / "scripts/operations/stop_stale_workers.ps1"
 CHECK_PORTS_SCRIPT = PROJECT_ROOT / "scripts/operations/check_ports.ps1"
+EXPORT_STATE_SCRIPT = PROJECT_ROOT / "scripts/operations/export_state.ps1"
+IMPORT_STATE_SCRIPT = PROJECT_ROOT / "scripts/operations/import_state.ps1"
+STATE_OPERATIONS_HELPERS = PROJECT_ROOT / "scripts/lib/state_operations_helpers.psm1"
 SETUP_LLAMA_VULKAN_SCRIPT = PROJECT_ROOT / "scripts/setup/setup_llama_vulkan.ps1"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 
@@ -141,6 +144,25 @@ def test_stop_script_recovers_project_local_services_without_pid_files() -> None
     assert "recovered untracked" in script
     assert "modeldeck.gateway.app" in script
     assert "modeldeck.gateway.docker_bridge" in script
+
+
+def test_checkout_state_maintenance_requires_deactivation_and_respects_configuration_lock() -> None:
+    export_script = EXPORT_STATE_SCRIPT.read_text(encoding="utf-8")
+    import_script = IMPORT_STATE_SCRIPT.read_text(encoding="utf-8")
+    helpers = STATE_OPERATIONS_HELPERS.read_text(encoding="utf-8")
+
+    for script in (export_script, import_script):
+        assert "Import-ModelDeckEnvironment" in script
+        assert "Assert-ModelDeckConfigurationMutable" in script
+        assert "Assert-ModelDeckServicesStopped" in script
+        assert "Resolve-CheckoutStateDirectory" in script
+    assert "modeldeck.state_export" in export_script
+    assert "modeldeck.state_import" in import_script
+    assert "-ReplaceExisting" in import_script
+    assert "modeldeck.gateway.app" in helpers
+    assert "modeldeck.workers.*" in helpers
+    assert "MODELDECK_OPEN_DAY" in helpers
+    assert "State import and export are disabled" in helpers
 
 
 def test_stale_worker_cleanup_covers_all_managed_workers_and_private_llama_server() -> None:

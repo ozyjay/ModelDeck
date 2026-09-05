@@ -194,7 +194,7 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     assert "Wheelhouse contains unlisted files" in build_script
     assert "New-BundledPythonRuntime" in build_script
     assert "Set-PackagedRuntimeLauncher" in build_script
-    assert "modeldeck-export-state" in build_script
+    assert "modeldeck-export-state" not in build_script
     assert "modeldeck-gateway-docker-bridge" in build_script
     assert "desktop-python" in build_script
     assert "absolute symbolic links" in build_script
@@ -208,6 +208,15 @@ def test_fedora_assets_keep_services_loopback_only_and_package_models_externally
     cleanup_position = build_script.index("Get-ChildItem $Libexec -Recurse -Directory -Filter '__pycache__'")
     desktop_copy_position = build_script.index("Copy-Item 'backend/modeldeck/desktop'")
     assert cleanup_position > desktop_copy_position
+
+
+def test_desktop_shell_does_not_own_state_import_or_export() -> None:
+    app = (PROJECT_ROOT / "backend/modeldeck/desktop/app.py").read_text(encoding="utf-8")
+
+    assert '"import", self._import' not in app
+    assert '"export", self._export' not in app
+    assert "Import existing state" not in app
+    assert "Export state" not in app
 
 
 def test_fedora_standalone_build_wrapper_uses_the_offline_rpm_builder() -> None:

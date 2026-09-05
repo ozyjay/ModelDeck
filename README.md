@@ -58,6 +58,23 @@ prepared, read-only configuration. The former `MODELDECK_OPEN_DAY` and `-OpenDay
 accepted temporarily while local launch files are updated. ModelDeck is always offline-only;
 `MODELDECK_ALLOW_DOWNLOADS` no longer changes runtime behaviour.
 
+### Exporting and importing checkout state
+
+State maintenance is deliberately available only while ModelDeck is deactivated. First stop the
+management service, gateway, bridge, and Workers, then create an archive or import a previous
+archive with the checkout commands:
+
+```powershell
+pwsh -NoProfile -File scripts/operations/stop.ps1
+pwsh -NoProfile -File scripts/operations/export_state.ps1 -Destination /path/to/new-modeldeck-state.tar
+pwsh -NoProfile -File scripts/operations/import_state.ps1 -Source /path/to/modeldeck-state.tar -ReplaceExisting
+```
+
+Export never overwrites an archive. Import validates the archive and its SQLite schema, then makes
+a timestamped backup of the existing checkout state before replacement. Both commands refuse to
+run while any ModelDeck service or managed Worker is active, and are disabled when configuration
+locking is enabled. Start ModelDeck normally after maintenance completes.
+
 ModelDeck deliberately uses three environments with different responsibilities:
 
 - `.venv` is the control plane: management service, supervisor, gateway, catalogue, and
