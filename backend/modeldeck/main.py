@@ -30,6 +30,7 @@ from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
 from modeldeck.llama_runtime import ALL_LLAMA_REQUIRED_FLAGS, inspect_llama_installation
+from modeldeck.persistence import PersistenceError, install_persistence_handler
 from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
 from modeldeck.security import LocalBrowserBoundary
@@ -91,7 +92,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # a test merely constructing an ASGI application.
         configured.data_dir.mkdir(parents=True, exist_ok=True)
         store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-        store.initialise_v5()
+        try:
+            store.initialise_v5()
+        except PersistenceError as error:
+            app.state.persistence_startup_error = error
+            yield
+            return
         definitions: dict[str, WorkerDefinition] = {}
         worker_profiles = []
         for record in store.list_workers():
@@ -133,6 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
+    install_persistence_handler(app)
     app.add_middleware(LocalBrowserBoundary)
     app.state.thermal_manager = thermal_manager
     # These inert values make construction inspectable. Lifespan replaces them
@@ -170,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
+        app.state.compatibility_store.check_health()
         return {
             "status": "ok",
             "service": "modeldeck-management",

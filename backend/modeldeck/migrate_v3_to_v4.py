@@ -14,12 +14,13 @@ from modeldeck.capabilities import (
     capability_id_for_contract,
     worker_cache_identity,
 )
+from modeldeck.persistence import connect_database
 
 
 def migrate(database_path: Path) -> None:
     if not database_path.is_file():
         raise RuntimeError(f"ModelDeck database does not exist: {database_path}")
-    with sqlite3.connect(database_path) as database:
+    with connect_database(database_path) as database:
         version_row = database.execute(
             "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
         ).fetchone()
@@ -77,10 +78,14 @@ def migrate(database_path: Path) -> None:
 
 
 def _workers(database: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    try:
-        rows = database.execute("SELECT id, document_json, archived_at FROM workers").fetchall()
-    except sqlite3.OperationalError:
+    # Legacy profile-only exports can omit Workers. Check that known format
+    # explicitly; query failures in a present table must still abort migration.
+    if (
+        database.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workers'").fetchone()
+        is None
+    ):
         return {}
+    rows = database.execute("SELECT id, document_json, archived_at FROM workers").fetchall()
     result: dict[str, dict[str, Any]] = {}
     for worker_id, document_json, archived_at in rows:
         document = json.loads(document_json)

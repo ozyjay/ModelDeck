@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from modeldeck.persistence import PersistenceError, connect_database
 from modeldeck.state_archive import StateArchiveError, extract_state_archive
 
 
@@ -31,14 +31,14 @@ def validate_state_directory(directory: Path) -> None:
     if not directory.is_dir() or not database_path.is_file():
         raise StateImportError("Select a ModelDeck data directory containing modeldeck.sqlite3")
     try:
-        with sqlite3.connect(f"file:{database_path}?mode=ro", uri=True) as database:
+        with connect_database(database_path, readonly=True) as database:
             integrity = database.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":
                 raise StateImportError("The selected ModelDeck database did not pass SQLite integrity_check")
             row = database.execute(
                 "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
             ).fetchone()
-    except sqlite3.DatabaseError as error:
+    except PersistenceError as error:
         raise StateImportError("The selected ModelDeck database is unreadable") from error
     if row is None or str(row[0]) not in {"4", "5"}:
         raise StateImportError(

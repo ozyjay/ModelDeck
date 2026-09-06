@@ -24,6 +24,10 @@ use `modeldeck.main:create_app --factory` rather than an import-time app instanc
 
 ## Management (`:3600`)
 
+Storage failures return structured HTTP 503 degraded health instead of empty
+registries. See [schema v4-to-v5 and persistence diagnostics](MIGRATION_V4_TO_V5.md)
+for error codes, migration behaviour and requested/resolved route identity fields.
+
 Discovery is read-only: `GET /api/health`, `/api/hardware`, `/api/telemetry`,
 `/api/thermal`, `/api/gateway/status`, `/api/catalogue`, `/api/runtime-templates`,
 `/api/protocol-contracts`, and `/api/compatibility`.

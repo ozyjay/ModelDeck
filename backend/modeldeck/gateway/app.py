@@ -24,6 +24,8 @@ from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings
 from modeldeck.domain import WorkerDefinition
 from modeldeck.gateway.adapters import PROTOCOL_ADAPTERS
+from modeldeck.gateway.resolution import ResolvedRoute, execution_identity
+from modeldeck.persistence import PersistenceError, install_persistence_handler
 from modeldeck.prefix_cache import stable_model_configuration_fingerprint
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
@@ -81,7 +83,12 @@ def create_gateway_app(
         # importing or constructing this application must not alter state.
         configured.data_dir.mkdir(parents=True, exist_ok=True)
         if persistence_enabled:
-            store.initialise_v5()
+            try:
+                store.initialise_v5()
+            except PersistenceError as error:
+                app.state.persistence_startup_error = error
+                yield
+                return
         write_thermal_workload_activity(app.state.thermal_workload_path, 0)
         try:
             yield
@@ -89,6 +96,7 @@ def create_gateway_app(
             write_thermal_workload_activity(app.state.thermal_workload_path, 0)
 
     app = FastAPI(title="ModelDeck stable local gateway", version=__version__, lifespan=lifespan)
+    install_persistence_handler(app)
     app.add_middleware(LocalBrowserBoundary, docker_bridge=configured.docker_bridge_enabled)
     app.state.last_request_diagnostics = None
     app.state.active_request_workers = {}
@@ -128,15 +136,7 @@ def create_gateway_app(
                 )
                 for name, candidates in base_routes.items()
             ]
-        profiles: dict[str, ModelProfile] = {}
-        for record in store.list_workers():
-            try:
-                definition = WorkerDefinition.model_validate(record["definition"])
-                profiles[definition.id] = definition.to_profile()
-            except ValueError:
-                # A historical Worker may use a retired test-only runtime. It remains
-                # in SQLite for migration/evidence purposes but cannot be routed.
-                continue
+        worker_records = store.list_workers(include_archived=True)
         routes: list[tuple[str, list[ModelProfile], dict[str, Any]]] = []
         for snapshot in store.active_routing_snapshots():
             if snapshot.get("format") != "modeldeck-routing-profile":
@@ -147,15 +147,15 @@ def create_gateway_app(
                 public_name = str(capability.get("public_name", ""))
                 if not public_name:
                     continue
+                resolved = ResolvedRoute.resolve(
+                    public_name, capability.get("worker_ids", []), worker_records
+                )
                 routes.append(
                     (
                         public_name,
-                        [
-                            profiles[worker_id]
-                            for worker_id in capability.get("worker_ids", [])
-                            if worker_id in profiles
-                        ],
+                        resolved.candidates,
                         {
+                            **resolved.metadata(),
                             "public_model_id": public_name,
                             "capability_id": str(capability.get("capability_id") or "") or None,
                             "routing_profile_id": str(snapshot.get("profile_id") or "") or None,
@@ -202,6 +202,11 @@ def create_gateway_app(
 
     async def worker_states(routes: dict[str, list[ModelProfile]] | None = None) -> list[dict[str, Any]]:
         result = []
+        names = (
+            {record["id"]: record["definition"].get("name") for record in store.list_workers()}
+            if persistence_enabled
+            else {}
+        )
         profiles = {
             profile.id: profile
             for candidates in (routes if routes is not None else active_routes()).values()
@@ -213,14 +218,7 @@ def create_gateway_app(
                 result.append(
                     {
                         "id": profile.id,
-                        "name": next(
-                            (
-                                record["definition"]["name"]
-                                for record in store.list_workers()
-                                if record["definition"]["id"] == profile.id
-                            ),
-                            profile.id,
-                        ),
+                        "name": names.get(profile.id) or profile.id,
                         "generation_family": profile.generation_family,
                         "endpoint": endpoint(profile),
                         "ready": ready,
@@ -231,6 +229,8 @@ def create_gateway_app(
 
     @app.get("/v1/health")
     async def health():
+        if persistence_enabled:
+            store.check_health()
         states = await worker_states()
         return {
             "status": "ok",
@@ -259,18 +259,35 @@ def create_gateway_app(
     async def capabilities():
         routes = active_routes()
         return {
-            alias: (candidates[0].capabilities.model_dump() if candidates else CapabilitySet().model_dump())
+            alias: next(
+                (
+                    profile.capabilities.model_dump()
+                    for profile in candidates
+                    if route_role(profile, candidates) == "primary"
+                ),
+                CapabilitySet().model_dump(),
+            )
             for alias, candidates in routes.items()
         }
 
     @app.get("/native/v1/capabilities")
     async def native_capabilities():
         records = active_capability_records(native_only=True)
-        routes = active_routes(
+        resolved_records = active_route_records(
             {adapter.contract_id for adapter in PROTOCOL_ADAPTERS.values() if adapter.native}
         )
+        routes = {name: candidates for name, candidates, _ in resolved_records}
         states = {state["id"]: state for state in await worker_states(routes)}
         return {
+            "resolution": {
+                name: {
+                    **metadata,
+                    "workers": [
+                        worker_discovery_identity(profile, states[profile.id]) for profile in candidates
+                    ],
+                }
+                for name, candidates, metadata in resolved_records
+            },
             "capabilities": [
                 {
                     "id": record["capability_id"],
@@ -314,9 +331,19 @@ def create_gateway_app(
 
     @app.get("/v1/routes")
     async def route_list():
-        routes = active_routes()
+        resolved_records = active_route_records()
+        routes = {name: candidates for name, candidates, _ in resolved_records}
         states = {state["id"]: state for state in await worker_states(routes)}
         return {
+            "resolution": {
+                name: {
+                    **metadata,
+                    "workers": [
+                        worker_discovery_identity(profile, states[profile.id]) for profile in candidates
+                    ],
+                }
+                for name, candidates, metadata in resolved_records
+            },
             "routes": [
                 {
                     "public_name": name,
@@ -1483,6 +1510,10 @@ async def worker_health(
     try:
         response = await client.get(f"{endpoint(profile)}/health")
         health = response.json()
+        if not isinstance(health, dict):
+            return {"ready": False, "error": "invalid_worker_health"}, False
+        if health.get("worker_id") is not None and health["worker_id"] != profile.id:
+            return {**health, "ready": False, "error": "worker_identity_mismatch"}, False
         return health, response.is_success and health.get("ready") is True
     except (httpx.HTTPError, ValueError):
         return None, False
@@ -1505,7 +1536,28 @@ def model_discovery_record(
     diagnostic state only: a later inference can observe a different readiness state.
     """
 
-    primary = candidates[0]
+    configured_ids = (route or {}).get("configured_worker_ids", [profile.id for profile in candidates])
+    configured_primary_id = configured_ids[0] if configured_ids else None
+    primary = next((profile for profile in candidates if profile.id == configured_primary_id), None)
+    if primary is None:
+        selected = next((profile for profile in candidates if states.get(profile.id, {}).get("ready")), None)
+        return {
+            "id": alias,
+            "object": "model",
+            "owned_by": "modeldeck-local",
+            "revision": None,
+            "ready": selected is not None,
+            "runtime": selected.preferred_runtime if selected else None,
+            "accelerator": "unknown",
+            "modeldeck": {
+                "route": route or {},
+                "primary_worker": None,
+                "selected_worker": worker_discovery_identity(selected, states[selected.id])
+                if selected
+                else None,
+                "selection_reason": "backup_ready" if selected else "no_ready_worker",
+            },
+        }
     selected = next((profile for profile in candidates if states[profile.id]["ready"]), None)
     selection_reason = (
         "primary_ready"
@@ -1596,6 +1648,29 @@ def worker_discovery_identity(
     observed_fingerprint = health.get("configuration_fingerprint") if ready else None
     return {
         "worker_id": profile.id,
+        "requested": execution_identity(profile.model_dump(mode="json")),
+        "resolved": {
+            "model_id": health.get("model_id"),
+            "model_revision": health.get("model_revision"),
+            "artifact_model_id": health.get("artifact_model_id"),
+            "artifact_revision": health.get("artifact_revision"),
+            "artifact_id": health.get("artifact_id"),
+            "artifact_format": health.get("artifact_format"),
+            "artifact_sha256": health.get("artifact_sha256"),
+            "quantisation": health.get("quantisation"),
+            "runtime": health.get("runtime"),
+            "backend": health.get("resolved_backend") or health.get("backend"),
+            "device": health.get("resolved_device") or health.get("device"),
+            "precision": health.get("dtype"),
+            "context_length": health.get("context_length"),
+            "kv_cache": {
+                key: health[key]
+                for key in ("kv_cache", "kv_cache_dtype", "prefix_cache_enabled", "prefix_caching")
+                if key in health
+            },
+        }
+        if ready and report_observed_runtime
+        else None,
         "model_id": model_id,
         "revision": revision,
         "base_model_id": profile.model_id,
@@ -1654,8 +1729,8 @@ def accelerator_for_runtime(runtime: str, health: dict[str, Any]) -> str:
 def route_candidates(
     routes: dict[str, list[ModelProfile]], alias_or_model_id: str
 ) -> list[ModelProfile] | None:
-    if candidates := routes.get(alias_or_model_id):
-        return candidates
+    if alias_or_model_id in routes:
+        return routes[alias_or_model_id]
     for candidates in routes.values():
         if any(
             profile.model_id == alias_or_model_id and profile.generation_family.value == "vision-language"
@@ -1681,6 +1756,8 @@ def upstream_headers(profile: ModelProfile, request_id: str = "") -> dict[str, s
 
 
 def route_role(selected: ModelProfile, candidates: list[ModelProfile]) -> str:
+    if hasattr(candidates, "configured_ids"):
+        return "primary" if candidates.configured_ids[0] == selected.id else "backup"
     return "primary" if candidates and candidates[0].id == selected.id else "backup"
 
 

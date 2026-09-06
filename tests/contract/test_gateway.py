@@ -83,9 +83,10 @@ async def listed_model_revision(settings: Settings) -> str:
 @pytest.mark.asyncio
 async def test_gateway_has_no_routes_or_implicit_defaults_before_publication(tmp_path) -> None:
     app = create_gateway_app(settings=Settings(data_dir=tmp_path))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
-    ) as client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as client,
+    ):
         health = await client.get("/v1/health")
         models = await client.get("/v1/models")
         unavailable = await client.post("/v1/completions", json={"prompt": "hello"})
@@ -173,6 +174,9 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         "prefix_caching": "unsupported",
         "prefix_cache_enabled": False,
         "route": {
+            "configured_worker_ids": [definition.id],
+            "candidate_worker_ids": [definition.id],
+            "configured_workers": model["modeldeck"]["route"]["configured_workers"],
             "public_model_id": "visitor-chat",
             "capability_id": profile.capabilities[1].id,
             "routing_profile_id": profile.id,
@@ -183,6 +187,8 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         "selection_reason": "no_ready_worker",
     }
     assert model["modeldeck"]["primary_worker"] == {
+        "requested": model["modeldeck"]["primary_worker"]["requested"],
+        "resolved": None,
         "worker_id": definition.id,
         "model_id": "example/model",
         "revision": "revision-1",

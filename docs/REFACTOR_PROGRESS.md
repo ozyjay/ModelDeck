@@ -53,10 +53,62 @@ Remaining validation and trade-offs:
 - Database upgrade/degraded-health diagnostics and route identity correctness are
   Phase 2 work. They are not represented here as completed.
 
-## Remaining phases
+## Phase 2 — persistence and routing correctness
 
-Phase 2: central SQLite connection policy, typed persistence failures and degraded
-health, explicit resolved-route identity, safe discovery and v4-to-v5 migration tests.
+Completed software verification on 7 September 2026. This phase advances explicit
+execution identity, observable failures, reproducibility and preservation of raw
+evidence (guiding principles 6–8 and 12).
+
+Behaviour characterised and files changed:
+
+- `backend/modeldeck/persistence.py` owns every production SQLite connection:
+  foreign keys enabled, a 2000 ms busy timeout, `sqlite3.Row`, transaction rollback
+  and deterministic connection closure. Store, legacy migration and state-import
+  consumers use it; ordinary access cannot create a missing database.
+- `compatibility/store.py` no longer turns SQLite failures into empty Workers,
+  routes, policy or tests, or default rehearsal state. Typed storage failures feed
+  structured HTTP 503 degraded responses in management and gateway. Health probes
+  detect missing schema tables. Known legacy profile-only exports are handled by
+  explicit table detection, not an exception fallback.
+- `gateway/resolution.py` introduces `ResolvedRoute`, retaining configured order,
+  requested identity and unusable Worker reasons separately from executable
+  candidates. Gateway discovery and route metadata expose requested/reported Model,
+  Artifact, Runtime, Backend, device, precision, context and KV-cache fields.
+  Unreported values stay unknown. Native discovery and route listing include a
+  `resolution` map; existing public route names and protocol surfaces are retained.
+- `gateway/app.py` safely advertises routes with no executable candidates. Missing,
+  archived, corrupt, retired and unavailable Workers cannot become implicit
+  replacements. Configured backups remain backups in discovery and response roles.
+  Malformed health and health reporting a different Worker ID are not ready.
+- Schema v4-to-v5 initialisation is transactional and preserves Worker definitions,
+  publications, policy, positive/negative evidence and observations. Restart no
+  longer resurrects a deactivated route from the diagnostic singleton table.
+  Future schemas are refused with downgrade guidance.
+
+Tests added: `tests/unit/test_persistence.py`, `test_resolved_routes.py`, and
+`test_migrate_v4_to_v5.py` (31 cases), plus updated gateway contract expectations
+for additive identity metadata and explicit lifespan initialisation. Coverage
+includes connection settings, foreign-key enforcement, closure, rollback, lock
+contention, startup corruption, removed databases/tables, discovery failure cases,
+separate requested/reported identities, migration idempotence and failure rollback.
+
+Verification: `pwsh -NoProfile -File scripts/verify.ps1` passed with local socket
+permission: **634 Python tests passed, 9 skipped; 20 frontend tests passed**.
+Lint, formatting, TypeScript, frontend build and committed-asset checks passed.
+Focused persistence, discovery and migration checks also passed.
+
+Remaining risks: enabling foreign keys can expose pre-existing inconsistent data;
+the migration never deletes evidence to conceal such inconsistencies. Startup
+storage failures require repair and restart. Discovery is a health snapshot, so
+readiness can change before inference. Schema downgrade requires a retained backup.
+See [migration and diagnostic guidance](MIGRATION_V4_TO_V5.md).
+
+Hardware validation: the five physical GPU tests and four torch-dependent tests
+remain skipped in the control-plane environment. Physical Worker requalification
+from Phase 1 remains outstanding. This phase changes no runtime/model pins,
+inference engines, model acquisition or thermal thresholds.
+
+## Remaining phases
 
 Phase 3: event fan-out/recovery, operator snapshots, health caching and frontend resilience.
 

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from pathlib import Path
 from typing import Any
 
 from modeldeck.domain import RoutingProfile, routing_snapshot
+from modeldeck.persistence import connect_database
 
 
 def _profile_document(event: dict[str, Any]) -> dict[str, Any]:
@@ -33,7 +33,7 @@ def _profile_document(event: dict[str, Any]) -> dict[str, Any]:
 def migrate(database_path: Path) -> None:
     if not database_path.is_file():
         raise RuntimeError(f"ModelDeck database does not exist: {database_path}")
-    with sqlite3.connect(database_path) as database:
+    with connect_database(database_path) as database:
         version_row = database.execute(
             "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
         ).fetchone()

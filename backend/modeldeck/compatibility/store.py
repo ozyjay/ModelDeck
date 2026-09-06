@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from modeldeck.persistence import PersistenceError, connect_database
+
 FINGERPRINT_VERSION = 2
 FINGERPRINT_FIELDS = (
     "fingerprint_version",
@@ -61,8 +63,29 @@ FINGERPRINT_FIELDS = (
 )
 
 
-class LegacyDatabaseError(RuntimeError):
-    pass
+class LegacyDatabaseError(PersistenceError):
+    def __init__(self, message: str) -> None:
+        super().__init__("schema_upgrade_required")
+        self.args = (message,)
+
+    def as_dict(self) -> dict:
+        return {**super().as_dict(), "detail": str(self)}
+
+
+def _decode_json(payload: str) -> Any:
+    try:
+        return json.loads(payload)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise PersistenceError("invalid_persisted_json") from error
+
+
+def _worker_document(payload: str) -> dict:
+    """Keep corrupt Worker rows identifiable without making them executable."""
+    try:
+        document = json.loads(payload)
+        return document if isinstance(document, dict) else {}
+    except (ValueError, TypeError, RecursionError):
+        return {}
 
 
 def evidence_fingerprint(evidence: Mapping[str, Any]) -> str:
@@ -94,7 +117,7 @@ def _ensure_no_active_capability_collisions(
     for _active_profile_id, routing_json in rows:
         active_names = {
             str(capability.get("public_name", "")).casefold()
-            for capability in json.loads(routing_json).get("capabilities", [])
+            for capability in _decode_json(routing_json).get("capabilities", [])
         }
         conflicts.extend(sorted(requested & active_names))
     if conflicts:
@@ -113,6 +136,33 @@ class CompatibilityStore:
     def initialise(self) -> None:
         self.initialise_v5()
 
+    def check_health(self) -> None:
+        """Check current schema availability without writing or repairing it."""
+        with connect_database(self.path) as database:
+            row = database.execute(
+                "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
+            ).fetchone()
+            if row is None or row[0] != "5":
+                raise LegacyDatabaseError("Expected schema v5; restart a matching build or restore a backup.")
+            tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {
+                "configuration_metadata",
+                "workers",
+                "routing_profiles",
+                "routing_profile_revisions",
+                "active_routing_profiles",
+                "route_tool_calling_rehearsals",
+                "gateway_job_assignments",
+                "model_cache_policy",
+                "model_capability_policy",
+                "compatibility_tests",
+                "compatibility_observations",
+                "capability_setups",
+                "capability_setup_events",
+            }
+            if not required <= tables:
+                raise PersistenceError("database_schema_incomplete")
+
     def initialise_v3(self) -> None:
         """Compatibility alias for callers creating a new current database."""
         self.initialise_v5()
@@ -123,7 +173,7 @@ class CompatibilityStore:
 
     def initialise_v5(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path, create=True) as database:
             tables = {
                 str(row[0])
                 for row in database.execute(
@@ -145,10 +195,16 @@ class CompatibilityStore:
                 if str(row[0]) == "3":
                     raise LegacyDatabaseError("Run scripts/migrate_v3_to_v4.ps1 before starting ModelDeck.")
                 if str(row[0]) not in {"4", "5"}:
-                    raise LegacyDatabaseError("The ModelDeck database schema is not version 4 or 5")
+                    raise LegacyDatabaseError(
+                        "The ModelDeck database schema is not version 4 or 5. "
+                        "Use a matching newer ModelDeck build or restore a pre-upgrade backup; "
+                        "do not edit schema_metadata to force a downgrade."
+                    )
+            migrate_singleton = "active_routing_profiles" not in tables
             database.executescript(
                 """
                 PRAGMA journal_mode=WAL;
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS schema_metadata (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
@@ -276,22 +332,23 @@ class CompatibilityStore:
             # Keep installations migrated from the original singleton activation
             # model live with an explicit set of active profiles.
             # The old table remains readable for local downgrade diagnostics.
-            database.execute(
-                "INSERT OR IGNORE INTO active_routing_profiles "
-                "(profile_id, revision, routing_json, published_at) "
-                "SELECT profile_id, revision, routing_json, published_at "
-                "FROM active_routing_profile WHERE singleton_id = 1"
-            )
+            if migrate_singleton:
+                database.execute(
+                    "INSERT OR IGNORE INTO active_routing_profiles "
+                    "(profile_id, revision, routing_json, published_at) "
+                    "SELECT profile_id, revision, routing_json, published_at "
+                    "FROM active_routing_profile WHERE singleton_id = 1"
+                )
 
     def get_configuration_value(self, key: str) -> str | None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT value FROM configuration_metadata WHERE key = ?", (key,)
             ).fetchone()
         return str(row[0]) if row else None
 
     def set_configuration_value(self, key: str, value: str) -> None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT INTO configuration_metadata (key, value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -299,18 +356,16 @@ class CompatibilityStore:
             )
 
     def list_workers(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
-        query = "SELECT document_json, created_at, updated_at, archived_at FROM workers"
+        query = "SELECT document_json, created_at, updated_at, archived_at, id FROM workers"
         if not include_archived:
             query += " WHERE archived_at IS NULL"
         query += " ORDER BY name COLLATE NOCASE, id"
-        try:
-            with sqlite3.connect(self.path) as database:
-                rows = database.execute(query).fetchall()
-        except sqlite3.OperationalError:
-            return []
+        with connect_database(self.path) as database:
+            rows = database.execute(query).fetchall()
         return [
             {
-                "definition": json.loads(row[0]),
+                "id": row[4],
+                "definition": _worker_document(row[0]),
                 "created_at": row[1],
                 "updated_at": row[2],
                 "archived_at": row[3],
@@ -319,16 +374,14 @@ class CompatibilityStore:
         ]
 
     def get_worker_definition(self, worker_id: str) -> dict[str, Any] | None:
-        if not self.path.exists():
-            return None
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT document_json, created_at, updated_at, archived_at FROM workers WHERE id = ?",
                 (worker_id,),
             ).fetchone()
         return (
             {
-                "definition": json.loads(row[0]),
+                "definition": _decode_json(row[0]),
                 "created_at": row[1],
                 "updated_at": row[2],
                 "archived_at": row[3],
@@ -341,7 +394,7 @@ class CompatibilityStore:
         now = _now()
         worker_id = str(document["id"])
         try:
-            with sqlite3.connect(self.path) as database:
+            with connect_database(self.path) as database:
                 database.execute(
                     "INSERT INTO workers (id, name, document_json, created_at, updated_at) "
                     "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
@@ -361,7 +414,7 @@ class CompatibilityStore:
 
     def archive_worker(self, worker_id: str) -> bool:
         now = _now()
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute(
                 "UPDATE workers SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL",
                 (now, now, worker_id),
@@ -369,14 +422,12 @@ class CompatibilityStore:
         return cursor.rowcount > 0
 
     def delete_worker_definition(self, worker_id: str) -> bool:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute("DELETE FROM workers WHERE id = ?", (worker_id,))
         return cursor.rowcount > 0
 
     def list_routing_profiles(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT profiles.id, profiles.draft_json, profiles.created_at, profiles.updated_at, "
                 "active.profile_id IS NOT NULL, active.revision, "
@@ -387,7 +438,7 @@ class CompatibilityStore:
             ).fetchall()
         return [
             {
-                "definition": json.loads(row[1]),
+                "definition": _decode_json(row[1]),
                 "created_at": row[2],
                 "updated_at": row[3],
                 "active": bool(row[4]),
@@ -406,7 +457,7 @@ class CompatibilityStore:
     def save_routing_profile_draft(self, document: Mapping[str, Any]) -> dict[str, Any]:
         now = _now()
         profile_id = str(document["id"])
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT INTO routing_profiles (id, draft_json, created_at, updated_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET draft_json = excluded.draft_json, "
@@ -416,7 +467,7 @@ class CompatibilityStore:
         return self.get_routing_profile(profile_id)  # type: ignore[return-value]
 
     def delete_routing_profile(self, profile_id: str) -> bool:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             active = database.execute(
                 "SELECT 1 FROM active_routing_profiles WHERE profile_id = ?",
                 (profile_id,),
@@ -430,7 +481,7 @@ class CompatibilityStore:
         return cursor.rowcount > 0
 
     def list_routing_profile_revisions(self, profile_id: str) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT revision, document_json, published_at FROM routing_profile_revisions "
                 "WHERE profile_id = ? ORDER BY revision DESC",
@@ -443,7 +494,7 @@ class CompatibilityStore:
         active_revision = int(active[0]) if active else None
         return [
             {
-                "definition": json.loads(row[1]),
+                "definition": _decode_json(row[1]),
                 "revision": int(row[0]),
                 "published_at": row[2],
                 "active": active_revision == int(row[0]),
@@ -466,7 +517,7 @@ class CompatibilityStore:
     ) -> dict[str, Any]:
         profile_id = str(document["id"])
         published_at = _now()
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT COALESCE(MAX(revision), 0) FROM routing_profile_revisions WHERE profile_id = ?",
                 (profile_id,),
@@ -486,7 +537,7 @@ class CompatibilityStore:
         record = self.get_routing_profile_revision(profile_id, revision)
         if record is None:
             raise KeyError("Unknown Routing Profile revision")
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             self._set_active_routing_profile(database, profile_id, revision, routing, _now())
         return record
 
@@ -527,19 +578,29 @@ class CompatibilityStore:
         return snapshots[0] if len(snapshots) == 1 else None
 
     def active_routing_snapshots(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        try:
-            with sqlite3.connect(self.path) as database:
-                rows = database.execute(
-                    "SELECT routing_json FROM active_routing_profiles ORDER BY published_at, profile_id"
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return []
-        return [json.loads(row[0]) for row in rows]
+        with connect_database(self.path) as database:
+            rows = database.execute(
+                "SELECT routing_json FROM active_routing_profiles ORDER BY published_at, profile_id"
+            ).fetchall()
+        snapshots = [_decode_json(row[0]) for row in rows]
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("capabilities"), list):
+                raise PersistenceError("invalid_routing_snapshot")
+            for capability in snapshot["capabilities"]:
+                if (
+                    not isinstance(capability, dict)
+                    or not all(
+                        isinstance(capability.get(key), str)
+                        for key in ("public_name", "capability_id", "display_name", "protocol_contract")
+                    )
+                    or not isinstance(capability.get("worker_ids"), list)
+                    or not all(isinstance(value, str) for value in capability["worker_ids"])
+                ):
+                    raise PersistenceError("invalid_routing_snapshot")
+        return snapshots
 
     def deactivate_routing_profile(self, profile_id: str) -> bool:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute(
                 "DELETE FROM active_routing_profiles WHERE profile_id = ?", (profile_id,)
             )
@@ -556,18 +617,15 @@ class CompatibilityStore:
             "last_rehearsal": None,
             "failure_code": None,
         }
-        if not profile_id or revision is None or not capability_id or not self.path.exists():
+        if not profile_id or revision is None or not capability_id:
             return default
-        try:
-            with sqlite3.connect(self.path) as database:
-                row = database.execute(
-                    "SELECT supported, rehearsed, last_rehearsal, failure_code "
-                    "FROM route_tool_calling_rehearsals "
-                    "WHERE profile_id = ? AND revision = ? AND capability_id = ?",
-                    (profile_id, revision, capability_id),
-                ).fetchone()
-        except sqlite3.OperationalError:
-            return default
+        with connect_database(self.path) as database:
+            row = database.execute(
+                "SELECT supported, rehearsed, last_rehearsal, failure_code "
+                "FROM route_tool_calling_rehearsals "
+                "WHERE profile_id = ? AND revision = ? AND capability_id = ?",
+                (profile_id, revision, capability_id),
+            ).fetchone()
         return (
             {
                 "supported": bool(row[0]),
@@ -592,7 +650,7 @@ class CompatibilityStore:
         """Persist bounded probe facts without retaining prompts or model output."""
 
         rehearsed_at = _now()
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT INTO route_tool_calling_rehearsals "
                 "(profile_id, revision, capability_id, supported, rehearsed, last_rehearsal, "
@@ -622,10 +680,10 @@ class CompatibilityStore:
 
     def rebind_routing_profile_drafts(self, old_worker_id: str, new_worker_id: str) -> list[str]:
         changed: list[str] = []
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute("SELECT id, draft_json FROM routing_profiles").fetchall()
             for profile_id, document_json in rows:
-                document = json.loads(document_json)
+                document = _decode_json(document_json)
                 touched = False
                 for capability in document.get("capabilities", []):
                     if old_worker_id in capability.get("worker_ids", []):
@@ -645,7 +703,7 @@ class CompatibilityStore:
     def save_gateway_job_assignment(
         self, job_id: str, worker_id: str, capability_name: str, protocol_contract: str
     ) -> None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT OR REPLACE INTO gateway_job_assignments "
                 "(job_id, worker_id, capability_name, protocol_contract, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -653,7 +711,7 @@ class CompatibilityStore:
             )
 
     def get_gateway_job_assignment(self, job_id: str) -> dict[str, str] | None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT worker_id, capability_name, protocol_contract "
                 "FROM gateway_job_assignments WHERE job_id = ?",
@@ -666,13 +724,11 @@ class CompatibilityStore:
         )
 
     def delete_gateway_job_assignment(self, job_id: str) -> None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute("DELETE FROM gateway_job_assignments WHERE job_id = ?", (job_id,))
 
     def list_model_cache_policy(self) -> dict[tuple[str, str], bool]:
-        if not self.path.exists():
-            return {}
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute("SELECT model_id, revision, allowed FROM model_cache_policy").fetchall()
         return {(str(row[0]), str(row[1])): bool(row[2]) for row in rows}
 
@@ -680,7 +736,7 @@ class CompatibilityStore:
         return self.list_model_cache_policy().get((model_id, revision), True)
 
     def set_model_cache_allowed(self, model_id: str, revision: str, *, allowed: bool) -> None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT INTO model_cache_policy (model_id, revision, allowed, updated_at) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT(model_id, revision) DO UPDATE SET "
@@ -689,9 +745,7 @@ class CompatibilityStore:
             )
 
     def list_model_capability_policy(self) -> dict[tuple[str, str, str], bool]:
-        if not self.path.exists():
-            return {}
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT model_id, revision, capability_id, allowed FROM model_capability_policy"
             ).fetchall()
@@ -708,7 +762,7 @@ class CompatibilityStore:
         *,
         allowed: bool,
     ) -> None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             database.execute(
                 "INSERT INTO model_capability_policy "
                 "(model_id, revision, capability_id, allowed, updated_at) "
@@ -718,9 +772,7 @@ class CompatibilityStore:
             )
 
     def list_tests(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT id, fingerprint, result, failure_class, evidence_json, tested_at "
                 "FROM compatibility_tests ORDER BY id DESC"
@@ -731,7 +783,7 @@ class CompatibilityStore:
                 "fingerprint": row[1],
                 "result": row[2],
                 "failure_class": row[3],
-                "evidence": json.loads(row[4]),
+                "evidence": _decode_json(row[4]),
                 "tested_at": row[5],
             }
             for row in rows
@@ -755,7 +807,7 @@ class CompatibilityStore:
             "failure_class": failure_class,
             "tested_at": tested_at,
         }
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute(
                 "INSERT INTO compatibility_tests "
                 "(fingerprint, result, failure_class, evidence_json, tested_at) "
@@ -781,7 +833,7 @@ class CompatibilityStore:
         self, test_id: int, observation: Mapping[str, Any], *, kind: str = "lifecycle"
     ) -> dict[str, Any]:
         observed_at = _now()
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT 1 FROM compatibility_tests WHERE id = ?",
                 (test_id,),
@@ -802,7 +854,7 @@ class CompatibilityStore:
         }
 
     def list_test_observations(self, test_id: int) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT id, kind, observation_json, observed_at FROM compatibility_observations "
                 "WHERE test_id = ? ORDER BY id",
@@ -813,7 +865,7 @@ class CompatibilityStore:
                 "id": int(row[0]),
                 "test_id": test_id,
                 "kind": row[1],
-                "observation": json.loads(row[2]),
+                "observation": _decode_json(row[2]),
                 "observed_at": row[3],
             }
             for row in rows
@@ -822,7 +874,7 @@ class CompatibilityStore:
     def create_capability_setup(self, document: Mapping[str, Any]) -> dict[str, Any]:
         now = _now()
         payload = dict(document)
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             existing = database.execute(
                 "SELECT request_fingerprint, document_json FROM capability_setups WHERE request_id = ?",
                 (str(payload["request_id"]),),
@@ -830,7 +882,7 @@ class CompatibilityStore:
             if existing is not None:
                 if str(existing[0]) != str(payload["request_fingerprint"]):
                     raise ValueError("That setup request identifier was already used for different inputs")
-                return json.loads(existing[1])
+                return _decode_json(existing[1])
             database.execute(
                 "INSERT INTO capability_setups "
                 "(id, request_id, request_fingerprint, document_json, created_at, updated_at) "
@@ -848,7 +900,7 @@ class CompatibilityStore:
 
     def save_capability_setup(self, document: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(document)
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute(
                 "UPDATE capability_setups SET document_json = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(payload, sort_keys=True, default=str), _now(), str(payload["id"])),
@@ -858,24 +910,24 @@ class CompatibilityStore:
         return payload
 
     def get_capability_setup(self, setup_id: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             row = database.execute(
                 "SELECT document_json FROM capability_setups WHERE id = ?", (setup_id,)
             ).fetchone()
-        return json.loads(row[0]) if row else None
+        return _decode_json(row[0]) if row else None
 
     def list_capability_setups(self) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT document_json FROM capability_setups ORDER BY created_at DESC"
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [_decode_json(row[0]) for row in rows]
 
     def record_capability_setup_event(
         self, setup_id: str, state: str, event: Mapping[str, Any]
     ) -> dict[str, Any]:
         created_at = _now()
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             cursor = database.execute(
                 "INSERT INTO capability_setup_events (setup_id, state, event_json, created_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -890,7 +942,7 @@ class CompatibilityStore:
         }
 
     def list_capability_setup_events(self, setup_id: str, *, after: int = 0) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as database:
+        with connect_database(self.path) as database:
             rows = database.execute(
                 "SELECT id, state, event_json, created_at FROM capability_setup_events "
                 "WHERE setup_id = ? AND id > ? ORDER BY id",
@@ -901,7 +953,7 @@ class CompatibilityStore:
                 "id": int(row[0]),
                 "setup_id": setup_id,
                 "state": row[1],
-                "event": json.loads(row[2]),
+                "event": _decode_json(row[2]),
                 "created_at": row[3],
             }
             for row in rows
