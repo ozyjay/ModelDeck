@@ -46,23 +46,36 @@ def _default_log_dir() -> Path:
     return Path("var/log/workers")
 
 
-def _gateway_host_from_env() -> str:
-    """Return a gateway bind address permitted by the local-only policy."""
+def validate_loopback_host(raw_host: str, *, setting_name: str) -> str:
+    """Validate an authoritative ModelDeck listener address.
 
-    raw_host = os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1").strip()
+    The management API and stable gateway have the same local-only boundary.
+    Keep their validation in one place so a new listener cannot accidentally
+    become network reachable.
+    """
+
+    raw_host = raw_host.strip()
     if not raw_host:
-        raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal")
+        raise ValueError(f"{setting_name} must be an IP address literal")
     try:
         host = ip_address(raw_host)
     except ValueError as error:
-        raise ValueError("MODELDECK_GATEWAY_HOST must be an IP address literal") from error
+        raise ValueError(f"{setting_name} must be an IP address literal") from error
 
     if not host.is_loopback:
         raise ValueError(
-            "MODELDECK_GATEWAY_HOST must be a loopback address; "
+            f"{setting_name} must be a loopback address; "
             "MODELDECK_ENABLE_DOCKER_BRIDGE=1 adds a separate restricted forwarder"
         )
     return str(host)
+
+
+def _gateway_host_from_env() -> str:
+    """Return a gateway bind address permitted by the local-only policy."""
+
+    return validate_loopback_host(
+        os.getenv("MODELDECK_GATEWAY_HOST", "127.0.0.1"), setting_name="MODELDECK_GATEWAY_HOST"
+    )
 
 
 def gateway_base_url(host: str, port: int) -> str:
@@ -176,7 +189,9 @@ class Settings:
             ),
         )
         return cls(
-            host=os.getenv("MODELDECK_HOST", "127.0.0.1"),
+            host=validate_loopback_host(
+                os.getenv("MODELDECK_HOST", "127.0.0.1"), setting_name="MODELDECK_HOST"
+            ),
             gateway_host=_gateway_host_from_env(),
             docker_bridge_enabled=docker_bridge_enabled,
             management_port=int(os.getenv("MODELDECK_MANAGEMENT_PORT", "3600")),

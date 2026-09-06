@@ -829,6 +829,16 @@ def test_log_redaction_removes_prompt_and_credentials() -> None:
     assert "secret" not in redact_log('{"api_key":"secret","status":"failed"}')
 
 
+def test_log_redaction_handles_nested_sensitive_payloads() -> None:
+    redacted = redact_log(
+        '{"request":{"headers":{"authorization":"Bearer private"},'
+        '"messages":[{"content":"private prompt"}]},"result":{"output":"private"}}'
+    )
+
+    assert "private" not in redacted
+    assert '"status"' not in redacted or "[redacted]" in redacted
+
+
 def test_worker_logs_are_redacted_bounded_and_restored(tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
     supervisor = WorkerSupervisor([profile], log_dir=tmp_path)

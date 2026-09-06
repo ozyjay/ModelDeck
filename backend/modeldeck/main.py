@@ -25,7 +25,7 @@ from modeldeck.capabilities import (
     worker_cache_identity,
 )
 from modeldeck.catalogue import discover_huggingface_models
-from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
+from modeldeck.compatibility import CompatibilityStore
 from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.domain import WorkerDefinition
 from modeldeck.hardware import probe_environment
@@ -78,26 +78,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def discover_models():
         return discover_huggingface_models(data_dir=configured.data_dir)
 
-    configured.data_dir.mkdir(parents=True, exist_ok=True)
-    store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
-    store.initialise_v5()
-    definitions: dict[str, WorkerDefinition] = {}
-    worker_profiles = []
-    for record in store.list_workers():
-        try:
-            definition = WorkerDefinition.model_validate(record["definition"])
-            profile = definition.to_profile()
-        except ValueError as error:
-            # Keep historical Worker and evidence records intact, but never expose or
-            # launch a runtime that is no longer trusted by the production gateway.
-            LOGGER.warning(
-                "Ignoring persisted Worker %s because its runtime is not trusted: %s",
-                record["definition"].get("id", "unknown"),
-                error,
-            )
-            continue
-        definitions[definition.id] = definition
-        worker_profiles.append(profile)
     thermal_manager = ThermalPolicyManager(
         configured.thermal_throttling,
         data_dir=configured.data_dir,
@@ -105,6 +85,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Construction must be pure: migrations, persisted log loading and all
+        # thermal writes belong to the owning server process, not an import or
+        # a test merely constructing an ASGI application.
+        configured.data_dir.mkdir(parents=True, exist_ok=True)
+        store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
+        store.initialise_v5()
+        definitions: dict[str, WorkerDefinition] = {}
+        worker_profiles = []
+        for record in store.list_workers():
+            try:
+                definition = WorkerDefinition.model_validate(record["definition"])
+                worker_profiles.append(definition.to_profile())
+            except ValueError as error:
+                LOGGER.warning(
+                    "Ignoring persisted Worker %s because its runtime is not trusted: %s",
+                    record["definition"].get("id", "unknown"),
+                    error,
+                )
+                continue
+            definitions[definition.id] = definition
+        app.state.compatibility_store = store
+        app.state.worker_definitions = definitions
+        app.state.supervisor = WorkerSupervisor(
+            worker_profiles,
+            log_dir=configured.log_dir,
+            thermal_manager=thermal_manager,
+            data_dir=configured.data_dir,
+        )
+        thermal_manager.critical_handler = app.state.supervisor.critical_stop_all
+        app.state.runtime_registrations = runtime_template_registrations(configured.data_dir)
         await app.state.thermal_manager.start()
         await app.state.reconcile_capability_setups(app)
         try:
@@ -122,16 +132,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = configured
     app.state.thermal_manager = thermal_manager
-    app.state.compatibility_store = store
-    app.state.worker_definitions = definitions
-    app.state.supervisor = WorkerSupervisor(
-        worker_profiles,
-        log_dir=configured.log_dir,
-        thermal_manager=thermal_manager,
-        data_dir=configured.data_dir,
-    )
-    thermal_manager.critical_handler = app.state.supervisor.critical_stop_all
-    app.state.runtime_registrations = runtime_template_registrations(configured.data_dir)
+    # These inert values make construction inspectable. Lifespan replaces them
+    # with process-owned persistent services before serving any request.
+    app.state.compatibility_store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
+    app.state.worker_definitions = {}
+    app.state.supervisor = WorkerSupervisor([], thermal_manager=thermal_manager, data_dir=configured.data_dir)
+    app.state.runtime_registrations = []
     app.state.discover_models = discover_models
 
     assets = FRONTEND_ROOT / "assets"
@@ -666,14 +672,3 @@ async def _gateway_status(settings: Settings) -> dict:
             "routes": None,
             "error": "The local ModelDeck gateway is unavailable.",
         }
-
-
-try:
-    app = create_app()
-except LegacyDatabaseError as startup_error:
-    startup_error_message = str(startup_error)
-    app = FastAPI(title="ModelDeck database upgrade required", version=__version__)
-
-    @app.get("/api/health", status_code=503)
-    async def database_upgrade_required():
-        return {"status": "upgrade-required", "detail": startup_error_message}

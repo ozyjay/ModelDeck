@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,21 @@ def create_gateway_app(
     settings: Settings | None = None,
 ) -> FastAPI:
     configured = settings or Settings.from_env()
-    app = FastAPI(title="ModelDeck stable local gateway", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Thermal workload state is owned by a running gateway process. Merely
+        # importing or constructing this application must not alter state.
+        configured.data_dir.mkdir(parents=True, exist_ok=True)
+        if persistence_enabled:
+            store.initialise_v5()
+        write_thermal_workload_activity(app.state.thermal_workload_path, 0)
+        try:
+            yield
+        finally:
+            write_thermal_workload_activity(app.state.thermal_workload_path, 0)
+
+    app = FastAPI(title="ModelDeck stable local gateway", version=__version__, lifespan=lifespan)
     app.state.last_request_diagnostics = None
     app.state.active_request_workers = {}
     app.state.active_request_lock = asyncio.Lock()
@@ -87,13 +102,10 @@ def create_gateway_app(
     app.state.thermal_queue_delay_seconds = 0.0
     app.state.thermal_job_claims = set()
     app.state.thermal_job_tasks = set()
-    write_thermal_workload_activity(app.state.thermal_workload_path, 0)
     base_routes = alias_routes or {}
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     persistence_enabled = alias_routes is None
-    if persistence_enabled:
-        store.initialise_v5()
 
     def active_route_records(
         adapter_ids: set[str] | None = None,

@@ -3,12 +3,31 @@ from __future__ import annotations
 import pytest
 from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.gateway import app as gateway_app
+from modeldeck.main import create_app
 
 
 def test_gateway_host_defaults_to_loopback(monkeypatch) -> None:
     monkeypatch.delenv("MODELDECK_GATEWAY_HOST", raising=False)
 
     assert Settings.from_env().gateway_host == "127.0.0.1"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "not-an-address"])
+def test_management_host_rejects_unsafe_or_invalid_bind_addresses(monkeypatch, host: str) -> None:
+    monkeypatch.setenv("MODELDECK_HOST", host)
+
+    with pytest.raises(ValueError, match="MODELDECK_HOST"):
+        Settings.from_env()
+
+
+def test_application_construction_does_not_create_operational_files(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs")
+
+    create_app(settings)
+    gateway_app.create_gateway_app(settings=settings)
+
+    assert not settings.data_dir.exists()
+    assert not settings.log_dir.exists()
 
 
 def test_state_store_metadata_distinguishes_desktop_and_checkout_state(monkeypatch, tmp_path) -> None:

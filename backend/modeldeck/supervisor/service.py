@@ -547,14 +547,15 @@ class WorkerLaunch:
 
 
 def build_worker_launch(profile: ModelProfile, *, data_dir: Path | None = None) -> WorkerLaunch:
-    environment = dict(os.environ)
-    environment.update(
-        {
-            "PYTHONUNBUFFERED": "1",
-            "HF_HUB_OFFLINE": "1",
-            "TRANSFORMERS_OFFLINE": "1",
-        }
-    )
+    # A Worker is a security boundary: inherit only process variables required
+    # to locate the selected interpreter and preserve locale behaviour. Runtime
+    # builders add their own narrowly scoped settings below.
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+    }
+    environment.update({"PYTHONUNBUFFERED": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
     managed_data_dir = data_dir or Path(os.environ.get("MODELDECK_DATA_DIR", ".modeldeck"))
     environment["MODELDECK_DATA_DIR"] = str(managed_data_dir)
     miopen_root = managed_data_dir / "runtime" / "miopen"
@@ -1209,6 +1210,7 @@ def port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def redact_log(message: str) -> str:
+    """Remove sensitive and user-supplied data from a bounded diagnostic record."""
     lowered = message.lower()
     for marker in (
         "authorization:",
@@ -1222,22 +1224,54 @@ def redact_log(message: str) -> str:
         index = lowered.find(marker)
         if index >= 0:
             return f"{message[:index]}{marker}[redacted]"
-    if message.startswith("{"):
+    if message.startswith(("{", "[")):
         try:
-            payload = json.loads(message)
-            for key in (
-                "prompt",
-                "messages",
-                "generated_text",
-                "image_url",
-                "content",
-                "token",
-                "api_key",
-                "authorization",
-            ):
-                if key in payload:
-                    payload[key] = "[redacted]"
-            return json.dumps(payload, separators=(",", ":"))
+            return json.dumps(_redact_log_value(json.loads(message)), separators=(",", ":"))
         except (json.JSONDecodeError, TypeError):
             pass
     return message
+
+
+_SENSITIVE_LOG_KEYS = frozenset(
+    {
+        "authorization",
+        "api_key",
+        "apikey",
+        "token",
+        "access_token",
+        "bearer",
+        "prompt",
+        "messages",
+        "content",
+        "output",
+        "generated_text",
+        "image_url",
+        "headers",
+    }
+)
+_MAX_REDACTION_DEPTH = 8
+_MAX_REDACTION_ITEMS = 100
+
+
+def _redact_log_value(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
+    """Recursively redact structured diagnostics without unbounded traversal."""
+    normalised_key = key.casefold().replace("-", "_") if key else ""
+    if normalised_key in _SENSITIVE_LOG_KEYS or any(
+        marker in normalised_key for marker in ("token", "secret", "password", "credential", "prompt")
+    ):
+        return "[redacted]"
+    if isinstance(value, str):
+        value_lower = value.casefold()
+        if "bearer " in value_lower or "api_key=" in value_lower or "hf_" in value_lower:
+            return "[redacted]"
+        return value[:4096]
+    if depth >= _MAX_REDACTION_DEPTH:
+        return "[truncated]"
+    if isinstance(value, dict):
+        return {
+            str(item_key)[:256]: _redact_log_value(item_value, key=str(item_key), depth=depth + 1)
+            for item_key, item_value in list(value.items())[:_MAX_REDACTION_ITEMS]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_log_value(item, depth=depth + 1) for item in value[:_MAX_REDACTION_ITEMS]]
+    return value
