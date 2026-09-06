@@ -309,6 +309,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
   const [setup, setSetup] = useState<CapabilitySetup | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState("");
   const [publicName, setPublicName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [publication, setPublication] = useState<CapabilityPublicationPreview | null>(null);
@@ -390,12 +391,17 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
     finally { setBusy(false); }
   };
   const publicationBody = () => ({
+    profile_name: profileName.trim() || null,
     display_name: displayName, public_name: publicName, tool_calling_enabled: false,
     route_action: live.capabilities.some((item) => item.public_name.toLocaleLowerCase() === publicName.toLocaleLowerCase()) ? "replace-primary" : "add",
   });
   const reviewPublication = async () => {
     if (!setup) return; setBusy(true); setFeedback(null);
-    try { setPublication(await postJson(`/api/capability-setups/${setup.id}/publication-preview`, publicationBody())); }
+    try {
+      const reviewed = await postJson<CapabilityPublicationPreview>(`/api/capability-setups/${setup.id}/publication-preview`, publicationBody());
+      setProfileName(reviewed.after.name);
+      setPublication(reviewed);
+    }
     catch (reason) { setFeedback(messageFrom(reason)); }
     finally { setBusy(false); }
   };
@@ -414,7 +420,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
     }
     finally { setBusy(false); }
   };
-  const reset = () => { setCapabilityId(""); setModelKey(""); setPreview(null); setSetup(null); setPublication(null); setFeedback(null); };
+  const reset = () => { setCapabilityId(""); setModelKey(""); setPreview(null); setSetup(null); setProfileName(""); setPublication(null); setFeedback(null); };
 
   if (setup?.state === "succeeded") return <div className="view-stack">
     <section className="hero-panel setup-success"><div><p className="eyebrow">Setup complete</p><h2>{setup.publication?.public_name} is serving locally</h2><p>The exact qualified Worker is published through Routing Profile revision {setup.publication?.revision}.</p></div></section>
@@ -433,7 +439,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
       {setup.state === "waiting-for-thermal-capacity" && <p className="thermal-load-notice">Setup is safely paused until fresh thermal telemetry permits model loading.</p>}
       {setup.error && <div className="validation-summary bad"><strong>{setup.error.message}</strong><p>{setup.error.retryable ? "The exact setup can be retried." : "Adjust the configuration and create a new setup."}</p></div>}
       {setup.state === "failed" && <div className="button-row"><button disabled={!setup.error?.retryable} onClick={() => void postJson<CapabilitySetup>(`/api/capability-setups/${setup.id}/retry`).then(setSetup).catch((reason) => setFeedback(messageFrom(reason)))}>Try again</button><button className="secondary" onClick={reset}>Adjust configuration</button></div>}
-      {setup.state === "awaiting-publication" && <div className="publication-review"><h3>Review publication</h3><p>Qualification passed. Publishing is a separate explicit action.</p><div className="field-grid"><label>Capability label<input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setPublication(null); }} /></label><label>API Model ID<input value={publicName} onChange={(event) => { setPublicName(event.target.value); setPublication(null); }} /></label></div>
+      {setup.state === "awaiting-publication" && <div className="publication-review"><h3>Review publication</h3><p>Qualification passed. Publishing is a separate explicit action.</p><div className="field-grid"><label>Routing Profile name<small className="field-help">Names the separate profile managed by setup.</small><input value={profileName} placeholder="Local capabilities" maxLength={80} onChange={(event) => { setProfileName(event.target.value); setPublication(null); }} /></label><label>Capability label<input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setPublication(null); }} /></label><label>API Model ID<input value={publicName} onChange={(event) => { setPublicName(event.target.value); setPublication(null); }} /></label></div>
         {!publication ? <button disabled={busy} onClick={() => void reviewPublication()}>{busy ? "Reviewing…" : "Review routing changes"}</button> : <><div className={`validation-summary ${publication.validation.valid ? "good" : "bad"}`}><strong>{publication.validation.valid ? "Ready to publish" : "Publication is blocked"}</strong><p>{publication.before.capabilities.length} existing and {publication.after.capabilities.length} resulting capabilities. No unlisted fallback is added.</p>{publication.validation.errors.map((issue, index) => <p key={index}>{issue.message}</p>)}</div><button disabled={busy || !publication.validation.valid} onClick={() => void publish()}>{busy ? "Publishing…" : "Publish"}</button></>}
       </div>}
     </section> : <>

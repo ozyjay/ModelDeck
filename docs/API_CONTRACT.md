@@ -23,7 +23,9 @@ The intent-first setup surface uses durable, local-only operation resources:
 - `POST /api/capability-setups/{setup_id}/cancel|retry` controls work without deleting
   its Worker or evidence.
 - `POST /api/capability-setups/{setup_id}/publication-preview|publish` separates
-  qualification from an explicit, stale-protected routing decision.
+  qualification from an explicit, stale-protected routing decision. Publication may name
+  the separate setup-managed Routing Profile; omitting the name preserves its existing name
+  or uses `Local capabilities` on first publication.
 
 Creation requires a caller UUID and the SHA-256 fingerprint of the reviewed preview.
 Model loading and qualification pause under thermal policy, resume after a management

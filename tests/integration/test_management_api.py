@@ -242,6 +242,7 @@ async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) ->
     )
     app = create_app(settings)
     payload = {
+        "profile_name": "GPT-OSS experiments",
         "display_name": "General chat",
         "public_name": "local-chat",
         "tool_calling_enabled": False,
@@ -259,6 +260,7 @@ async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) ->
     assert second.status_code == 200
     assert first.json()["publication_fingerprint"] == second.json()["publication_fingerprint"]
     assert first.json()["before"]["capabilities"] == []
+    assert first.json()["after"]["name"] == "GPT-OSS experiments"
     assert [item["public_name"] for item in first.json()["after"]["capabilities"]] == ["local-chat"]
     assert first.json()["after"]["capabilities"][0]["id"] == second.json()["after"]["capabilities"][0]["id"]
 

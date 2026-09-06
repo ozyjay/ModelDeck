@@ -251,6 +251,7 @@ class CapabilitySetupCreateRequest(BaseModel):
 class CapabilityPublicationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    profile_name: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=80)
     public_name: str = Field(pattern=r"^[a-z][a-z0-9._-]{1,127}$")
     tool_calling_enabled: bool = False
@@ -1436,13 +1437,15 @@ def create_v3_router() -> APIRouter:
         existing = store.get_routing_profile(guided_id) if guided_id else None
         if existing:
             base_document = dict(existing["definition"])
+            if payload.profile_name is not None:
+                base_document["name"] = payload.profile_name
             base_updated_at = existing["updated_at"]
         else:
             guided_id = str(uuid5(UUID(str(setup["id"])), "guided-profile"))
             interrupted_draft = store.get_routing_profile(guided_id)
             base_document = {
                 "id": guided_id,
-                "name": "Local capabilities",
+                "name": payload.profile_name or "Local capabilities",
                 "description": "Capabilities configured through guided setup.",
                 "qualification": "tested-working",
                 "capabilities": [],

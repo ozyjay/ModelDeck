@@ -148,7 +148,10 @@ describe("ModelDeck routing profile operator console", () => {
     }));
     render(<App />);
 
+    const profileName = await screen.findByRole("textbox", { name: /Routing Profile name/i });
+    fireEvent.change(profileName, { target: { value: "GPT-OSS experiments" } });
     fireEvent.click(await screen.findByRole("button", { name: "Review routing changes" }));
+    expect(profileName).toHaveValue("GPT-OSS experiments");
     fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
 
     expect(await screen.findByRole("button", { name: "Review routing changes" })).toBeInTheDocument();
