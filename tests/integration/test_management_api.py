@@ -214,6 +214,49 @@ async def test_guided_setup_preview_resolves_one_trusted_runtime_and_explicit_po
 
 
 @pytest.mark.asyncio
+async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    worker = worker_definition()
+    store.save_worker_definition(worker.model_dump(mode="json"))
+    setup_id = str(uuid4())
+    store.create_capability_setup(
+        {
+            "id": setup_id,
+            "request_id": str(uuid4()),
+            "request_fingerprint": "a" * 64,
+            "preview_fingerprint": "b" * 64,
+            "plan": {"worker": {"capability_id": "general-chat"}},
+            "worker_id": worker.id,
+            "state": "awaiting-publication",
+            "current_step": "awaiting-publication",
+            "cancel_requested": False,
+            "error": None,
+        }
+    )
+    app = create_app(settings)
+    payload = {
+        "display_name": "General chat",
+        "public_name": "local-chat",
+        "tool_calling_enabled": False,
+        "route_action": "add",
+    }
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await client.post(f"/api/capability-setups/{setup_id}/publication-preview", json=payload)
+            second = await client.post(f"/api/capability-setups/{setup_id}/publication-preview", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["publication_fingerprint"] == second.json()["publication_fingerprint"]
+    assert first.json()["after"]["capabilities"][0]["id"] == second.json()["after"]["capabilities"][0]["id"]
+
+
+@pytest.mark.asyncio
 async def test_compatibility_lifecycle_observation_does_not_mutate_raw_evidence(tmp_path) -> None:
     store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
     store.initialise()

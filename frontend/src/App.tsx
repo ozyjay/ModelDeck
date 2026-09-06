@@ -406,7 +406,12 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
         ...publicationBody(), publication_fingerprint: publication.publication_fingerprint,
       });
       setSetup(result); await refresh();
-    } catch (reason) { setFeedback(messageFrom(reason)); }
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 409 && reason.message.includes("publication preview is stale")) {
+        setPublication(null);
+      }
+      setFeedback(messageFrom(reason));
+    }
     finally { setBusy(false); }
   };
   const reset = () => { setCapabilityId(""); setModelKey(""); setPreview(null); setSetup(null); setPublication(null); setFeedback(null); };

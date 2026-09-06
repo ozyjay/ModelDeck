@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -1444,7 +1444,7 @@ def create_v3_router() -> APIRouter:
                 if active
                 else None
             )
-            guided_id = str(uuid4())
+            guided_id = str(uuid5(UUID(str(setup["id"])), "guided-profile"))
             base_document = (
                 dict(active_revision["definition"])
                 if active_revision
@@ -1493,7 +1493,10 @@ def create_v3_router() -> APIRouter:
         else:
             capabilities.append(
                 {
-                    "id": str(uuid4()),
+                    # Publication is reviewed and then reconstructed during publish.
+                    # Keep the proposed capability identity stable so an unchanged
+                    # add-route request produces the same review fingerprint.
+                    "id": str(uuid5(UUID(str(setup["id"])), "published-capability")),
                     "display_name": payload.display_name,
                     "public_name": payload.public_name,
                     "protocol_contract": contract_id,

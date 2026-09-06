@@ -107,6 +107,54 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByLabelText("State store")).toHaveTextContent("Checkout development state");
   });
 
+  it("offers a fresh review after publication preview staleness", async () => {
+    const setupId = "68e24ff4-dc06-4df8-9e61-f7eec53dd6c6";
+    const payloads = responses();
+    payloads["/api/capability-setups"] = { setups: [{
+      id: setupId,
+      state: "awaiting-publication",
+      current_step: "awaiting-publication",
+      plan: { selection: { capability_id: "general-chat", model_id: "ggml-org/gpt-oss-120b-GGUF", revision: "revision-1" } },
+      worker_id: worker.id,
+      error: null,
+    }] };
+    payloads[`/api/capability-setups/${setupId}/publication-preview`] = {
+      profile_id: profile.definition.id,
+      base_updated_at: null,
+      before: { ...profile.definition, capabilities: [] },
+      after: profile.definition,
+      validation: { valid: true, errors: [], warnings: [], capabilities: [] },
+      publication_fingerprint: "a".repeat(64),
+    };
+    vi.stubGlobal("EventSource", class {
+      onerror: (() => void) | null = null;
+      constructor(_url: string) {}
+      addEventListener() {}
+      close() {}
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === `/api/capability-setups/${setupId}/publish` && init?.method === "POST") {
+        return new Response(JSON.stringify({ detail: "The publication preview is stale; review routing changes again" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const payload = payloads[path];
+      return new Response(JSON.stringify(payload ?? { detail: `Unexpected request: ${path}` }), {
+        status: payload === undefined ? 404 : 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review routing changes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Publish" }));
+
+    expect(await screen.findByRole("button", { name: "Review routing changes" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("The publication preview is stale");
+  });
+
   it("shows model token throughput over time from comparable benchmark reports", async () => {
     const payloads = responses();
     payloads["/api/benchmark-history"] = {
