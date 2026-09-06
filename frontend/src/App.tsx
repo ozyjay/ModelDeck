@@ -407,7 +407,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
       });
       setSetup(result); await refresh();
     } catch (reason) {
-      if (reason instanceof ApiError && reason.status === 409 && reason.message.includes("publication preview is stale")) {
+      if (reason instanceof ApiError && reason.status === 409) {
         setPublication(null);
       }
       setFeedback(messageFrom(reason));

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 import httpx
 import modeldeck.main as main_module
@@ -220,6 +220,11 @@ async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) ->
     store.initialise()
     worker = worker_definition()
     store.save_worker_definition(worker.model_dump(mode="json"))
+    existing_profile = RoutingProfile.model_validate(profile_document(worker.id))
+    store.save_routing_profile_draft(existing_profile.model_dump(mode="json"))
+    store.publish_routing_profile(
+        existing_profile.model_dump(mode="json"), routing_snapshot(existing_profile, 0)
+    )
     setup_id = str(uuid4())
     store.create_capability_setup(
         {
@@ -253,7 +258,46 @@ async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) ->
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["publication_fingerprint"] == second.json()["publication_fingerprint"]
+    assert first.json()["before"]["capabilities"] == []
+    assert [item["public_name"] for item in first.json()["after"]["capabilities"]] == ["local-chat"]
     assert first.json()["after"]["capabilities"][0]["id"] == second.json()["after"]["capabilities"][0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_guided_setup_recovers_when_publication_saved_no_revision(tmp_path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    store = CompatibilityStore(tmp_path / "modeldeck.sqlite3")
+    store.initialise()
+    setup_id = str(uuid4())
+    store.create_capability_setup(
+        {
+            "id": setup_id,
+            "request_id": str(uuid4()),
+            "request_fingerprint": "a" * 64,
+            "preview_fingerprint": "b" * 64,
+            "plan": {"worker": {"capability_id": "general-chat"}},
+            "state": "publishing",
+            "current_step": "publishing",
+            "cancel_requested": False,
+            "error": None,
+        }
+    )
+    interrupted_profile = {
+        "id": str(uuid5(UUID(setup_id), "guided-profile")),
+        "name": "Local capabilities",
+        "description": "Interrupted draft",
+        "qualification": "tested-working",
+        "capabilities": [],
+    }
+    store.save_routing_profile_draft(interrupted_profile)
+    app = create_app(settings)
+
+    async with app.router.lifespan_context(app):
+        recovered = app.state.compatibility_store.get_capability_setup(setup_id)
+
+    assert recovered["state"] == "awaiting-publication"
+    assert recovered["current_step"] == "awaiting-publication"
+    assert recovered["error"]["code"] == "publication_not_completed"
 
 
 @pytest.mark.asyncio

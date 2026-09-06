@@ -1438,28 +1438,19 @@ def create_v3_router() -> APIRouter:
             base_document = dict(existing["definition"])
             base_updated_at = existing["updated_at"]
         else:
-            active = store.active_routing_snapshots()
-            active_revision = (
-                store.get_routing_profile_revision(active[0]["profile_id"], int(active[0]["revision"]))
-                if active
-                else None
-            )
             guided_id = str(uuid5(UUID(str(setup["id"])), "guided-profile"))
-            base_document = (
-                dict(active_revision["definition"])
-                if active_revision
-                else {
-                    "id": guided_id,
-                    "name": "Local capabilities",
-                    "description": "Capabilities configured through guided setup.",
-                    "qualification": "tested-working",
-                    "capabilities": [],
-                }
-            )
-            base_document.update(
-                {"id": guided_id, "name": "Local capabilities", "qualification": "tested-working"}
-            )
-            base_updated_at = None
+            interrupted_draft = store.get_routing_profile(guided_id)
+            base_document = {
+                "id": guided_id,
+                "name": "Local capabilities",
+                "description": "Capabilities configured through guided setup.",
+                "qualification": "tested-working",
+                "capabilities": [],
+            }
+            # A failed first publication may have saved its draft before the
+            # active-profile collision guard rejected it. Preserve optimistic
+            # locking while rebuilding that unpublished draft from a clean base.
+            base_updated_at = interrupted_draft["updated_at"] if interrupted_draft else None
         definition = WorkerDefinition.model_validate(
             store.get_worker_definition(str(setup["worker_id"]))["definition"]
         )
@@ -1541,10 +1532,29 @@ def create_v3_router() -> APIRouter:
         if current_updated_at != preview["base_updated_at"]:
             raise HTTPException(409, "The Routing Profile changed; review publication again")
         previous = store.active_routing_snapshots()
+        setup["error"] = None
         transition_setup(request, setup, "publishing", "Publishing the reviewed Routing Profile")
         target = RoutingProfile.model_validate(preview["after"])
-        store.save_routing_profile_draft(target.model_dump(mode="json"))
-        revision = store.publish_routing_profile(target.model_dump(mode="json"), routing_snapshot(target, 0))
+        try:
+            store.save_routing_profile_draft(target.model_dump(mode="json"))
+            revision = store.publish_routing_profile(
+                target.model_dump(mode="json"), routing_snapshot(target, 0)
+            )
+        except ValueError as error:
+            setup["error"] = {
+                "code": "routing_conflict",
+                "message": str(error),
+                "component": "routing-profile",
+                "step": "publishing",
+                "retryable": True,
+            }
+            transition_setup(
+                request,
+                setup,
+                "awaiting-publication",
+                "Routing conflict prevented publication; review routing changes again",
+            )
+            raise HTTPException(409, str(error)) from error
         store.set_configuration_value("guided_profile_id", target.id)
         setup["publication"] = {
             "profile_id": target.id,
@@ -1660,7 +1670,45 @@ def create_v3_router() -> APIRouter:
                     {"message": "Resuming after the management service restarted"},
                 )
                 schedule_setup(request, str(setup["id"]))
-            elif state in {"publishing", "verifying-route"}:
+            elif state == "publishing":
+                guided_id = app.state.compatibility_store.get_configuration_value("guided_profile_id") or str(
+                    uuid5(UUID(str(setup["id"])), "guided-profile")
+                )
+                guided_profile = app.state.compatibility_store.get_routing_profile(guided_id)
+                if guided_profile is None or guided_profile["latest_revision"] is None:
+                    setup["state"] = "awaiting-publication"
+                    setup["current_step"] = "awaiting-publication"
+                    setup["error"] = {
+                        "code": "publication_not_completed",
+                        "message": "Publication did not complete; review routing changes again",
+                        "component": "routing-profile",
+                        "step": state,
+                        "retryable": True,
+                    }
+                    app.state.compatibility_store.save_capability_setup(setup)
+                    app.state.compatibility_store.record_capability_setup_event(
+                        str(setup["id"]),
+                        "awaiting-publication",
+                        {"message": "Incomplete publication recovered for a fresh review"},
+                    )
+                    continue
+                setup["error"] = {
+                    "code": "publication_interrupted",
+                    "message": (
+                        "The service restarted during publication; inspect the retained revision "
+                        "before retrying"
+                    ),
+                    "component": "routing-profile",
+                    "step": state,
+                    "retryable": False,
+                }
+                transition_setup(
+                    request,
+                    setup,
+                    "failed",
+                    "Publication was interrupted; retained routing requires explicit review",
+                )
+            elif state == "verifying-route":
                 setup["error"] = {
                     "code": "publication_interrupted",
                     "message": (
