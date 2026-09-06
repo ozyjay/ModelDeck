@@ -28,6 +28,7 @@ from modeldeck.prefix_cache import stable_model_configuration_fingerprint
 from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import CapabilitySet, GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
+from modeldeck.security import SAFE_HTTP_METHODS, rejects_browser_mutation
 from modeldeck.speechshift import WHISPER_MAXIMUM_AUDIO_BYTES
 from modeldeck.thermal import (
     THERMAL_STATUS_FILENAME,
@@ -106,6 +107,12 @@ def create_gateway_app(
     job_routes: dict[str, ModelProfile] = {}
     store = CompatibilityStore(configured.data_dir / "modeldeck.sqlite3")
     persistence_enabled = alias_routes is None
+
+    @app.middleware("http")
+    async def require_trusted_browser_origin(request: Request, call_next):
+        if request.method not in SAFE_HTTP_METHODS and rejects_browser_mutation(request):
+            return JSONResponse({"detail": "Untrusted browser origin"}, status_code=403)
+        return await call_next(request)
 
     def active_route_records(
         adapter_ids: set[str] | None = None,
@@ -582,6 +589,13 @@ def create_gateway_app(
 
     @app.websocket("/v1/speech/conversations")
     async def speech_conversation(client_socket: WebSocket):
+        if client_socket.headers.get("origin") and not rejects_browser_mutation(client_socket):
+            # ``rejects_browser_mutation`` returns false for a trusted origin;
+            # keep the branch explicit to document the native no-Origin path.
+            pass
+        elif client_socket.headers.get("origin"):
+            await client_socket.close(code=1008)
+            return
         await client_socket.accept()
         thermal_claimed = False
         try:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from modeldeck.config import Settings, gateway_base_url, state_store_metadata
 from modeldeck.gateway import app as gateway_app
@@ -28,6 +29,40 @@ def test_application_construction_does_not_create_operational_files(tmp_path) ->
 
     assert not settings.data_dir.exists()
     assert not settings.log_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_management_rejects_mutations_from_a_non_loopback_browser_origin(tmp_path) -> None:
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/workers/stop-all", headers={"Origin": "https://example.invalid"})
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_native_management_client_without_origin_remains_supported(tmp_path) -> None:
+    app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/workers/stop-all")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_mutations_from_a_non_loopback_browser_origin(tmp_path) -> None:
+    app = gateway_app.create_gateway_app(settings=Settings(data_dir=tmp_path / "data"))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/completions",
+            headers={"Origin": "https://example.invalid"},
+            json={"model": "not-used", "prompt": "not-used"},
+        )
+
+    assert response.status_code == 403
 
 
 def test_state_store_metadata_distinguishes_desktop_and_checkout_state(monkeypatch, tmp_path) -> None:

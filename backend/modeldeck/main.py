@@ -11,7 +11,7 @@ from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -32,6 +32,7 @@ from modeldeck.hardware import probe_environment
 from modeldeck.llama_runtime import ALL_LLAMA_REQUIRED_FLAGS, inspect_llama_installation
 from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
+from modeldeck.security import SAFE_HTTP_METHODS, rejects_browser_mutation
 from modeldeck.supervisor import WorkerSupervisor
 from modeldeck.thermal import ThermalPolicyManager
 from modeldeck.v2_api import create_v3_router
@@ -150,6 +151,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def browser_security_headers(request: Request, call_next):
+        if request.method not in SAFE_HTTP_METHODS and rejects_browser_mutation(request):
+            return JSONResponse({"detail": "Untrusted browser origin"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
