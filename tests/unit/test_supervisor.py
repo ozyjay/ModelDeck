@@ -842,11 +842,13 @@ def test_log_redaction_handles_nested_sensitive_payloads() -> None:
 def test_worker_logs_are_redacted_bounded_and_restored(tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
     supervisor = WorkerSupervisor([profile], log_dir=tmp_path)
+    supervisor.start_log_service()
     supervisor._append_log(profile.id, "stderr", "prompt=private visitor words")
     for index in range(501):
         supervisor._append_log(profile.id, "stderr", f"diagnostic {index}")
 
     restored = WorkerSupervisor([profile], log_dir=tmp_path)
+    restored.start_log_service()
     logs = restored.logs(profile.id)
 
     assert len(logs) == 500
@@ -858,6 +860,7 @@ def test_worker_logs_are_redacted_bounded_and_restored(tmp_path) -> None:
 def test_worker_logs_are_scoped_to_the_current_session_and_classified(tmp_path) -> None:
     profile = next(profile for profile in default_model_profiles() if profile.id == "mock-ar")
     supervisor = WorkerSupervisor([profile], log_dir=tmp_path)
+    supervisor.start_log_service()
     worker = supervisor.workers[profile.id]
     worker.log_session_id = "first"
     supervisor._append_log(profile.id, "stderr", "ERROR: old failure")

@@ -35,7 +35,9 @@ def test_application_construction_does_not_create_operational_files(tmp_path) ->
 async def test_management_rejects_mutations_from_a_non_loopback_browser_origin(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post("/api/workers/stop-all", headers={"Origin": "https://example.invalid"})
 
     assert response.status_code == 403
@@ -45,7 +47,9 @@ async def test_management_rejects_mutations_from_a_non_loopback_browser_origin(t
 async def test_native_management_client_without_origin_remains_supported(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path / "data", log_dir=tmp_path / "logs"))
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post("/api/workers/stop-all")
 
     assert response.status_code == 200
@@ -55,7 +59,9 @@ async def test_native_management_client_without_origin_remains_supported(tmp_pat
 async def test_gateway_rejects_mutations_from_a_non_loopback_browser_origin(tmp_path) -> None:
     app = gateway_app.create_gateway_app(settings=Settings(data_dir=tmp_path / "data"))
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post(
             "/v1/completions",
             headers={"Origin": "https://example.invalid"},

@@ -59,7 +59,7 @@ async def test_gateway_forwards_openai_embeddings_in_order_without_cloud_fallbac
     try:
         await supervisor.start(profile.id)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+            transport=httpx.ASGITransport(app=gateway), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/embeddings",
@@ -98,7 +98,7 @@ async def test_gateway_embeddings_reject_invalid_unknown_incompatible_and_unavai
     incompatible = mock_profile(free_port())
     incompatible_gateway = create_gateway_app({"sprintbot-embedding": [incompatible]}, settings=Settings())
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+        transport=httpx.ASGITransport(app=gateway), base_url="http://127.0.0.1"
     ) as client:
         invalid = await client.post("/v1/embeddings", json={"model": "sprintbot-embedding", "input": []})
         unknown = await client.post("/v1/embeddings", json={"model": "unknown", "input": ["text"]})
@@ -106,7 +106,7 @@ async def test_gateway_embeddings_reject_invalid_unknown_incompatible_and_unavai
             "/v1/embeddings", json={"model": "sprintbot-embedding", "input": ["text"]}
         )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=incompatible_gateway), base_url="http://gateway"
+        transport=httpx.ASGITransport(app=incompatible_gateway), base_url="http://127.0.0.1"
     ) as client:
         incompatible_response = await client.post(
             "/v1/embeddings", json={"model": "sprintbot-embedding", "input": ["text"]}
@@ -136,7 +136,7 @@ async def test_gateway_forwards_streaming_and_cancellation_to_ready_local_worker
     try:
         await supervisor.start(profile.id)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+            transport=httpx.ASGITransport(app=gateway), base_url="http://127.0.0.1"
         ) as client:
             stream = await client.post(
                 "/v1/completions",
@@ -203,7 +203,7 @@ async def test_gateway_forwards_diffusion_job_status_events_and_cancellation() -
     try:
         await supervisor.start(profile.id)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+            transport=httpx.ASGITransport(app=gateway), base_url="http://127.0.0.1"
         ) as client:
             queued = await client.post(
                 "/v1/diffuse",

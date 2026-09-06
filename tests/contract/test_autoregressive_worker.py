@@ -118,7 +118,7 @@ async def test_worker_load_warmup_trace_and_stream_contracts() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             before = (await client.get("/health")).json()
             warmup = await client.post("/warmup")
@@ -163,7 +163,7 @@ async def test_worker_engine_operations_do_not_depend_on_the_default_executor(mo
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(app.state.load_task, timeout=1)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await asyncio.wait_for(client.post("/warmup"), timeout=1)
             trace = await asyncio.wait_for(
@@ -204,7 +204,7 @@ async def test_worker_cancellation_route_sets_only_known_request() -> None:
         cancellation = threading.Event()
         app.state.cancellations["known"] = cancellation
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             known = await client.post("/cancel", json={"request_id": "known"})
             unknown = await client.post("/cancel", json={"request_id": "unknown"})
@@ -224,7 +224,7 @@ async def test_worker_rejects_context_overflow_before_starting_inference() -> No
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             response = await client.post(
@@ -257,7 +257,7 @@ async def test_worker_returns_a_controlled_accelerator_memory_failure() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             response = await client.post("/v1/completions", json={"prompt": "private"})
@@ -353,7 +353,7 @@ async def test_worker_reports_allowlisted_cache_capability_and_clear_contract() 
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             capabilities = (await client.get("/capabilities")).json()
             cleared = (await client.post("/prefix-cache/clear")).json()
@@ -375,7 +375,7 @@ async def test_worker_accepts_openai_tool_messages_and_returns_tool_calls() -> N
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             first = await client.post(
@@ -453,7 +453,7 @@ async def test_worker_returns_structured_error_for_malformed_tool_history() -> N
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -515,7 +515,7 @@ async def test_worker_enforces_required_and_named_tool_choices_without_text_fall
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             required = await client.post(
@@ -537,7 +537,7 @@ async def test_worker_enforces_required_and_named_tool_choices_without_text_fall
     async with wrong_name_app.router.lifespan_context(wrong_name_app):
         await wrong_name_app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=wrong_name_app), base_url="http://test"
+            transport=httpx.ASGITransport(app=wrong_name_app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             named = await client.post(
@@ -563,7 +563,7 @@ async def test_worker_returns_protocol_error_for_malformed_tool_json() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             response = await client.post(
@@ -633,7 +633,7 @@ async def test_worker_rejects_streaming_required_tool_calling_explicitly() -> No
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             response = await client.post(
@@ -696,7 +696,7 @@ async def test_worker_accepts_vscode_agent_multi_message_tool_request() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/warmup")).status_code == 200
             response = await client.post(
@@ -730,7 +730,7 @@ async def test_worker_validation_error_does_not_echo_prompt_input() -> None:
     prompt_secret = "prompt-value-that-must-not-appear-in-the-response"
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -759,7 +759,7 @@ async def test_worker_rejects_oversized_request_before_validation() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",

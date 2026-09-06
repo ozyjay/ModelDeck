@@ -108,8 +108,8 @@ class Settings:
     gateway_port: int = 8600
     gateway_host: str = "127.0.0.1"
     docker_bridge_enabled: bool = False
-    data_dir: Path = Path(".modeldeck")
-    log_dir: Path = Path("var/log/workers")
+    data_dir: Path = field(default_factory=lambda: Path(os.getenv("MODELDECK_DATA_DIR", ".modeldeck")))
+    log_dir: Path = field(default_factory=lambda: Path(os.getenv("MODELDECK_LOG_DIR", "var/log/workers")))
     configuration_locked: bool = False
     diagnostic_capture: bool = False
     diffusion_timeout_seconds: float = 900.0
@@ -122,6 +122,14 @@ class Settings:
     thermal_throttling: ThermalPolicyConfig = field(
         default_factory=lambda: ThermalPolicyConfig(enabled=False)
     )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "host", validate_loopback_host(self.host, setting_name="MODELDECK_HOST"))
+        object.__setattr__(
+            self,
+            "gateway_host",
+            validate_loopback_host(self.gateway_host, setting_name="MODELDECK_GATEWAY_HOST"),
+        )
 
     @classmethod
     def from_env(cls) -> Settings:

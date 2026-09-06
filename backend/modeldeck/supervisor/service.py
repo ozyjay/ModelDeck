@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -102,9 +103,16 @@ class WorkerSupervisor:
         self.log_dir = log_dir
         self.thermal_manager = thermal_manager
         self.data_dir = data_dir or Path(os.environ.get("MODELDECK_DATA_DIR", ".modeldeck"))
+        self._logs_started = False
+
+    def start_log_service(self) -> None:
+        """Load and compact persisted logs during process-owned start-up only."""
+        if self._logs_started:
+            return
         if self.log_dir is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             self._load_persisted_logs()
+        self._logs_started = True
 
     def list_workers(self) -> list[dict[str, Any]]:
         self._refresh_exits()
@@ -435,6 +443,8 @@ class WorkerSupervisor:
         logs.append(record)
         if self.log_dir is None:
             return
+        if not self._logs_started:
+            raise RuntimeError("Start the Worker log service before writing persisted logs")
         path = self.log_dir / f"{worker_id}.jsonl"
         if was_full:
             self._write_log_file(path, logs)
@@ -456,7 +466,13 @@ class WorkerSupervisor:
                 except (json.JSONDecodeError, TypeError):
                     continue
                 if isinstance(record, dict) and {"timestamp", "source", "message"} <= record.keys():
-                    logs.append(record)
+                    logs.append(
+                        {
+                            key: redact_log(str(value))
+                            for key, value in record.items()
+                            if key in {"timestamp", "source", "message", "level", "session_id"}
+                        }
+                    )
             self._write_log_file(path, logs)
 
     @staticmethod
@@ -1211,6 +1227,14 @@ def port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 def redact_log(message: str) -> str:
     """Remove sensitive and user-supplied data from a bounded diagnostic record."""
+    if len(message) > 8192:
+        return "[redacted: oversized diagnostic]"
+    if message.lstrip().startswith(("{", "[")):
+        try:
+            result = json.dumps(_redact_log_value(json.loads(message)), separators=(",", ":"))
+            return result if len(result) <= 8192 else "[redacted: oversized diagnostic]"
+        except (ValueError, TypeError, RecursionError):
+            return "[redacted: malformed structured diagnostic]"
     lowered = message.lower()
     for marker in (
         "authorization:",
@@ -1219,17 +1243,22 @@ def redact_log(message: str) -> str:
         "prompt=",
         "generated_text=",
         "image_url=",
+        "output=",
+        "output_text=",
+        "password=",
+        "secret=",
         ";base64,",
     ):
         index = lowered.find(marker)
         if index >= 0:
             return f"{message[:index]}{marker}[redacted]"
-    if message.startswith(("{", "[")):
-        try:
-            return json.dumps(_redact_log_value(json.loads(message)), separators=(",", ":"))
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return message
+    return _TOKEN_VALUE.sub("[redacted]", message)
+
+
+_TOKEN_VALUE = re.compile(
+    r"(?i)bearer\s+[^\s,;]+|\b(?:sk-[\w-]+|hf_[\w-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)"
+    r"|\b[A-Za-z0-9_+/=-]{48,}\b"
+)
 
 
 _SENSITIVE_LOG_KEYS = frozenset(
@@ -1257,19 +1286,22 @@ def _redact_log_value(value: Any, *, key: str | None = None, depth: int = 0) -> 
     """Recursively redact structured diagnostics without unbounded traversal."""
     normalised_key = key.casefold().replace("-", "_") if key else ""
     if normalised_key in _SENSITIVE_LOG_KEYS or any(
-        marker in normalised_key for marker in ("token", "secret", "password", "credential", "prompt")
+        marker in normalised_key
+        for marker in ("token", "secret", "password", "credential", "prompt", "output")
     ):
         return "[redacted]"
     if isinstance(value, str):
         value_lower = value.casefold()
         if "bearer " in value_lower or "api_key=" in value_lower or "hf_" in value_lower:
             return "[redacted]"
-        return value[:4096]
+        return redact_log(value)[:4096]
     if depth >= _MAX_REDACTION_DEPTH:
         return "[truncated]"
     if isinstance(value, dict):
         return {
-            str(item_key)[:256]: _redact_log_value(item_value, key=str(item_key), depth=depth + 1)
+            _TOKEN_VALUE.sub("[redacted]", str(item_key))[:256]: _redact_log_value(
+                item_value, key=str(item_key), depth=depth + 1
+            )
             for item_key, item_value in list(value.items())[:_MAX_REDACTION_ITEMS]
         }
     if isinstance(value, (list, tuple)):

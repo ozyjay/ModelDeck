@@ -678,7 +678,7 @@ async def test_management_and_gateway_use_only_a_published_profile(tmp_path) -> 
     management_app = create_app(settings)
     async with management_app.router.lifespan_context(management_app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=management_app), base_url="http://test"
+            transport=httpx.ASGITransport(app=management_app), base_url="http://127.0.0.1"
         ) as management:
             assert (await management.get("/api/live")).json() == {
                 "active_profile": None,
@@ -695,7 +695,7 @@ async def test_management_and_gateway_use_only_a_published_profile(tmp_path) -> 
 
     gateway_app = create_gateway_app(settings=settings)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=gateway_app), base_url="http://test"
+        transport=httpx.ASGITransport(app=gateway_app), base_url="http://127.0.0.1"
     ) as gateway:
         assert (await gateway.get("/v1/models")).json() == {"object": "list", "data": []}
         native = (await gateway.get("/native/v1/capabilities")).json()["capabilities"]

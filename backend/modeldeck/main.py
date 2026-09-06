@@ -11,7 +11,7 @@ from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -32,7 +32,7 @@ from modeldeck.hardware import probe_environment
 from modeldeck.llama_runtime import ALL_LLAMA_REQUIRED_FLAGS, inspect_llama_installation
 from modeldeck.qwen_candidates import approve_candidate
 from modeldeck.registry import runtime_template_registrations
-from modeldeck.security import SAFE_HTTP_METHODS, rejects_browser_mutation
+from modeldeck.security import LocalBrowserBoundary
 from modeldeck.supervisor import WorkerSupervisor
 from modeldeck.thermal import ThermalPolicyManager
 from modeldeck.v2_api import create_v3_router
@@ -115,10 +115,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data_dir=configured.data_dir,
         )
         thermal_manager.critical_handler = app.state.supervisor.critical_stop_all
+        app.state.supervisor.start_log_service()
         app.state.runtime_registrations = runtime_template_registrations(configured.data_dir)
         await app.state.thermal_manager.start()
-        await app.state.reconcile_capability_setups(app)
         try:
+            await app.state.reconcile_capability_setups(app)
             yield
         finally:
             await app.state.shutdown_capability_setups()
@@ -132,6 +133,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = configured
+    app.add_middleware(LocalBrowserBoundary)
     app.state.thermal_manager = thermal_manager
     # These inert values make construction inspectable. Lifespan replaces them
     # with process-owned persistent services before serving any request.
@@ -151,8 +153,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def browser_security_headers(request: Request, call_next):
-        if request.method not in SAFE_HTTP_METHODS and rejects_browser_mutation(request):
-            return JSONResponse({"detail": "Untrusted browser origin"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"

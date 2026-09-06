@@ -72,7 +72,9 @@ def published_chat_profile(worker_id: str, *, profile_id: str | None = None) -> 
 
 async def listed_model_revision(settings: Settings) -> str:
     app = create_gateway_app(settings=settings)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         models = (await client.get("/v1/models")).json()["data"]
     assert len(models) == 1
     return models[0]["revision"]
@@ -81,7 +83,9 @@ async def listed_model_revision(settings: Settings) -> str:
 @pytest.mark.asyncio
 async def test_gateway_has_no_routes_or_implicit_defaults_before_publication(tmp_path) -> None:
     app = create_gateway_app(settings=Settings(data_dir=tmp_path))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         health = await client.get("/v1/health")
         models = await client.get("/v1/models")
         unavailable = await client.post("/v1/completions", json={"prompt": "hello"})
@@ -128,7 +132,9 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
     store.save_routing_profile_draft(profile.model_dump(mode="json"))
     store.publish_routing_profile(profile.model_dump(mode="json"), routing_snapshot(profile, 1))
     app = create_gateway_app(settings=settings)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         models = (await client.get("/v1/models")).json()["data"]
         routes = (await client.get("/v1/routes")).json()["routes"]
         native = (await client.get("/native/v1/capabilities")).json()["capabilities"]
@@ -153,7 +159,9 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         failure_code=None,
         evidence={"probe_count": 2, "probes": []},
     )
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         verified = (await client.get("/v1/models")).json()["data"]
     assert verified[0]["capabilities"] == {"chat": True, "tool_calling": "verified"}
     assert len(model["modeldeck"]["configuration_fingerprint"]) == 64
@@ -944,7 +952,9 @@ async def test_recognition_gateway_preserves_public_model_and_forwards_bounded_a
 async def test_recognition_gateway_rejects_oversized_audio_before_routing(tmp_path) -> None:
     app = create_gateway_app({}, settings=Settings(data_dir=tmp_path))
     oversized = base64.b64encode(bytes(256002)).decode("ascii")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post(
             "/v1/audio/transcriptions",
             json={"model": "speechshift-stt", "audio_base64": oversized},
@@ -1017,7 +1027,7 @@ async def test_cancellation_targets_only_the_worker_that_owns_the_active_request
     gateway.state.active_request_workers["active-1"] = profile
     fake = FakeCancellationClient()
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=gateway), base_url="http://gateway"
+        transport=httpx.ASGITransport(app=gateway), base_url="http://127.0.0.1"
     ) as client:
         monkeypatch.setattr(gateway_module.httpx, "AsyncClient", lambda *args, **kwargs: fake)
         response = await client.post("/v1/requests/active-1/cancel")

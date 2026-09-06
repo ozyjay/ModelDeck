@@ -170,7 +170,7 @@ def test_benchmark_skips_measured_arm_when_all_warmups_fail(monkeypatch) -> None
     other = {"id": "worker-280", "settings": {"visual_token_budget": 280}}
 
     result = benchmark._benchmark_arm(
-        "http://gateway",
+        "http://127.0.0.1",
         worker,
         [other],
         "data:image/png;base64,fixed",
@@ -265,7 +265,7 @@ def test_benchmark_measures_every_curated_question_ten_times(monkeypatch) -> Non
     }
 
     result = benchmark._benchmark_arm(
-        "http://gateway",
+        "http://127.0.0.1",
         worker,
         [],
         "data:image/png;base64,fixed",

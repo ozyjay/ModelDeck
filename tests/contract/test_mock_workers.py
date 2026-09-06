@@ -84,7 +84,7 @@ async def test_autoregressive_contract_includes_top_k_trace() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             health = (await client.get("/health")).json()
             trace = (
@@ -123,7 +123,7 @@ async def test_image_chat_contract_accepts_openai_multimodal_content() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -160,7 +160,7 @@ async def test_text_diffusion_contract_is_seeded_and_has_frames() -> None:
     request = {"prompt": "A robot arrives at university orientation.", "denoising_steps": 4, "seed": 11}
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             first = (await client.post("/v1/refine", json=request)).json()
             second = (await client.post("/v1/refine", json=request)).json()
@@ -201,7 +201,7 @@ async def test_scenechat_contract_returns_labelled_deterministic_structured_outp
     }
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             capability_response = await client.get("/capabilities")
             first = await client.post("/v1/chat/completions", json=request)
@@ -240,7 +240,7 @@ async def test_exact_completion_contract_uses_legacy_completion_shape() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             completion = await client.post("/v1/completions", json={"prompt": "Hello"})
             wrong_surface = await client.post("/v1/chat/completions", json={"prompt": "Hello"})
@@ -275,13 +275,13 @@ async def test_mock_delay_and_request_failure_do_not_affect_health() -> None:
     )
     async with delayed.router.lifespan_context(delayed):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=delayed), base_url="http://test"
+            transport=httpx.ASGITransport(app=delayed), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.get("/health")).status_code == 200
             assert (await client.post("/v1/chat/completions", json={"prompt": "Hello"})).status_code == 200
     async with failing.router.lifespan_context(failing):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=failing), base_url="http://test"
+            transport=httpx.ASGITransport(app=failing), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.get("/health")).status_code == 200
             response = await client.post("/v1/chat/completions", json={"prompt": "Hello"})
@@ -342,7 +342,7 @@ async def test_translation_mock_enforces_its_registered_direction() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/translations",
@@ -382,7 +382,7 @@ async def test_speech_synthesis_mock_returns_deterministic_24khz_wav() -> None:
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             capabilities = await client.get("/capabilities")
             responses = []
@@ -457,7 +457,7 @@ async def test_speech_recognition_mock_returns_deterministic_transcript() -> Non
     }
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             first = await client.post("/v1/audio/transcriptions", json=payload)
             second = await client.post("/v1/audio/transcriptions", json=payload)

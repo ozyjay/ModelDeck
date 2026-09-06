@@ -127,7 +127,7 @@ def test_autoregressive_worker_runs_through_mocked_management_and_gateway() -> N
         runner = benchmark.BenchmarkRunner(
             client,
             management_url="http://management",
-            gateway_url="http://gateway",
+            gateway_url="http://127.0.0.1",
             preset=benchmark.PRESETS["quick"],
         )
         result = runner.benchmark_profile(profile, hardware)

@@ -5,6 +5,23 @@ provider, downloads a model, or accepts executable configuration from a client. 
 `MODELDECK_ENABLE_DOCKER_BRIDGE=1` to add a gateway listener on Docker's default bridge
 address (`172.17.0.1`); management remains on its separately configured loopback host.
 
+Both APIs validate the HTTP `Host` header for every request, including WebSocket
+handshakes. Use `localhost` or a literal loopback address (IPv6 uses brackets).
+Arbitrary DNS names and forwarded-host headers cannot grant access. The gateway
+also accepts `172.17.0.1` when its Docker bridge is explicitly enabled.
+
+Browser mutations and WebSocket handshakes require a valid HTTP(S) loopback
+`Origin`. Empty, opaque (`null`), malformed, duplicate and remote origins are
+rejected. Local browser applications on other loopback ports remain supported;
+this policy does not grant CORS access. Native local clients may omit `Origin`,
+but must still send a valid `Host`. This boundary is not authentication between
+local users or local processes.
+
+Application factories perform no operational file writes. Embedded ASGI servers
+must run lifespan to initialise persistence and thermal services. The management
+entry point is `modeldeck` (or `python3 -m modeldeck`); direct Uvicorn users must
+use `modeldeck.main:create_app --factory` rather than an import-time app instance.
+
 ## Management (`:3600`)
 
 Discovery is read-only: `GET /api/health`, `/api/hardware`, `/api/telemetry`,

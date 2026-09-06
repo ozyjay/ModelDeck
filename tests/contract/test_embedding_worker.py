@@ -39,7 +39,7 @@ async def test_embedding_worker_returns_1024_dimensions_without_the_default_exec
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             warmed = await asyncio.wait_for(client.post("/warmup"), timeout=1)
             response = await asyncio.wait_for(

@@ -240,7 +240,9 @@ async def test_translation_contract_is_direction_specific_and_schema_valid(tmp_p
         engine=FakeTranslationEngine(),
     )
     mark_ready(app)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post(
             "/v1/translations",
             json={
@@ -286,7 +288,9 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
         thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
     )
     mark_ready(app, tts=True)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         capabilities = await client.get("/capabilities")
         responses = []
         for voice in QWEN_TTS_VOICES:
@@ -451,7 +455,9 @@ async def test_tts_cancellation_releases_the_worker_for_another_request(tmp_path
         thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
     )
     mark_ready(app, tts=True)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         active = asyncio.create_task(
             client.post(
                 "/v1/audio/speech",
@@ -507,7 +513,7 @@ async def test_tts_cancellation_fails_an_unresponsive_worker(
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
+            base_url="http://127.0.0.1",
         ) as client:
             active = asyncio.create_task(
                 client.post(
@@ -553,7 +559,9 @@ async def test_tts_thermal_monitoring_cancels_active_generation(
         thermal_guard=ThermalGuard(lambda: next(readings)),
     )
     mark_ready(app, tts=True)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         active = asyncio.create_task(
             client.post(
                 "/v1/audio/speech",
@@ -601,7 +609,9 @@ async def test_tts_timeout_returns_a_structured_error(
         thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
     )
     mark_ready(app, tts=True)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         active = asyncio.create_task(
             client.post(
                 "/v1/audio/speech",
@@ -638,7 +648,9 @@ async def test_tts_logs_and_metrics_exclude_speech_content(
     )
     mark_ready(app, tts=True)
     speech_text = "Private visitor phrase 7f14b0."
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post(
             "/v1/audio/speech",
             json={
@@ -681,7 +693,9 @@ async def test_recognition_contract_is_bounded_and_content_free_in_metrics(tmp_p
     )
     mark_recognition_ready(app)
     payload = recognition_payload()
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post("/v1/audio/transcriptions", json=payload)
         metrics = await client.get("/metrics")
         too_long = await client.post(
@@ -718,7 +732,9 @@ async def test_recognition_cancellation_releases_memory_and_worker_restarts_clea
         thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
     )
     mark_recognition_ready(app)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         active = asyncio.create_task(
             client.post("/v1/audio/transcriptions", json=recognition_payload(request_id="cancel-me"))
         )
@@ -762,7 +778,9 @@ async def test_recognition_rejects_concurrent_work_and_enforces_timeout(tmp_path
         thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
     )
     mark_recognition_ready(app)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         active = asyncio.create_task(
             client.post("/v1/audio/transcriptions", json=recognition_payload(request_id="active"))
         )
@@ -802,11 +820,11 @@ async def test_recognition_refuses_unsafe_start_and_terminates_at_thermal_limit(
     )
     mark_recognition_ready(hot_app)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=unsafe_app), base_url="http://test"
+        transport=httpx.ASGITransport(app=unsafe_app), base_url="http://127.0.0.1"
     ) as client:
         refused = await client.post("/v1/audio/transcriptions", json=recognition_payload())
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=hot_app), base_url="http://test"
+        transport=httpx.ASGITransport(app=hot_app), base_url="http://127.0.0.1"
     ) as client:
         terminated = await client.post("/v1/audio/transcriptions", json=recognition_payload())
 

@@ -242,7 +242,7 @@ async def test_general_gemma_chat_returns_openai_tool_calls() -> None:
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -289,7 +289,7 @@ async def test_scenechat_worker_preserves_openai_contract_and_real_usage() -> No
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             unavailable = await client.get("/v1/models", headers={"Authorization": "Bearer local"})
             warmup = await client.post("/warmup")
@@ -369,7 +369,7 @@ async def test_gemma4_adaptive_worker_attests_its_thinking_policy() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             capabilities = await client.get("/capabilities")
             health = await client.get("/health")
@@ -405,7 +405,7 @@ async def test_approved_prompts_and_images_are_passed_as_rgb(image_format: str, 
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -439,7 +439,7 @@ async def test_image_contract_rejects_unsafe_or_mismatched_inputs(data_url: str,
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -492,7 +492,7 @@ async def test_only_exact_curated_prompt_is_accepted_and_hidden_prompt_is_not_us
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             drifted = await client.post(
                 "/v1/chat/completions",
@@ -561,7 +561,7 @@ async def test_gemma4_general_chat_worker_accepts_the_management_configured_2048
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -590,7 +590,7 @@ async def test_content_order_second_image_and_request_id_are_strict() -> None:
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             reversed_parts = request_payload()
             reversed_parts["messages"][0]["content"].reverse()
@@ -642,7 +642,7 @@ async def test_invalid_or_unsafe_model_output_is_never_repaired(output: str) -> 
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -680,7 +680,7 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -746,7 +746,7 @@ async def test_non_truncation_validation_failures_use_safe_categories(
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -839,7 +839,7 @@ async def test_safe_person_activity_and_object_colours_are_not_prohibited(summar
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -874,7 +874,7 @@ async def test_person_sensitive_attributes_and_identity_claims_remain_prohibited
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -921,7 +921,7 @@ async def test_every_scenechat_collection_and_field_limit_is_strict(changed: dic
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -945,7 +945,7 @@ async def test_concurrent_request_is_rejected_without_queueing_and_slot_recovers
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             first_task = asyncio.create_task(
                 client.post(
@@ -993,7 +993,7 @@ async def test_timeout_cancels_generation_and_releases_the_slot() -> None:
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -1038,7 +1038,7 @@ async def test_request_cannot_override_trusted_visual_token_budget() -> None:
         await app.state.load_task
         await _ready(app)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/v1/chat/completions",
@@ -1090,7 +1090,7 @@ async def test_load_and_warmup_failures_never_report_ready() -> None:
     async with load_app.router.lifespan_context(load_app):
         await load_app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=load_app), base_url="http://test"
+            transport=httpx.ASGITransport(app=load_app), base_url="http://127.0.0.1"
         ) as client:
             load_health = await client.get("/health")
             load_warmup = await client.post("/warmup")
@@ -1103,7 +1103,7 @@ async def test_load_and_warmup_failures_never_report_ready() -> None:
     async with warmup_app.router.lifespan_context(warmup_app):
         await warmup_app.state.load_task
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=warmup_app), base_url="http://test"
+            transport=httpx.ASGITransport(app=warmup_app), base_url="http://127.0.0.1"
         ) as client:
             warmup = await client.post("/warmup")
             warmup_health = await client.get("/health")
@@ -1209,6 +1209,6 @@ def test_placement_still_rejects_fp32_parameters_and_unknown_buffers(
 
 async def _ready(app: Any) -> None:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
         response = await client.post("/warmup")
     assert response.status_code == 200

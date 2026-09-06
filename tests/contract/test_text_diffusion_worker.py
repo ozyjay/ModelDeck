@@ -197,7 +197,7 @@ async def test_diffusion_load_failure_is_logged_and_reported(caplog) -> None:
         async with app.router.lifespan_context(app):
             await app.state.load_task
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
                 health = await client.get("/health")
 
     assert health.json()["state"] == "failed"
@@ -212,7 +212,7 @@ async def test_real_diffusion_contract_uses_native_frames() -> None:
     async with app.router.lifespan_context(app):
         await app.state.load_task
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
             warmup = await client.post("/warmup")
             response = await client.post(
                 "/v1/refine",
@@ -250,7 +250,7 @@ async def test_diffusion_job_publishes_frames_before_generation_completes() -> N
     async with app.router.lifespan_context(app):
         await app.state.load_task
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
             await client.post("/warmup")
             queued = await client.post(
                 "/v1/diffuse",

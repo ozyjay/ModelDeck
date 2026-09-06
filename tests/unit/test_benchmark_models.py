@@ -41,7 +41,7 @@ def runner_for(handler, *, repetitions: int = 2):
     runner = benchmark.BenchmarkRunner(
         client,
         management_url="http://management",
-        gateway_url="http://gateway",
+        gateway_url="http://127.0.0.1",
         preset=benchmark.BenchmarkPreset(repetitions=repetitions),
     )
     return runner, client

@@ -56,7 +56,7 @@ async def test_runtime_installations_reports_detected_identity_and_consumers(tmp
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.get("/api/runtime-installations")
 
@@ -162,7 +162,7 @@ async def test_management_starts_empty_with_routing_profiles(tmp_path) -> None:
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             health = await client.get("/api/health")
             workers = await client.get("/api/workers")
@@ -193,7 +193,7 @@ async def test_guided_setup_preview_resolves_one_trusted_runtime_and_explicit_po
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/api/capability-setups/preview",
@@ -251,7 +251,7 @@ async def test_guided_publication_preview_is_stable_for_a_new_route(tmp_path) ->
 
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             first = await client.post(f"/api/capability-setups/{setup_id}/publication-preview", json=payload)
             second = await client.post(f"/api/capability-setups/{setup_id}/publication-preview", json=payload)
@@ -310,7 +310,7 @@ async def test_compatibility_lifecycle_observation_does_not_mutate_raw_evidence(
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 f"/api/compatibility/tests/{test['id']}/observations",
@@ -388,7 +388,7 @@ async def test_worker_check_is_diagnostic_and_does_not_record_compatibility_evid
             },
         )
         async with real_async_client(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(f"/api/workers/{worker.id}/smoke")
 
@@ -409,7 +409,7 @@ async def test_management_has_no_public_event_or_mock_worker_api(tmp_path) -> No
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             event_api = await client.get("/api/events")
             templates = await client.get("/api/mock-worker-templates")
@@ -430,7 +430,7 @@ async def test_capability_policy_records_missing_runtime_intent_and_master_denia
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             allowed = await client.post(
                 "/api/catalogue/capabilities/policy",
@@ -467,7 +467,7 @@ async def test_qwen35_chat_capability_creates_only_its_dedicated_worker(tmp_path
     app = create_app(Settings(data_dir=tmp_path, log_dir=tmp_path / "logs"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             allowed = await client.post(
                 "/api/catalogue/capabilities/policy",
@@ -519,7 +519,7 @@ async def test_disallowing_capability_reports_current_profile_references(tmp_pat
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(
                 "/api/catalogue/capabilities/policy",
@@ -557,7 +557,7 @@ async def test_new_worker_requires_an_allowed_concrete_capability(tmp_path, monk
     }
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             denied = await client.post("/api/workers", json=request)
             await client.post(
@@ -596,7 +596,7 @@ async def test_new_worker_rejects_context_above_the_model_declared_limit(tmp_pat
     }
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             await client.post(
                 "/api/catalogue/capabilities/policy",
@@ -626,7 +626,7 @@ async def test_management_ignores_persisted_untrusted_workers(tmp_path) -> None:
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             workers = await client.get("/api/workers")
             direct = await client.get(f"/api/workers/{legacy_worker.id}")
@@ -646,7 +646,7 @@ async def test_profile_publish_rollback_and_live_capabilities(tmp_path) -> None:
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             created = await client.post("/api/routing-profiles", json=profile)
             validation = await client.post(f"/api/routing-profiles/{profile['id']}/validate")
@@ -683,7 +683,7 @@ async def test_profile_publish_rejects_incompatible_worker(tmp_path) -> None:
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.post("/api/routing-profiles", json=profile)).status_code == 201
             response = await client.post(f"/api/routing-profiles/{profile['id']}/publish")
@@ -708,7 +708,7 @@ async def test_publishing_a_profile_keeps_existing_live_profiles_active(tmp_path
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             for profile in (first, second):
                 assert (await client.post("/api/routing-profiles", json=profile)).status_code == 201
@@ -794,7 +794,7 @@ async def test_management_prefix_cache_clear_returns_only_safe_counts(monkeypatc
             lambda _worker_id: {"state": "ready"},
         )
         async with real_async_client(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             response = await client.post(f"/api/workers/{worker.id}/prefix-cache/clear")
 
@@ -812,7 +812,7 @@ async def test_configuration_lock_blocks_profile_mutation_but_keeps_reads_availa
     profile = profile_document(str(uuid4()), name="Locked")
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             readable = await client.get("/api/routing-profiles")
             blocked = await client.post("/api/routing-profiles", json=profile)

@@ -244,7 +244,9 @@ async def test_llama_shutdown_requests_server_exit(tmp_path) -> None:
     shutdown_requested = asyncio.Event()
     app.state.shutdown_callback = shutdown_requested.set
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
         response = await client.post("/shutdown")
 
     assert response.status_code == 200
