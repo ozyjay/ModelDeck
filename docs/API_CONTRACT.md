@@ -34,6 +34,11 @@ Discovery is read-only: `GET /api/health`, `/api/hardware`, `/api/telemetry`,
 
 ### Guided capability setup
 
+On opening Setup, the console restores an unfinished operation, including one awaiting
+publication. Previous failed attempts remain available for explicit review and recovery;
+they do not replace the setup choices or appear as startup errors. Opening the page does
+not create or retry an operation.
+
 The intent-first setup surface uses durable, local-only operation resources:
 
 - `POST /api/capability-setups/preview` resolves one exact cached Model, Artifact,

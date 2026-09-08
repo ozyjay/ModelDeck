@@ -107,10 +107,37 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByLabelText("State store")).toHaveTextContent("Checkout development state");
   });
 
+  it("keeps saved failures out of startup progress and allows explicit review", async () => {
+    const payloads = responses();
+    payloads["/api/capability-setups"] = { setups: [{
+      id: "failed-setup", state: "failed", current_step: "creating-worker",
+      plan: { selection: { capability_id: "general-chat", model_id: worker.model_id } },
+      error: { message: "A Worker with that name already exists", retryable: false },
+      updated_at: "2026-09-07T10:00:00Z",
+    }] };
+    const fetchMock = mockFetch(payloads);
+    render(<App />);
+
+    const history = await screen.findByText("Previous failed setup attempts (1)");
+    expect(screen.getByRole("heading", { name: "1. Choose an outcome" })).toBeInTheDocument();
+    expect(screen.queryByText("A Worker with that name already exists")).not.toBeInTheDocument();
+    fireEvent.click(history);
+    fireEvent.click(screen.getByRole("button", { name: "Review failed attempt" }));
+    expect(screen.getByText("A Worker with that name already exists")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Adjust configuration" }));
+    expect(screen.getByRole("heading", { name: "1. Choose an outcome" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  });
+
   it("offers a fresh review after publication preview staleness", async () => {
     const setupId = "68e24ff4-dc06-4df8-9e61-f7eec53dd6c6";
     const payloads = responses();
     payloads["/api/capability-setups"] = { setups: [{
+      id: "older-failure", state: "failed",
+      plan: { selection: { capability_id: "general-chat", model_id: worker.model_id } },
+      error: { message: "A Worker with that name already exists", retryable: false },
+    }, {
       id: setupId,
       state: "awaiting-publication",
       current_step: "awaiting-publication",

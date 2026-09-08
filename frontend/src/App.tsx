@@ -307,6 +307,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState<CapabilitySetupPreview | null>(null);
   const [setup, setSetup] = useState<CapabilitySetup | null>(null);
+  const [previousFailures, setPreviousFailures] = useState<CapabilitySetup[]>([]);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("");
@@ -329,15 +330,20 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
   const selectedCapability = selectedModel?.potential_capabilities.find((item) => item.id === capabilityId);
   const runtimeIds = selectedCapability?.available_runtime_template_ids ?? [];
 
+  const restoreSetup = (saved: CapabilitySetup) => {
+    setSetup(saved);
+    const planned = saved.plan.selection;
+    setDisplayName(humanise(planned.capability_id));
+    setPublicName(planned.model_id.split("/").at(-1)?.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-") ?? "local-model");
+  };
+
   useEffect(() => {
     getJson<{ setups: CapabilitySetup[] }>("/api/capability-setups")
       .then(({ setups }) => {
-        const resumable = setups.find((item) => !["succeeded", "cancelled"].includes(item.state));
+        setPreviousFailures(setups.filter((item) => item.state === "failed"));
+        const resumable = setups.find((item) => !["succeeded", "failed", "cancelled"].includes(item.state));
         if (!resumable) return;
-        setSetup(resumable);
-        const planned = resumable.plan.selection;
-        setDisplayName(humanise(planned.capability_id));
-        setPublicName(planned.model_id.split("/").at(-1)?.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-") ?? "local-model");
+        restoreSetup(resumable);
       })
       .catch(() => undefined);
   }, []);
@@ -443,6 +449,7 @@ function SetupView({ models, workers, templates, live, refresh, openDay }: {
         {!publication ? <button disabled={busy} onClick={() => void reviewPublication()}>{busy ? "Reviewing…" : "Review routing changes"}</button> : <><div className={`validation-summary ${publication.validation.valid ? "good" : "bad"}`}><strong>{publication.validation.valid ? "Ready to publish" : "Publication is blocked"}</strong><p>{publication.before.capabilities.length} existing and {publication.after.capabilities.length} resulting capabilities. No unlisted fallback is added.</p>{publication.validation.errors.map((issue, index) => <p key={index}>{issue.message}</p>)}</div><button disabled={busy || !publication.validation.valid} onClick={() => void publish()}>{busy ? "Publishing…" : "Publish"}</button></>}
       </div>}
     </section> : <>
+      {previousFailures.length > 0 && <details className="panel"><summary>Previous failed setup attempts ({previousFailures.length})</summary><p>These are saved results from earlier attempts, not startup errors. Select an attempt to review its failure and recovery options.</p>{previousFailures.map((attempt) => <div key={attempt.id}><p><strong>{attempt.plan.selection.model_id}</strong> · {humanise(attempt.plan.selection.capability_id)} · {attempt.updated_at}</p><button className="secondary" onClick={() => restoreSetup(attempt)}>Review failed attempt</button></div>)}</details>}
       <section className="panel"><PanelHeading title="1. Choose an outcome" detail={`${capabilities.length} available`} /><div className="capability-grid">{capabilities.map((capability) => <button className={`capability-choice ${capabilityId === capability.id ? "selected" : ""}`} key={capability.id} onClick={() => setCapabilityId(capability.id)}><strong>{capability.display_name}</strong><span>{capability.description}</span></button>)}</div></section>
       {capabilityId && <section className="panel"><PanelHeading title="2. Choose a cached Model" detail={`${compatibleModels.length} compatible`} /><label>Search cached Models<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="model-choice-list">{compatibleModels.map((model) => <button className={modelKey === `${model.model_id}@${model.revision}` ? "selected" : ""} key={`${model.model_id}@${model.revision}`} onClick={() => setModelKey(`${model.model_id}@${model.revision}`)}><strong>{model.model_id}</strong><small>Pinned revision {model.revision?.slice(0, 12)}</small></button>)}</div></section>}
       {selectedModel && <section className="panel"><PanelHeading title="3. Review configuration" detail="Exact and immutable" /><DefinitionList rows={[["Model", selectedModel.model_id], ["Revision", selectedModel.revision ?? "—"], ["Capability", selectedCapability?.display_name ?? capabilityId]]} /><details><summary>Advanced Runtime and parameters</summary><label>Trusted Runtime<select value={runtimeTemplateId} onChange={(event) => { setRuntimeTemplateId(event.target.value); setPreview(null); }}><option value="">Choose a Runtime</option>{runtimeIds.map((id) => <option key={id} value={id}>{templates.find((item) => item.id === id)?.display_name ?? id}</option>)}</select></label><p className="manifest-note">With multiple compatible Runtimes, ModelDeck requires an explicit choice unless exact matching local evidence identifies one.</p></details>
