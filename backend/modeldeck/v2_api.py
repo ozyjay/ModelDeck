@@ -1238,7 +1238,7 @@ def create_v3_router() -> APIRouter:
             raise HTTPException(404, "The capability is not in the live Routing Profile revision")
         if capability.get("tool_calling_enabled") is True:
             return await _rehearse_route_tool_calling(snapshot, capability, request)
-        path, body = _capability_smoke_request(capability)
+        path, body = _capability_smoke_request(capability, request.app.state.worker_definitions)
         timeout = _capability_smoke_timeout(capability["protocol_contract"], request)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -2141,14 +2141,23 @@ def _validate_model_context_length(model: Mapping[str, object], context_length: 
         raise HTTPException(422, f"The selected Model supports at most {maximum} context tokens.")
 
 
-def _capability_smoke_request(capability):
+def _capability_smoke_request(capability, worker_definitions=None):
     public_name = capability["public_name"]
     contract = capability["protocol_contract"]
     try:
         probe_request = build_probe_request(probe_for_contract(contract), "gateway", public_name)
     except ValueError as error:
         raise HTTPException(409, str(error)) from error
-    return probe_request.path, probe_request.body
+    body = probe_request.body
+    if contract in {"openai-chat-v1", "openai-completions-v1"} and any(
+        definition.runtime_template_id == "gpt-oss-llama-vulkan"
+        for worker_id in capability.get("worker_ids", [])
+        if (definition := (worker_definitions or {}).get(worker_id)) is not None
+    ):
+        # Use the same reasoning allowance as the direct Worker probe, including
+        # configured backups; the gateway still selects the serving Worker.
+        body = {**body, "max_tokens": 64}
+    return probe_request.path, body
 
 
 def _capability_smoke_timeout(contract: str, request: Request) -> float:

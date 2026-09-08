@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import HTTPException
+from modeldeck.smoke_probes import probe_for_capability, validate_probe_response
 from modeldeck.workers.autoregressive_worker import (
     MAX_REQUEST_BYTES,
     EngineConfig,
@@ -143,6 +144,7 @@ async def test_worker_load_warmup_trace_and_stream_contracts() -> None:
     assert trace["user_prompt_tokens"] == ["Hi"]
     assert trace["events"][-1]["text_so_far"] == "Hello world"
     assert trace["metrics"]["generated_tokens"] == 2
+    assert validate_probe_response(probe_for_capability("autoregressive-trace"), trace)
     assert "event: token" in stream.text
     assert "data: [DONE]" in stream.text
     assert after["ready"] is True

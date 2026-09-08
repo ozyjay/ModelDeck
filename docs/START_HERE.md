@@ -33,6 +33,11 @@ applications. It begins with no configured Workers or routing profile.
    published capabilities and rehearse a ready capability through the gateway.
    Autoregressive trace rehearsal checks the selected token IDs in the returned events;
    an empty or cancelled trace does not pass.
+   Diffusion rehearsal permits empty intermediate drafts but requires final text and
+   rejects cancellation. Speech-recognition rehearsal uses 100 ms of local silence;
+   an empty transcript with completed inference metrics is valid and does not establish
+   recognition accuracy. GPT-OSS chat and completion rehearsals allow 64 output tokens,
+   matching Worker diagnostics, so private reasoning has room before visible output.
 
 The mental model is small: Models are discovered data, Workers execute Models,
 capabilities are public contracts, and one Routing Profile atomically publishes the active

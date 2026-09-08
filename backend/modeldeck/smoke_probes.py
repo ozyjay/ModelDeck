@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -174,7 +176,9 @@ def _speech_recognition_gateway_request(model: str, _api_key: str) -> ProbeReque
             "encoding": "pcm_s16le",
             "sample_rate_hz": 16000,
             "channels": 1,
-            "audio_base64": "AAAAAA==",
+            # Match the Worker's bounded 100 ms silence probe. Silence may
+            # correctly produce no words; this checks inference, not accuracy.
+            "audio_base64": base64.b64encode(bytes(3_200)).decode("ascii"),
         },
     )
 
@@ -242,7 +246,14 @@ def _valid_diffusion(payload: Mapping[str, object]) -> bool:
     return (
         isinstance(frames, list)
         and bool(frames)
-        and all(isinstance(frame, Mapping) and _non_empty_text(frame.get("text")) for frame in frames)
+        and payload.get("state") not in ("cancelled", "failed")
+        and all(
+            isinstance(frame, Mapping)
+            and isinstance(frame.get("text"), str)
+            and frame.get("cancelled") is not True
+            for frame in frames
+        )
+        and _non_empty_text(frames[-1].get("text"))
         and _non_empty_text(payload.get("text"))
     )
 
@@ -270,8 +281,25 @@ def _valid_synthesis(payload: Mapping[str, object]) -> bool:
 
 
 def _valid_recognition(payload: Mapping[str, object]) -> bool:
-    return _non_empty_text(payload.get("text")) or (
-        payload.get("ok") is True and payload.get("output_kind") == "transcript"
+    metrics = payload.get("metrics")
+    completed_silence = (
+        payload.get("object") == "audio.transcription"
+        and payload.get("language") == "en"
+        and isinstance(payload.get("text"), str)
+        and isinstance(metrics, Mapping)
+        and all(
+            isinstance(metrics.get(key), (int, float))
+            and not isinstance(metrics[key], bool)
+            and math.isfinite(metrics[key])
+            and metrics[key] >= 0
+            for key in ("audio_seconds", "inference_seconds", "total_worker_seconds")
+        )
+        and metrics["audio_seconds"] > 0
+    )
+    return (
+        completed_silence
+        or _non_empty_text(payload.get("text"))
+        or (payload.get("ok") is True and payload.get("output_kind") == "transcript")
     )
 
 
@@ -389,7 +417,7 @@ def build_probe_request(
 
 
 def validate_probe_response(probe: ProtocolProbe, payload: Mapping[str, object]) -> bool:
-    return probe.validate(payload)
+    return isinstance(payload, Mapping) and probe.validate(payload)
 
 
 def image_chat_probe_body(model: str) -> dict[str, object]:

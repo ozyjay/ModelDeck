@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 import pytest
+from modeldeck.smoke_probes import probe_for_capability, validate_probe_response
 from modeldeck.workers.embedding_worker import EMBEDDING_DIMENSIONS, EmbeddingEngineConfig, create_app
 
 
@@ -53,6 +54,7 @@ async def test_embedding_worker_returns_1024_dimensions_without_the_default_exec
 
     assert warmed.status_code == 200
     assert response.status_code == 200
+    assert validate_probe_response(probe_for_capability("embeddings"), response.json())
     assert response.json()["model"] == "sprintbot-embedding"
     assert [item["index"] for item in response.json()["data"]] == [0, 1]
     assert all(len(item["embedding"]) == EMBEDDING_DIMENSIONS for item in response.json()["data"])

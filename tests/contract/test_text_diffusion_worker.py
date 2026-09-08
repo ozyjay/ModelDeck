@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import pytest
+from modeldeck.smoke_probes import probe_for_capability, validate_probe_response
 from modeldeck.workers.text_diffusion_worker import (
     DiffusionRequest,
     EngineConfig,
@@ -44,7 +45,7 @@ class FakeDiffusionEngine:
         first = {
             "step": 1,
             "total_steps": body.denoising_steps,
-            "text": "A local",
+            "text": "",
             "masked_tokens": 2,
             "stable_tokens": 1,
             "complete": False,
@@ -233,6 +234,7 @@ async def test_real_diffusion_contract_uses_native_frames() -> None:
     assert warmup.json()["ready"] is True
     assert response.status_code == 200
     payload = response.json()
+    assert validate_probe_response(probe_for_capability("text-refinement"), payload)
     assert payload["frames"][-1]["complete"] is True
     assert payload["frames"][0]["text"] != payload["frames"][-1]["text"]
     assert job.json()["frame_count"] == 2

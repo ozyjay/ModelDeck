@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from modeldeck.protocol import WorkerState
+from modeldeck.smoke_probes import build_probe_request, probe_for_capability, validate_probe_response
 from modeldeck.speechshift import QWEN_TTS_VOICES, SPEECHSHIFT_MODEL_SPECS
 from modeldeck.thermal import TemperatureSnapshot, ThermalGuard, ThermalGuardError
 from modeldeck.workers.speech_recognition_worker import (
@@ -263,6 +264,10 @@ async def test_translation_contract_is_direction_specific_and_schema_valid(tmp_p
                 "target_language": "en",
             },
         )
+        smoke = await client.post("/native/text-translation/smoke")
+        assert smoke.status_code == 200
+        assert validate_probe_response(probe_for_capability("translation-en-fr"), smoke.json())
+        assert validate_probe_response(probe_for_capability("translation-en-fr"), response.json())
 
     assert response.status_code == 200
     assert response.json()["output_text"] == "Traduction: The service is ready."
@@ -292,6 +297,9 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         capabilities = await client.get("/capabilities")
+        smoke = await client.post("/native/speech-synthesis/smoke")
+        assert smoke.status_code == 200
+        assert validate_probe_response(probe_for_capability("speech-synthesis"), smoke.json())
         responses = []
         for voice in QWEN_TTS_VOICES:
             responses.append(
@@ -350,7 +358,9 @@ async def test_tts_contract_returns_allowlisted_24khz_mono_wav(tmp_path: Path) -
         with wave.open(io.BytesIO(response.content), "rb") as wav:
             assert wav.getframerate() == 24_000
             assert wav.getnchannels() == 1
-    assert engine.calls == [("The service is ready.", voice, "en") for voice in QWEN_TTS_VOICES]
+    assert engine.calls == [("Ready.", "ryan", "en")] + [
+        ("The service is ready.", voice, "en") for voice in QWEN_TTS_VOICES
+    ]
     for invalid_voice in invalid_voices:
         assert invalid_voice.status_code == 422
         assert invalid_voice.json()["error"]["code"] == "unsupported_voice"
@@ -679,6 +689,32 @@ def test_tts_fails_closed_when_start_temperature_is_unsafe() -> None:
         guard.require_start_safe()
 
     assert caught.value.code == "thermal_cooldown_required"
+
+
+@pytest.mark.asyncio
+async def test_recognition_silence_probe_accepts_empty_transcript(tmp_path: Path) -> None:
+    class SilenceRunner(FakeRecognitionRunner):
+        async def recognise(self, pcm_bytes: bytes) -> RecognitionResult:
+            assert pcm_bytes == bytes(3_200)
+            return RecognitionResult("", 0.01, 1024)
+
+    spec = SPEECHSHIFT_MODEL_SPECS["openai/whisper-small.en"]
+    app = create_recognition_app(
+        worker_id="recognition",
+        config=RecognitionConfig(spec.model_id, spec.revision, "speechshift-stt", tmp_path),
+        runner=SilenceRunner(),
+        thermal_guard=ThermalGuard(lambda: TemperatureSnapshot(45, 55)),
+    )
+    mark_recognition_ready(app)
+    probe = probe_for_capability("speech-recognition")
+    request = build_probe_request(probe, "gateway", "speechshift-stt")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
+        response = await client.post(request.path, json=request.body)
+    assert response.status_code == 200
+    assert response.json()["text"] == ""
+    assert validate_probe_response(probe, response.json())
 
 
 @pytest.mark.asyncio

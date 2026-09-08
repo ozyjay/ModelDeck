@@ -434,7 +434,15 @@ def create_app(
     @app.post("/native/text-translation/smoke")
     async def translation_smoke():
         _require_family(family, GenerationFamily.TEXT_TRANSLATION)
-        return {"ok": True, "output_kind": "translation", "mock": True}
+        template = MOCK_WORKER_TEMPLATES.get(str(contract_id))
+        settings = (template.fixed_settings or {}) if template else {}
+        return {
+            "ok": True,
+            "output_kind": "translation",
+            "source_language": settings.get("source_language", "en"),
+            "target_language": settings.get("target_language", "fr"),
+            "mock": True,
+        }
 
     @app.post("/native/speech-synthesis/smoke")
     async def synthesis_smoke():

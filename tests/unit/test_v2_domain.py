@@ -402,6 +402,17 @@ def test_worker_smoke_requests_use_worker_protocols() -> None:
     assert path == "/v1/chat/completions"
     assert body["max_tokens"] == 64
     assert headers is None
+    for contract in ("openai-chat-v1", "openai-completions-v1"):
+        capability = {
+            "public_name": "public-gpt-oss",
+            "protocol_contract": contract,
+            "worker_ids": ["primary", "backup"],
+        }
+        _, route_body = _capability_smoke_request(capability, {"backup": gpt_oss})
+        assert route_body["model"] == "public-gpt-oss"
+        assert route_body["max_tokens"] == 64
+        _, default_body = _capability_smoke_request(capability, {"primary": autoregressive})
+        assert default_body["max_tokens"] == 4
 
     qwen_llama = autoregressive.model_copy(
         update={

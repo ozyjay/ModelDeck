@@ -11,7 +11,12 @@ from modeldeck.contracts.scenechat import SceneAnalysis
 from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
-from modeldeck.smoke_probes import probe_for_capability, validate_probe_response
+from modeldeck.smoke_probes import (
+    PROTOCOL_PROBES,
+    build_probe_request,
+    probe_for_capability,
+    validate_probe_response,
+)
 from modeldeck.speechshift import QWEN_TTS_VOICES
 from modeldeck.workers.mock_worker import create_app
 
@@ -72,6 +77,43 @@ def test_every_trusted_contract_has_a_mock_template() -> None:
         contract = PROTOCOL_CONTRACTS[contract_id]
         assert template.contract.generation_family == contract.generation_family
         assert all(template.capabilities[capability] is True for capability in contract.required_capabilities)
+
+
+@pytest.mark.parametrize(
+    ("contract_id", "surface"),
+    [(contract_id, "worker") for contract_id in PROTOCOL_PROBES]
+    + [(contract_id, "gateway") for contract_id, probe in PROTOCOL_PROBES.items() if probe.gateway_request],
+)
+@pytest.mark.asyncio
+async def test_every_probe_accepts_its_mock_contract_response(contract_id: str, surface: str) -> None:
+    template = MOCK_WORKER_TEMPLATES[contract_id]
+    probe = PROTOCOL_PROBES[contract_id]
+    request = build_probe_request(probe, surface, template.model_id)
+    # These two public gateway paths forward to different native Worker paths.
+    path = {
+        "/native/v1/autoregressive/traces": "/native/autoregressive/trace",
+        "/native/v1/text-diffusion/refine": "/v1/refine",
+    }.get(request.path, request.path)
+    app = create_app(
+        worker_id="probe-audit",
+        model_id=template.model_id,
+        revision="fixture",
+        family=template.contract.generation_family,
+        contract_id=contract_id,
+        startup_delay=0,
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as client:
+            response = await client.post(path, json=request.body, headers=request.headers)
+    assert response.status_code == 200
+    if contract_id == "speech-synthesis-v1" and surface == "gateway":
+        assert response.content[:4] == b"RIFF"
+        assert response.content[8:12] == b"WAVE"
+        assert len(response.content) > 44
+    else:
+        assert validate_probe_response(probe, response.json())
 
 
 @pytest.mark.asyncio
