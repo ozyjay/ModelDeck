@@ -25,3 +25,8 @@ pwsh -NoProfile -File scripts/setup/setup.ps1
 pwsh -NoProfile -File scripts/verification/verify.ps1
 pwsh -NoProfile -File scripts/operations/run.ps1
 ```
+
+For read-only demo diagnostics against an already running installation, use
+`pwsh -NoProfile -File scripts/operations/demo_preflight.ps1`. It never starts
+services or Workers, changes routing or opens a state store. See
+[Open Day demo contracts](../docs/OPEN_DAY_DEMO_CONTRACTS.md) for options and exit codes.

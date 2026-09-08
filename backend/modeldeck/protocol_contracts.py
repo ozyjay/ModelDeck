@@ -78,7 +78,9 @@ PROTOCOL_CONTRACTS = {
             surfaces=(
                 "POST /native/v1/text-diffusion/refine",
                 "POST /native/v1/text-diffusion/jobs",
-                "GET/POST /native/v1/text-diffusion/jobs/*",
+                "GET /native/v1/text-diffusion/jobs/{job_id}",
+                "GET /native/v1/text-diffusion/jobs/{job_id}/events",
+                "POST /native/v1/text-diffusion/jobs/{job_id}/cancel",
             ),
         ),
         ProtocolContract(

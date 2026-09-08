@@ -1,5 +1,8 @@
 # API contract
 
+For consumer-specific discovery, requests, cancellation, errors and the read-only
+preflight, see [Open Day demo contracts](OPEN_DAY_DEMO_CONTRACTS.md).
+
 All services bind to `127.0.0.1` by default. ModelDeck never forwards to a cloud
 provider, downloads a model, or accepts executable configuration from a client. Set
 `MODELDECK_ENABLE_DOCKER_BRIDGE=1` to add a gateway listener on Docker's default bridge
@@ -224,6 +227,13 @@ new embedding template.
 - `POST /v1/audio/speech`, `/v1/audio/transcriptions`
 - `WS /v1/speech/conversations`
 - `POST /v1/vision/analyse`, `/v1/requests/{request_id}/cancel`
+
+`/v1/routes` lists every published protocol. Each route includes `public_name`,
+`ready`, `protocol_contract` and exact `surfaces`, with ordered Worker identity in
+the accompanying `resolution` map. Embedded in-memory routes without a published
+contract return `protocol_contract: null` and `surfaces: []`; consumers must treat
+this as unknown compatibility. Readiness alone does not establish protocol or
+thermal admission.
 
 Specialised, reusable low-level model interactions are code-owned native protocols:
 

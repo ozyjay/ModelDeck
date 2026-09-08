@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -331,6 +331,9 @@ def create_gateway_app(
 
     @app.get("/v1/routes")
     async def route_list():
+        contracts = {
+            record["public_name"]: record["protocol_contract"] for record in active_capability_records()
+        }
         resolved_records = active_route_records()
         routes = {name: candidates for name, candidates, _ in resolved_records}
         states = {state["id"]: state for state in await worker_states(routes)}
@@ -347,6 +350,12 @@ def create_gateway_app(
             "routes": [
                 {
                     "public_name": name,
+                    "protocol_contract": contracts.get(name),
+                    "surfaces": (
+                        list(PROTOCOL_ADAPTERS[contracts[name]].public_surfaces)
+                        if contracts.get(name) in PROTOCOL_ADAPTERS
+                        else []
+                    ),
                     "ready": any(states[worker.id]["ready"] for worker in workers),
                 }
                 for name, workers in routes.items()
@@ -508,7 +517,7 @@ def create_gateway_app(
             job_id, job_routes, active_routes(), store if persistence_enabled else None
         )
         if worker is None:
-            raise HTTPException(404, "Unknown diffusion job")
+            return JSONResponse({"detail": "Unknown diffusion job"}, status_code=404)
         response = await proxy_job_request(worker, f"/v1/jobs/{job_id}")
         if job_response_is_terminal(response):
             await release_thermal_job_capacity(request, job_id)
@@ -532,7 +541,7 @@ def create_gateway_app(
             job_id, job_routes, active_routes(), store if persistence_enabled else None
         )
         if worker is None:
-            raise HTTPException(404, "Unknown diffusion job")
+            return JSONResponse({"detail": "Unknown diffusion job"}, status_code=404)
         return await proxy_job_events(worker, f"/v1/jobs/{job_id}/events")
 
     @app.get("/native/v1/text-diffusion/jobs/{job_id}/events")
@@ -551,7 +560,7 @@ def create_gateway_app(
             job_id, job_routes, active_routes(), store if persistence_enabled else None
         )
         if worker is None:
-            raise HTTPException(404, "Unknown diffusion job")
+            return JSONResponse({"detail": "Unknown diffusion job"}, status_code=404)
         response = await proxy_job_request(worker, f"/v1/jobs/{job_id}/cancel", method="POST")
         if response.status_code < 300:
             await release_thermal_job_capacity(request, job_id)

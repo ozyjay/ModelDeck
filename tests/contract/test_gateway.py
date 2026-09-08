@@ -204,8 +204,18 @@ async def test_gateway_advertises_openai_models_and_native_capabilities_separate
         "runtime_configuration_fingerprint": None,
     }
     assert routes == [
-        {"public_name": "visitor-trace", "ready": False},
-        {"public_name": "visitor-chat", "ready": False},
+        {
+            "public_name": "visitor-trace",
+            "ready": False,
+            "protocol_contract": "native-ar-trace-v1",
+            "surfaces": ["POST /native/v1/autoregressive/traces"],
+        },
+        {
+            "public_name": "visitor-chat",
+            "ready": False,
+            "protocol_contract": "openai-chat-v1",
+            "surfaces": ["POST /v1/chat/completions"],
+        },
     ]
     assert native == [
         {
