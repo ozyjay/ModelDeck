@@ -228,8 +228,10 @@ def _valid_trace(payload: Mapping[str, object]) -> bool:
         and bool(events)
         and all(
             isinstance(event, Mapping)
-            and isinstance(event.get("token_id"), int)
-            and not isinstance(event.get("token_id"), bool)
+            and event.get("cancelled") is not True
+            and isinstance(event.get("selected"), Mapping)
+            and isinstance(event["selected"].get("token_id"), int)
+            and not isinstance(event["selected"].get("token_id"), bool)
             for event in events
         )
     )

@@ -11,6 +11,7 @@ from modeldeck.contracts.scenechat import SceneAnalysis
 from modeldeck.mock_templates import MOCK_WORKER_TEMPLATES
 from modeldeck.protocol import GenerationFamily
 from modeldeck.protocol_contracts import PROTOCOL_CONTRACTS
+from modeldeck.smoke_probes import probe_for_capability, validate_probe_response
 from modeldeck.speechshift import QWEN_TTS_VOICES
 from modeldeck.workers.mock_worker import create_app
 
@@ -101,6 +102,7 @@ async def test_autoregressive_contract_includes_top_k_trace() -> None:
     assert health["protocol_version"] == "1"
     assert health["ready"] is True
     assert trace["events"][0]["selected"]["token"]
+    assert validate_probe_response(probe_for_capability("autoregressive-trace"), trace)
     assert len(trace["events"][0]["alternatives"]) == 2
     assert "text_so_far" in trace["events"][0]
     assert trace["prompt_tokens"] == ["Welcome"]

@@ -31,6 +31,8 @@ applications. It begins with no configured Workers or routing profile.
    Workers.
 10. In **Live**, inspect the
    published capabilities and rehearse a ready capability through the gateway.
+   Autoregressive trace rehearsal checks the selected token IDs in the returned events;
+   an empty or cancelled trace does not pass.
 
 The mental model is small: Models are discovered data, Workers execute Models,
 capabilities are public contracts, and one Routing Profile atomically publishes the active

@@ -461,7 +461,25 @@ def test_protocol_probe_validation_rejects_structurally_empty_success_payloads()
         is True
     )
     assert validate_probe_response(trace, {"events": [{}]}) is False
-    assert validate_probe_response(trace, {"events": [{"token_id": 7, "token": "ready"}]}) is True
+    assert (
+        validate_probe_response(trace, {"events": [{"selected": {"token_id": 7, "token": "ready"}}]}) is True
+    )
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [],
+        [{"token_id": 7}],
+        [{"selected": None}],
+        [{"selected": {"token_id": True}}],
+        [{"selected": {"token_id": "7"}}],
+        [{"selected": {"token_id": 7}, "cancelled": True}],
+        [{"selected": {"token_id": 7}}, {"cancelled": True, "complete": True}],
+    ],
+)
+def test_trace_probe_rejects_malformed_or_cancelled_events(events) -> None:
+    assert not validate_probe_response(probe_for_capability("autoregressive-trace"), {"events": events})
 
 
 def test_probe_failures_distinguish_adapter_mismatch_from_timeouts() -> None:
