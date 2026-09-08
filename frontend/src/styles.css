@@ -21,6 +21,15 @@
 }
 
 * { box-sizing: border-box; }
+.notification-stack { position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 1000; display: grid; gap: 0.75rem; width: min(28rem, calc(100vw - 2.5rem)); max-height: calc(100dvh - 2.5rem); overflow-y: auto; pointer-events: none; }
+.notification { display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; border: 1px solid var(--accent); border-radius: 0.85rem; background: var(--panel-raised); color: var(--text); box-shadow: 0 8px 30px #0008; pointer-events: auto; animation: notification-enter 160ms ease-out; }
+.notification > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.notification strong, .notification span { display: block; }
+.notification strong { margin-bottom: 0.35rem; }
+.notification .icon-button { flex-shrink: 0; }
+.notification-error { border-color: var(--danger); background: #2b171d; color: #ffc5ca; }
+@keyframes notification-enter { from { opacity: 0; transform: translateY(0.5rem); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .notification { animation: none; } }
 html { min-width: 320px; min-height: 100%; background: var(--bg); }
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 75% -10%, #173047 0, transparent 28rem), var(--bg); }
 button, input, select, textarea { font: inherit; }

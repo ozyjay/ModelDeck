@@ -122,6 +122,10 @@ display preferences are retained in local browser storage and do not change Mode
 configuration. The **Live** tab can also show or hide individual published capabilities;
 this changes presentation only and never changes the published routing snapshot.
 
+Action feedback appears in temporary notifications at the bottom right without moving
+the page. Messages close after six seconds (ten seconds for errors), pause while hovered
+or keyboard-focused, and can be dismissed with their close button.
+
 Use **Models** to create a Worker from a recognised cached revision. Use **Routing profiles** to
 define published capabilities, assign primary and ordered backup Workers, validate the
 draft and publish it. Use **Workers** for detailed lifecycle control and real generation

@@ -215,6 +215,23 @@ describe("ModelDeck routing profile operator console", () => {
     expect(screen.getByText("No ready Worker")).toHaveClass("unavailable");
   });
 
+  it("shows rehearsal feedback in a dismissible popup outside the live panel", async () => {
+    const payloads = responses(true);
+    const live = payloads["/api/live"] as LiveState;
+    live.capabilities[0].protocol_contract = "openai-chat-v1";
+    live.capabilities[0].ready = true;
+    payloads[`/api/routing-profiles/${profile.definition.id}/capabilities/${live.capabilities[0].id}/smoke`] = { ok: true };
+    mockFetch(payloads);
+    const { container } = render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "Live" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Rehearse capability" }));
+    const message = await screen.findByText("Tool calling passed the bounded public-route rehearsal.");
+    expect(message.closest(".notification")).not.toBeNull();
+    expect(container).not.toContainElement(message);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    expect(message).not.toBeInTheDocument();
+  });
+
   it("hides published capabilities locally without changing routing state", async () => {
     mockFetch(responses(true));
     render(<App />);
