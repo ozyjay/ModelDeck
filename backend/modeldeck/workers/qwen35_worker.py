@@ -15,6 +15,7 @@ from PIL import Image
 from modeldeck.contracts.scenechat import system_messages
 from modeldeck.gemma4_settings import ALLOWED_VISUAL_TOKEN_BUDGETS, DEFAULT_VISUAL_TOKEN_BUDGET
 from modeldeck.reviewed_models import REVIEWED_MODEL_SPECS, reviewed_model_spec
+from modeldeck.workers.scenechat_diagnostics import generation_receipt
 from modeldeck.workers.scenechat_worker import (
     APPROVED_FP32_BUFFER_SUFFIXES,
     EngineConfig,
@@ -217,6 +218,8 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                 return cancellation.is_set()
 
         class CompleteJsonCriteria(StoppingCriteria):
+            triggered = False
+
             def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
                 generated = input_ids[0, prompt_tokens:]
                 candidate = self_processor.decode(
@@ -224,7 +227,8 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                     skip_special_tokens=True,
                     clean_up_tokenization_spaces=False,
                 )
-                return _is_complete_json_output(candidate)
+                self.triggered = _is_complete_json_output(candidate)
+                return self.triggered
 
         rendered = self.processor.apply_chat_template(
             system_messages(question),
@@ -245,8 +249,11 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
             )
         inputs = inputs.to(self.device, dtype=self.dtype)
         self_processor = self.processor
+        json_stopper = CompleteJsonCriteria()
         self.torch.cuda.reset_peak_memory_stats(0)
         try:
+            if self.config.diagnostic_timing:
+                self.torch.cuda.synchronize()
             inference_started = time.perf_counter()
             with self.torch.inference_mode():
                 output = self.model.generate(
@@ -254,8 +261,10 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                     max_new_tokens=min(max_tokens, self.config.maximum_new_tokens),
                     do_sample=False,
                     use_cache=True,
-                    stopping_criteria=StoppingCriteriaList([CancellationCriteria(), CompleteJsonCriteria()]),
+                    stopping_criteria=StoppingCriteriaList([CancellationCriteria(), json_stopper]),
                 )
+            if self.config.diagnostic_timing:
+                self.torch.cuda.synchronize()
             inference_seconds = time.perf_counter() - inference_started
             generated = output[0, prompt_tokens:]
             completion_tokens = int(generated.shape[-1])
@@ -274,6 +283,14 @@ class TransformersQwen35Engine(TransformersSceneChatEngine):
                 preprocessing_seconds=preprocessing_seconds,
                 inference_seconds=inference_seconds,
                 visual_tokens=visual_tokens,
+                diagnostics=generation_receipt(
+                    self,
+                    rendered,
+                    generated,
+                    limit=min(max_tokens, self.config.maximum_new_tokens),
+                    cancelled=cancellation.is_set(),
+                    complete_json=json_stopper.triggered,
+                ),
             )
         finally:
             del inputs

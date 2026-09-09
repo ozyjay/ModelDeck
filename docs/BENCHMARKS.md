@@ -1,5 +1,9 @@
 # ROCm model benchmarks
 
+See the [SceneChat configuration experiment runbook](SCENECHAT_EXPERIMENT_RUNBOOK.md)
+for the versioned corpus/matrix workflow, matched diagnostic paths, blind review and
+release gates. The visual-token harness retains its legacy command mode.
+
 ModelDeck provides a hardware-gated benchmark suite for repeatable performance and
 stability observations on the target Framework Desktop. It never downloads weights and
 does not replace compatibility smoke tests or workload-specific quality evaluation.

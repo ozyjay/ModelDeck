@@ -1,5 +1,14 @@
 # API contract
 
+SceneChat Worker `/metrics.last_request` additionally reports the correlated `request_id`,
+the original `validator_category` independently of `token_limit_reached`, stopping
+conditions, effective generation settings, a rendered-prompt hash and content-free
+repetition counts. Existing response/error categories remain compatible. Unavailable cache,
+kernel and fused sub-stage observations are null, not inferred. `/health` identifies an
+explicit benchmark bundle and diagnostic timing when locally registered; raw benchmark
+output is never exposed by these endpoints. See the
+[experiment runbook](SCENECHAT_EXPERIMENT_RUNBOOK.md) for the local evidence workflow.
+
 For consumer-specific discovery, requests, cancellation, errors and the read-only
 preflight, see [Open Day demo contracts](OPEN_DAY_DEMO_CONTRACTS.md).
 

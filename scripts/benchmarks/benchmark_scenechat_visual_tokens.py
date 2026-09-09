@@ -286,9 +286,7 @@ def _validate_route() -> None:
         if capability.get("public_name") == ROUTE_NAME
     ]
     if len(capabilities) != 1:
-        raise RuntimeError(
-            f"The active Routing Profile must contain exactly one {ROUTE_NAME!r} capability"
-        )
+        raise RuntimeError(f"The active Routing Profile must contain exactly one {ROUTE_NAME!r} capability")
 
 
 def _profile(worker: dict[str, Any]):
@@ -764,6 +762,14 @@ def _benchmark_arm(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark SceneChat visual-token budgets")
+    parser.add_argument("--configuration-matrix")
+    parser.add_argument("--corpus")
+    parser.add_argument("--stage", choices=("screen", "development", "holdout", "sustained"))
+    parser.add_argument("--schedule")
+    parser.add_argument("--evaluation-port", type=int)
+    parser.add_argument("--maintenance-receipt")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--execution-path", choices=("gateway", "worker", "direct"), default="gateway")
     parser.add_argument("--worker-70")
     parser.add_argument("--worker-140")
     parser.add_argument("--worker-280")
@@ -782,6 +788,25 @@ def main() -> None:
     parser.add_argument("--cooldown-temperature-celsius", type=float, default=65)
     parser.add_argument("--requests-per-thermal-batch", type=int, default=2)
     arguments = parser.parse_args()
+    if arguments.configuration_matrix:
+        if not all((arguments.corpus, arguments.stage, arguments.schedule)):
+            parser.error("matrix mode requires --corpus, --stage and --schedule")
+        if any((arguments.worker_70, arguments.worker_140, arguments.worker_280)):
+            parser.error("matrix mode cannot be combined with legacy visual-budget arms")
+        from modeldeck.scenechat_runner import main as run_experiment
+
+        run_experiment(sys.modules[__name__], arguments)
+        return
+    if any(
+        (
+            arguments.corpus,
+            arguments.stage,
+            arguments.schedule,
+            arguments.execute,
+            arguments.maintenance_receipt,
+        )
+    ):
+        parser.error("experiment options require --configuration-matrix")
     if arguments.runs_per_question < 10:
         parser.error("--runs-per-question must be at least 10")
     if arguments.minimum_duration_seconds < 0:
@@ -812,7 +837,7 @@ def main() -> None:
     _validate_route()
     originally_ready = [worker for worker in configured_workers if worker["state"] == "ready"]
     data_url, image_metadata = _image_payload()
-    gateway_port = _free_loopback_port()
+    gateway_port = arguments.evaluation_port or _free_loopback_port()
     gateway_url = f"http://127.0.0.1:{gateway_port}"
     gateway_app = create_gateway_app(
         alias_routes={ROUTE_NAME: [_profile(worker) for worker in workers]},

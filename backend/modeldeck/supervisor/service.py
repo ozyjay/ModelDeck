@@ -28,6 +28,7 @@ from modeldeck.profiles import ModelProfile
 from modeldeck.protocol import GenerationFamily, WorkerEvent, WorkerState
 from modeldeck.qwen_candidates import load_candidate
 from modeldeck.runtime_trust import TRUSTED_RUNTIME_IDS
+from modeldeck.scenechat_evidence import launch_environment as scenechat_launch_environment
 from modeldeck.speechshift import (
     QWEN_TTS_GENERATION_TIMEOUT_SECONDS,
     QWEN_TTS_MAXIMUM_CODEC_TOKENS,
@@ -692,6 +693,8 @@ def _vision_language_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
     python = _rocm_python()
+    if profile.preferred_runtime == "vision-language-transformers-rocm":
+        scenechat_launch_environment(profile.id, python, environment)
     cache_root = profile.settings.get("cache_root")
     if not cache_root:
         raise ValueError("SceneChat worker requires an allowlisted Hugging Face cache root")
@@ -743,6 +746,7 @@ def _qwen35_vision_language_launch(
     profile: ModelProfile, environment: dict[str, str], common: list[str]
 ) -> WorkerLaunch:
     python = _rocm_python()
+    scenechat_launch_environment(profile.id, python, environment)
     cache_root = profile.settings.get("cache_root")
     if not cache_root:
         raise ValueError("Qwen3.5 vision-language worker requires an allowlisted Hugging Face cache root")

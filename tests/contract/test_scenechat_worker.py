@@ -707,6 +707,8 @@ async def test_truncated_output_reports_safe_token_limit_diagnostics(caplog) -> 
     assert data_url not in caplog.text
     assert "Bearer local" not in caplog.text
     assert metrics.json()["last_request"]["output_failure_category"] == "token_limit_reached"
+    assert metrics.json()["last_request"]["validator_category"] == "invalid_json"
+    assert metrics.json()["last_request"]["request_id"] == "webcam-truncated-1"
     assert metrics.json()["last_request"]["structured_failure_reason"] == "token_limit_reached"
     assert metrics.json()["last_request"]["retryable"] is True
     assert metrics.json()["last_request"]["finish_reason"] == "length"

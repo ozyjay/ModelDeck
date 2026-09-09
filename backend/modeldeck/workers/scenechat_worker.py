@@ -16,7 +16,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -44,6 +44,8 @@ from modeldeck.gemma4_settings import (
 )
 from modeldeck.protocol import CapabilitySet, GenerationFamily, WorkerState
 from modeldeck.registry import MAXIMUM_NEW_TOKENS_LIMIT
+from modeldeck.scenechat_evidence import BenchmarkCapture
+from modeldeck.workers.scenechat_diagnostics import generation_receipt, repetition_diagnostics
 
 LOGGER = logging.getLogger("modeldeck.scenechat")
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -86,6 +88,7 @@ class EngineConfig:
     visual_token_budget: VisualTokenBudget = DEFAULT_VISUAL_TOKEN_BUDGET
     general_chat: bool = False
     thinking_mode: Literal["disabled", "adaptive"] = "disabled"
+    diagnostic_timing: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.maximum_new_tokens <= SCENECHAT_MAXIMUM_NEW_TOKENS_LIMIT:
@@ -109,6 +112,7 @@ class GenerationResult:
     inference_seconds: float = 0.0
     visual_tokens: int | None = None
     tool_calls: tuple[dict[str, Any], ...] = ()
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def _log_output_validation_failure(
@@ -443,6 +447,8 @@ class TransformersSceneChatEngine:
         inputs = inputs.to(self.device, dtype=self.dtype)
         self.torch.cuda.reset_peak_memory_stats(0)
         try:
+            if self.config.diagnostic_timing:
+                self.torch.cuda.synchronize()
             inference_started = time.perf_counter()
             with self.torch.inference_mode():
                 output = self.model.generate(
@@ -452,6 +458,8 @@ class TransformersSceneChatEngine:
                     use_cache=True,
                     stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
                 )
+            if self.config.diagnostic_timing:
+                self.torch.cuda.synchronize()
             inference_seconds = time.perf_counter() - inference_started
             generated = output[0, prompt_tokens:]
             completion_tokens = int(generated.shape[-1])
@@ -476,6 +484,13 @@ class TransformersSceneChatEngine:
                 inference_seconds=inference_seconds,
                 visual_tokens=visual_tokens,
                 tool_calls=tuple(tool_calls),
+                diagnostics=generation_receipt(
+                    self,
+                    rendered,
+                    generated,
+                    limit=min(max_tokens, self.config.maximum_new_tokens),
+                    cancelled=cancellation.is_set(),
+                ),
             )
         finally:
             del inputs
@@ -577,7 +592,12 @@ def create_app(
     model_owner: str = "google",
     vision_settings: dict[str, int] | None = None,
 ) -> FastAPI:
+    benchmark_capture = BenchmarkCapture.for_worker(worker_id)
+    if benchmark_capture:
+        config = replace(config, diagnostic_timing=benchmark_capture.value["diagnostic_timing"])
     runtime = engine or TransformersSceneChatEngine(config)
+    if benchmark_capture and engine is not None and hasattr(runtime, "config"):
+        runtime.config = config
     reported_vision_settings = {
         "visual_token_budget": config.visual_token_budget,
         "image_patch_size": GEMMA4_PATCH_SIZE,
@@ -658,6 +678,10 @@ def create_app(
         return {
             "protocol_version": "1",
             "worker_id": worker_id,
+            "benchmark_bundle_sha256": benchmark_capture.value["bundle_sha256"]
+            if benchmark_capture
+            else None,
+            "diagnostic_timing": config.diagnostic_timing,
             "runtime": "vision-language-transformers-rocm",
             "generation_family": GenerationFamily.VISION_LANGUAGE,
             "state": request.app.state.worker_state,
@@ -831,6 +855,8 @@ def create_app(
         image: Image.Image | None = None
         diagnostic: dict[str, Any] = {
             **reported_vision_settings,
+            "request_id": request_id,
+            "validator_category": None,
             "contract_version": CONTRACT_VERSION,
             "retry_count": 0,
             "queue_seconds": round(queue_seconds, 6),
@@ -853,6 +879,16 @@ def create_app(
         request.app.state.worker_state = WorkerState.BUSY
         effective_token_limit = min(body.max_tokens, config.maximum_new_tokens)
         try:
+            benchmark_image_hash = None
+            if benchmark_capture:
+                try:
+                    benchmark_image_hash = benchmark_capture.approve(image_data_url)
+                except (ValueError, IndexError) as error:
+                    raise SceneChatRequestError(
+                        422,
+                        "unapproved_benchmark_image",
+                        "The image is not approved for this benchmark Worker.",
+                    ) from error
             decode_started = time.perf_counter()
             if image_data_url is not None:
                 image, encoded_bytes = _decode_image_with_metadata(image_data_url)
@@ -889,10 +925,14 @@ def create_app(
                     timeout_seconds=config.generation_timeout_seconds,
                 )
             )
+            if benchmark_capture and benchmark_image_hash:
+                benchmark_capture.write(request_id, benchmark_image_hash, result.text, result.diagnostics)
             if result.cancelled:
                 raise SceneChatRequestError(504, "request_cancelled", "The local generation was cancelled.")
             diagnostic.update(
                 {
+                    **result.diagnostics,
+                    "repetition": repetition_diagnostics(result.text),
                     "prompt_tokens": result.prompt_tokens,
                     "preprocessing_seconds": round(result.preprocessing_seconds, 6),
                     "inference_seconds": round(result.inference_seconds, 6),
@@ -920,6 +960,7 @@ def create_app(
                     output_text.strip() if config.general_chat else canonicalise_model_output(output_text)[0]
                 )
             except ModelOutputValidationError as error:
+                diagnostic["validator_category"] = error.category
                 diagnostic["validation_seconds"] = round(time.perf_counter() - validation_started, 6)
                 diagnostic["output_failure_category"] = _output_failure_category(
                     error,

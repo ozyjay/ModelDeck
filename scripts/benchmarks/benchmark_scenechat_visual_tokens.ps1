@@ -1,5 +1,13 @@
 [CmdletBinding()]
 param(
+    [string]$ConfigurationMatrix,
+    [string]$Corpus,
+    [ValidateSet('screen', 'development', 'holdout', 'sustained')][string]$Stage,
+    [string]$Schedule,
+    [int]$EvaluationPort,
+    [string]$MaintenanceReceipt,
+    [switch]$Execute,
+    [ValidateSet('gateway', 'worker', 'direct')][string]$ExecutionPath = 'gateway',
     [string]$Worker70,
     [string]$Worker140,
     [string]$Worker280,
@@ -16,6 +24,26 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '../..')
 if (-not (Test-Path '.venv/bin/python')) { throw 'Run scripts/setup/setup.ps1 first.' }
+if ($ConfigurationMatrix) {
+    if (-not $Corpus -or -not $Stage -or -not $Schedule) {
+        throw 'Matrix mode requires Corpus, Stage and Schedule.'
+    }
+    if ($Worker70 -or $Worker140 -or $Worker280) { throw 'Do not mix matrix and legacy arms.' }
+    $ExperimentArguments = @(
+        'scripts/benchmarks/benchmark_scenechat_visual_tokens.py',
+        '--configuration-matrix', $ConfigurationMatrix, '--corpus', $Corpus,
+        '--stage', $Stage, '--schedule', $Schedule, '--execution-path', $ExecutionPath
+    )
+    if ($EvaluationPort) { $ExperimentArguments += @('--evaluation-port', $EvaluationPort) }
+    if ($MaintenanceReceipt) { $ExperimentArguments += @('--maintenance-receipt', $MaintenanceReceipt) }
+    if ($Execute) { $ExperimentArguments += '--execute' }
+    & .venv/bin/python @ExperimentArguments
+    if ($LASTEXITCODE -ne 0) { throw 'The SceneChat experiment failed.' }
+    return
+}
+if ($Corpus -or $Stage -or $Schedule -or $Execute -or $MaintenanceReceipt) {
+    throw 'Experiment options require ConfigurationMatrix.'
+}
 if ($CooldownTemperatureCelsius -ge $MaximumTemperatureCelsius) {
     throw 'CooldownTemperatureCelsius must be below MaximumTemperatureCelsius.'
 }
@@ -44,5 +72,6 @@ $Arguments = @(
     '--requests-per-thermal-batch', $RequestsPerThermalBatch
 )
 if ($HumanReview) { $Arguments += '--human-review' }
+if ($EvaluationPort) { $Arguments += @('--evaluation-port', $EvaluationPort) }
 & .venv/bin/python @Arguments
 if ($LASTEXITCODE -ne 0) { throw 'The SceneChat visual-token benchmark failed.' }
