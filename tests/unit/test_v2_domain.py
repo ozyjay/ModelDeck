@@ -8,6 +8,7 @@ import pytest
 from modeldeck.capabilities import worker_configuration_fingerprint
 from modeldeck.compatibility import CompatibilityStore, LegacyDatabaseError
 from modeldeck.config import Settings
+from modeldeck.contracts.scenechat import external_prompt
 from modeldeck.domain import RoutingProfile, WorkerDefinition, routing_snapshot, validate_routing_profile
 from modeldeck.gateway.app import create_gateway_app
 from modeldeck.main import create_app
@@ -139,7 +140,7 @@ def test_scene_analysis_route_probe_uses_the_public_bounded_json_contract() -> N
     assert route_body["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
     assert route_body["messages"][0]["content"][1] == {
         "type": "text",
-        "text": "Describe the scene.",
+        "text": external_prompt("Describe the scene."),
     }
     assert route_body["response_format"] == {"type": "json_object"}
     assert route_body["stream"] is False

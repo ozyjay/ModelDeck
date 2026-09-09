@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from modeldeck.contracts.scenechat import SceneAnalysis
+from modeldeck.contracts.scenechat import SceneAnalysis, external_prompt
 
 ProbeSurface = Literal["worker", "gateway"]
 TimeoutClass = Literal["default", "diffusion", "translation", "speech-synthesis", "speech-recognition"]
@@ -118,7 +118,7 @@ def _scene_worker_request(_model: str, api_key: str) -> ProbeRequest:
 def _scene_gateway_request(model: str, _api_key: str) -> ProbeRequest:
     body = _image_chat_body(model)
     content = body["messages"][0]["content"]
-    content[1] = {"type": "text", "text": "Describe the scene."}
+    content[1] = {"type": "text", "text": external_prompt("Describe the scene.")}
     return ProbeRequest(
         "/v1/vision/analyse",
         {
