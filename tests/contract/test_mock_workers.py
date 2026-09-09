@@ -93,6 +93,7 @@ async def test_every_probe_accepts_its_mock_contract_response(contract_id: str, 
     path = {
         "/native/v1/autoregressive/traces": "/native/autoregressive/trace",
         "/native/v1/text-diffusion/refine": "/v1/refine",
+        "/v1/vision/analyse": "/v1/chat/completions",
     }.get(request.path, request.path)
     app = create_app(
         worker_id="probe-audit",

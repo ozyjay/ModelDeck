@@ -225,7 +225,7 @@ describe("ModelDeck routing profile operator console", () => {
     const { container } = render(<App />);
     fireEvent.click(await screen.findByRole("link", { name: "Live" }));
     fireEvent.click(await screen.findByRole("button", { name: "Rehearse capability" }));
-    const message = await screen.findByText("Tool calling passed the bounded public-route rehearsal.");
+    const message = await screen.findByText("Capability passed the bounded public-route rehearsal.");
     expect(message.closest(".notification")).not.toBeNull();
     expect(container).not.toContainElement(message);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));

@@ -129,6 +129,22 @@ def test_image_chat_qualification_and_route_smokes_include_a_local_image() -> No
         assert content[1] == {"type": "text", "text": "Reply with the word ready."}
 
 
+def test_scene_analysis_route_probe_uses_the_public_bounded_json_contract() -> None:
+    route_path, route_body = _capability_smoke_request(
+        {"public_name": "scenechat-vision", "protocol_contract": "scene-analysis-v1"}
+    )
+
+    assert route_path == "/v1/vision/analyse"
+    assert route_body["model"] == "scenechat-vision"
+    assert route_body["messages"][0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert route_body["messages"][0]["content"][1] == {
+        "type": "text",
+        "text": "Describe the scene.",
+    }
+    assert route_body["response_format"] == {"type": "json_object"}
+    assert route_body["stream"] is False
+
+
 def routing_profile(worker_id: str, *, qualification: str = "compatible") -> RoutingProfile:
     return RoutingProfile(
         id=str(uuid4()),

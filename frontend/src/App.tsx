@@ -494,7 +494,12 @@ function LiveView({ live, workers, models, thermal, operate, pending, refresh }:
     try {
       const result = await postJson<{ ok: boolean; tool_calling?: { failure_code: string | null } }>(`/api/routing-profiles/${capability.profile_id}/capabilities/${capability.id}/smoke`);
       await refresh();
-      setRouteFeedback(result.ok ? "Tool calling passed the bounded public-route rehearsal." : `Tool calling was not verified: ${result.tool_calling?.failure_code ?? "probe failed"}.`, !result.ok);
+      setRouteFeedback(
+        result.ok
+          ? "Capability passed the bounded public-route rehearsal."
+          : `Capability rehearsal failed: ${result.tool_calling?.failure_code ?? "probe failed"}.`,
+        !result.ok,
+      );
     } catch (reason) { setRouteFeedback(messageFrom(reason), true); }
     finally { setSmokingRoute(null); }
   };

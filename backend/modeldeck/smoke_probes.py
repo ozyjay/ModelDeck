@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import base64
+import json
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from modeldeck.contracts.scenechat import SceneAnalysis
 
 ProbeSurface = Literal["worker", "gateway"]
 TimeoutClass = Literal["default", "diffusion", "translation", "speech-synthesis", "speech-recognition"]
@@ -112,6 +115,21 @@ def _scene_worker_request(_model: str, api_key: str) -> ProbeRequest:
     )
 
 
+def _scene_gateway_request(model: str, _api_key: str) -> ProbeRequest:
+    body = _image_chat_body(model)
+    content = body["messages"][0]["content"]
+    content[1] = {"type": "text", "text": "Describe the scene."}
+    return ProbeRequest(
+        "/v1/vision/analyse",
+        {
+            **body,
+            "max_tokens": 256,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+
 def _diffusion_worker_request(model: str, _api_key: str) -> ProbeRequest:
     return ProbeRequest(
         "/v1/refine",
@@ -198,6 +216,23 @@ def _valid_chat(payload: Mapping[str, object]) -> bool:
     return isinstance(message, Mapping) and (
         _non_empty_text(message.get("content")) or _non_empty_text(message.get("reasoning_content"))
     )
+
+
+def _valid_scene_analysis(payload: Mapping[str, object]) -> bool:
+    if payload.get("ok") is True and payload.get("visual_contract") == "scene-analysis-v1":
+        return True
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return False
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
+        return False
+    try:
+        content = json.loads(message["content"])
+        SceneAnalysis.model_validate(content)
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def _valid_completion(payload: Mapping[str, object]) -> bool:
@@ -335,7 +370,13 @@ PROTOCOL_PROBES = {
             _trace_gateway_request,
             _valid_trace,
         ),
-        ProtocolProbe("scene-analysis", "scene-analysis-v1", _scene_worker_request, None, _valid_ok),
+        ProtocolProbe(
+            "scene-analysis",
+            "scene-analysis-v1",
+            _scene_worker_request,
+            _scene_gateway_request,
+            _valid_scene_analysis,
+        ),
         ProtocolProbe(
             "text-refinement",
             "text-diffusion-v1",
