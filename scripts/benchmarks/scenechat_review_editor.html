@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SceneChat corpus review</title>
+  <style>
+    :root { font: 16px/1.45 system-ui, sans-serif; color: #1d2933; background: #f3f5f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; border: 1px solid #83929d; border-radius: .45rem; padding: .5rem .8rem; background: white; color: inherit; }
+    button:hover { background: #e7eef3; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #1673a7; outline-offset: 2px; }
+    button:disabled { opacity: .45; cursor: default; }
+    .primary { background: #12618b; border-color: #12618b; color: white; }
+    .primary:hover { background: #0c4e70; }
+    header { padding: 1rem 1.5rem; background: #183548; color: white; }
+    h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+    header p { margin: 0; color: #d2e2e9; }
+    .toolbar { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; padding: .8rem 1.5rem; background: white; border-bottom: 1px solid #d5dde1; }
+    .toolbar input[type=file] { display: none; }
+    #status { margin-left: auto; font-weight: 600; }
+    .warning { color: #a04712; }
+    .ok { color: #206d47; }
+    main { display: grid; grid-template-columns: minmax(300px, 1.1fr) minmax(360px, 1fr); gap: 1rem; padding: 1rem; max-width: 1700px; margin: auto; }
+    section { min-width: 0; background: white; border: 1px solid #d5dde1; border-radius: .7rem; padding: 1rem; }
+    .image-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+    .image-head h2 { margin: 0; font-size: 1.25rem; }
+    .image-head small { color: #526470; }
+    #image { display: block; width: 100%; height: auto; margin: .8rem 0; border-radius: .35rem; background: #edf0f2; }
+    .muted { color: #526470; }
+    .navigation { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    #image-select { max-width: 18rem; padding: .45rem; border: 1px solid #83929d; border-radius: .4rem; }
+    #progress { margin-left: auto; font-weight: 600; }
+    .editor h2 { margin: 0 0 .2rem; font-size: 1.2rem; }
+    .editor > p { margin: 0 0 .8rem; }
+    .field { display: block; margin: .8rem 0; font-weight: 600; }
+    .field span { display: block; margin-bottom: .25rem; }
+    textarea { display: block; width: 100%; min-height: 4.5rem; resize: vertical; border: 1px solid #9baab2; border-radius: .4rem; padding: .5rem; font-weight: 400; }
+    .approval { border-top: 1px solid #d5dde1; margin-top: 1rem; padding-top: 1rem; }
+    .approval label { display: block; margin: .5rem 0; }
+    .approval input[type=text] { width: min(100%, 20rem); padding: .4rem; border: 1px solid #9baab2; border-radius: .4rem; }
+    #message { min-height: 1.5em; }
+    [hidden] { display: none !important; }
+    @media (max-width: 850px) { main { grid-template-columns: 1fr; } #status { margin-left: 0; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SceneChat corpus review</h1>
+    <p>Check each image against the draft facts. Your edits stay in this browser until you save the JSON file.</p>
+  </header>
+  <div class="toolbar">
+    <button id="open" type="button">Open review JSON</button>
+    <input id="file" type="file" accept=".json,application/json">
+    <button id="save" class="primary" type="button" disabled>Save review JSON</button>
+    <span id="status" class="warning" role="status">Open review-by-jase.json to begin</span>
+  </div>
+  <main>
+    <section aria-label="Candidate image">
+      <div class="image-head"><h2 id="image-id"></h2><small id="image-meta"></small></div>
+      <a id="image-link" target="_blank" rel="noopener" title="Open full-size image"><img id="image" alt="Candidate image for factual review"></a>
+      <div class="navigation">
+        <button id="previous" type="button">Previous</button>
+        <select id="image-select" aria-label="Choose image"></select>
+        <button id="next" type="button">Next</button>
+        <span id="progress"></span>
+      </div>
+      <p class="muted">Select an image or use Previous and Next. Click the picture to view it at full size. This set includes holdout images for corpus preparation only.</p>
+    </section>
+    <section class="editor" aria-label="Factual labels">
+      <h2>Review the facts</h2>
+      <p class="muted">Put each separate fact on its own line. Leave uncertainty explicit. Editing an approved image removes its approval until you check it again.</p>
+      <div id="fields"></div>
+      <div class="approval">
+        <label for="reviewer">Reviewer name</label>
+        <input id="reviewer" type="text" autocomplete="name" placeholder="Your name">
+        <label><input id="approved" type="checkbox"> I checked this image and all seven answers against the pixels</label>
+        <p id="message" class="warning" role="status"></p>
+      </div>
+    </section>
+  </main>
+  <script id="corpus-metadata" type="application/json">__CORPUS_REVIEW_METADATA__</script>
+  <script>
+    (() => {
+      "use strict";
+      const metadata = JSON.parse(document.querySelector("#corpus-metadata").textContent);
+      const questions = [
+        ["q1", "What objects can you see?"],
+        ["q2", "Describe the scene and where things are"],
+        ["q3", "What is happening here?"],
+        ["q4", "Which objects are closest to the camera?"],
+        ["q5", "Describe the scene for someone who cannot see it"],
+        ["q6", "What might the equipment be used for?"],
+        ["q7", "What details are uncertain?"]
+      ];
+      const $ = selector => document.querySelector(selector);
+      const fields = new Map();
+      let review = null;
+      let index = 0;
+      let fileHandle = null;
+      let fileName = "review.json";
+      let reviewerName = "";
+      let dirty = false;
+
+      function notice(message, good = false) {
+        $("#message").textContent = message;
+        $("#message").className = good ? "ok" : "warning";
+      }
+      function updateStatus() {
+        const count = review ? review.images.filter(image => image.approved).length : 0;
+        $("#progress").textContent = review ? `${count} of ${review.images.length} approved` : "";
+        $("#status").textContent = !review ? "Open review-by-jase.json to begin" :
+          dirty ? "Unsaved changes" : "Saved or loaded";
+        $("#status").className = dirty || !review ? "warning" : "ok";
+        $("#save").disabled = !review;
+      }
+      function markDirty() {
+        dirty = true;
+        updateStatus();
+      }
+      function validate(data) {
+        if (!data || data.version !== 1 || data.candidate_sha256 !== metadata.candidate_sha256 ||
+            !Array.isArray(data.images) || data.images.length !== metadata.images.length) {
+          throw new Error("This review JSON does not match the candidate corpus beside this editor.");
+        }
+        const records = new Map(data.images.map(image => [image.id, image]));
+        if (records.size !== data.images.length) throw new Error("The review has duplicate image IDs.");
+        for (const candidate of metadata.images) {
+          const image = records.get(candidate.id);
+          if (!image || image.sha256 !== candidate.sha256 || !image.facts ||
+              typeof image.approved !== "boolean" ||
+              (image.approved && !String(image.approved_by || "").trim())) {
+            throw new Error(`Missing or stale review entry: ${candidate.id}`);
+          }
+          for (const [key] of questions) {
+            if (!Array.isArray(image.facts[key]) || !image.facts[key].every(fact => typeof fact === "string")) {
+              throw new Error(`Invalid ${key} facts for ${candidate.id}`);
+            }
+          }
+        }
+        data.images = metadata.images.map(candidate => records.get(candidate.id));
+        return data;
+      }
+      function render() {
+        const candidate = metadata.images[index];
+        const image = review?.images[index];
+        $("#image-id").textContent = candidate.id;
+        $("#image-meta").textContent = `${candidate.category.replaceAll("_", " ")} · ${candidate.split}`;
+        $("#image").src = candidate.path;
+        $("#image").alt = `Review image ${candidate.id}`;
+        $("#image-link").href = candidate.path;
+        $("#image-select").value = String(index);
+        $("#previous").disabled = index === 0;
+        $("#next").disabled = index === metadata.images.length - 1;
+        for (const [key] of questions) {
+          const field = fields.get(key);
+          field.value = image ? image.facts[key].join("\n") : "";
+          field.disabled = !image;
+        }
+        $("#reviewer").value = image?.approved_by || reviewerName;
+        $("#reviewer").disabled = !image;
+        $("#approved").checked = Boolean(image?.approved);
+        $("#approved").disabled = !image;
+        notice(image?.approved ? "Approved by " + image.approved_by : "Approval pending.", Boolean(image?.approved));
+        updateStatus();
+      }
+      async function loadFile(file, handle = null) {
+        if (dirty && !window.confirm("Discard unsaved changes and open another review file?")) return;
+        const data = validate(JSON.parse(await file.text()));
+        review = data;
+        fileHandle = handle;
+        fileName = file.name;
+        reviewerName = data.images.find(image => image.approved_by)?.approved_by || "";
+        index = Math.max(0, data.images.findIndex(image => !image.approved));
+        dirty = false;
+        render();
+        notice(`Loaded ${file.name}. Review each image before approving.`, true);
+      }
+      async function openReview() {
+        try {
+          if (window.showOpenFilePicker) {
+            const [handle] = await window.showOpenFilePicker({
+              types: [{ description: "Review JSON", accept: { "application/json": [".json"] } }],
+              multiple: false
+            });
+            await loadFile(await handle.getFile(), handle);
+          } else {
+            $("#file").click();
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") notice(error.message);
+        }
+      }
+      async function saveReview() {
+        if (!review) return;
+        try {
+          validate(review);
+          const payload = JSON.stringify(review, null, 2) + "\n";
+          if (window.showSaveFilePicker) {
+            const handle = fileHandle || await window.showSaveFilePicker({
+              suggestedName: fileName,
+              types: [{ description: "Review JSON", accept: { "application/json": [".json"] } }]
+            });
+            const stream = await handle.createWritable();
+            await stream.write(payload);
+            await stream.close();
+            fileHandle = handle;
+            dirty = false;
+            updateStatus();
+            notice("Saved review JSON.", true);
+          } else {
+            const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = fileName;
+            document.body.append(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            notice(`Downloaded ${fileName}. Replace the previous file in this corpus folder.`, true);
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") notice(error.message);
+        }
+      }
+      for (const [key, title] of questions) {
+        const label = document.createElement("label");
+        label.className = "field";
+        const heading = document.createElement("span");
+        heading.textContent = `${key.toUpperCase()} · ${title}`;
+        const area = document.createElement("textarea");
+        area.setAttribute("aria-label", heading.textContent);
+        area.disabled = true;
+        area.addEventListener("input", () => {
+          const image = review.images[index];
+          image.facts[key] = area.value.split("\n").map(value => value.trim()).filter(Boolean);
+          if (image.approved) {
+            image.approved = false;
+            $("#approved").checked = false;
+          }
+          markDirty();
+          notice("Facts changed. Check all seven answers before approving.");
+        });
+        label.append(heading, area);
+        $("#fields").append(label);
+        fields.set(key, area);
+      }
+      for (const [position, candidate] of metadata.images.entries()) {
+        const option = document.createElement("option");
+        option.value = String(position);
+        option.textContent = candidate.id;
+        $("#image-select").append(option);
+      }
+      $("#image-select").addEventListener("change", event => { index = Number(event.target.value); render(); });
+      $("#previous").addEventListener("click", () => { index--; render(); });
+      $("#next").addEventListener("click", () => { index++; render(); });
+      $("#reviewer").addEventListener("input", event => {
+        const image = review.images[index];
+        reviewerName = event.target.value.trim();
+        image.approved_by = reviewerName || null;
+        if (image.approved) {
+          image.approved = false;
+          $("#approved").checked = false;
+        }
+        markDirty();
+      });
+      $("#approved").addEventListener("change", event => {
+        const image = review.images[index];
+        if (event.target.checked) {
+          image.approved_by = $("#reviewer").value.trim() || null;
+          if (!image.approved_by || questions.some(([key]) => image.facts[key].length === 0)) {
+            event.target.checked = false;
+            notice("Enter a reviewer name and at least one fact for each question.");
+            return;
+          }
+        }
+        image.approved = event.target.checked;
+        markDirty();
+        notice(image.approved ? "Approved. Save the review JSON to keep this decision." : "Approval removed.", image.approved);
+      });
+      $("#open").addEventListener("click", openReview);
+      $("#file").addEventListener("change", async event => {
+        if (!event.target.files[0]) return;
+        try { await loadFile(event.target.files[0]); }
+        catch (error) { notice(error.message); }
+        event.target.value = "";
+      });
+      $("#save").addEventListener("click", saveReview);
+      window.addEventListener("beforeunload", event => {
+        if (dirty) { event.preventDefault(); event.returnValue = ""; }
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

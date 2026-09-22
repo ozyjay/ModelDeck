@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,14 @@ def test_candidate_cannot_run_until_individual_image_and_label_approval(tmp_path
     with pytest.raises(ValueError):
         Corpus.model_validate_json(candidate.read_text())
     assert "<script>" not in (output / "review.html").read_text()
+    editor = (output / "review-editor.html").read_text()
+    metadata_match = re.search(r'<script id="corpus-metadata" type="application/json">(.*?)</script>', editor)
+    assert metadata_match is not None
+    metadata = json.loads(metadata_match.group(1))
+    template = json.loads((output / "review-template.json").read_text())
+    assert metadata["candidate_sha256"] == template["candidate_sha256"]
+    assert len(metadata["images"]) == 28
+    assert "Test fixture" not in editor
     review_path = output / "review-template.json"
     with pytest.raises(ValueError, match="approval"):
         module.approve(candidate, review_path, output / "corpus.json")

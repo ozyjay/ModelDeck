@@ -4,6 +4,7 @@ param(
     [string]$Sources,
     [string]$Candidate,
     [string]$Review,
+    [switch]$Editor,
     [Parameter(Mandatory)][string]$Output
 )
 $ErrorActionPreference = 'Stop'
@@ -13,5 +14,6 @@ if ($Plan) { $Arguments += @('--plan', $Plan) }
 if ($Sources) { $Arguments += @('--sources', $Sources) }
 if ($Candidate) { $Arguments += @('--candidate', $Candidate) }
 if ($Review) { $Arguments += @('--review', $Review) }
+if ($Editor) { $Arguments += '--editor' }
 & .venv/bin/python @Arguments
 if ($LASTEXITCODE -ne 0) { throw 'SceneChat corpus preparation or approval import failed.' }

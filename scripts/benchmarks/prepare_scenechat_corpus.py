@@ -110,6 +110,24 @@ def prepare(plan_path: Path, sources_path: Path, output: Path) -> None:
         + "</main></html>"
     )
     (output / "review.html").write_text(page)
+    write_review_editor(candidate, output)
+
+
+def write_review_editor(candidate: dict, output: Path) -> None:
+    """Place the offline editor beside its images with a fixed candidate identity."""
+    for image in candidate["images"]:
+        if not re.fullmatch(r"[a-z0-9_-]+", image["id"]) or image["path"] != f"images/{image['id']}.jpg":
+            raise ValueError("Editor images must use the prepared local JPEG paths")
+    template = Path(__file__).with_name("scenechat_review_editor.html").read_text()
+    metadata = {
+        "candidate_sha256": digest(candidate),
+        "images": [
+            {key: image[key] for key in ("id", "sha256", "path", "category", "split")}
+            for image in candidate["images"]
+        ],
+    }
+    embedded = json.dumps(metadata, ensure_ascii=False).replace("<", "\\u003c")
+    (output / "review-editor.html").write_text(template.replace("__CORPUS_REVIEW_METADATA__", embedded))
 
 
 def approve(candidate_path: Path, review_path: Path, output: Path) -> None:
@@ -149,14 +167,19 @@ def main() -> None:
     parser.add_argument("--sources", type=Path)
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--review", type=Path)
+    parser.add_argument("--editor", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if args.candidate and args.review and not args.plan and not args.sources:
+    if args.editor and args.candidate and not args.review and not args.plan and not args.sources:
+        if args.output.resolve() != args.candidate.parent.resolve():
+            parser.error("The editor must be placed beside its candidate and images")
+        write_review_editor(json.loads(args.candidate.read_text()), args.output)
+    elif args.candidate and args.review and not args.editor and not args.plan and not args.sources:
         approve(args.candidate, args.review, args.output)
-    elif args.plan and args.sources and not args.candidate and not args.review:
+    elif args.plan and args.sources and not args.editor and not args.candidate and not args.review:
         prepare(args.plan, args.sources, args.output)
     else:
-        parser.error("Supply plan/sources for preparation, or candidate/review for approved manifest import")
+        parser.error("Supply plan/sources, candidate/review, or candidate/editor")
 
 
 if __name__ == "__main__":

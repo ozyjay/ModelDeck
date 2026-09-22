@@ -176,6 +176,12 @@ includes originals, 1280 × 720 JPEGs, hashes, exact generation prompts and a
 gallery out of model development because it includes holdout. Synthetic results
 are evidence for these scenes; they do not establish unrestricted camera accuracy.
 
+For editing, open `review-editor.html` in the same directory with a Chromium-family
+browser and load `review-by-jase.json` (or a copy of `review-template.json`). The editor
+shows the image beside the seven answer fields, opens at the first pending approval,
+and saves the reviewed JSON. Save regularly; on browsers without direct file access,
+move the downloaded replacement into this directory before importing it.
+
 Copy the review template to a review file, correct question-specific facts against
 the pixels, and have the operator fill each image's `approved_by` and `approved`
 fields. Import that actual review without editing the candidate receipt:
