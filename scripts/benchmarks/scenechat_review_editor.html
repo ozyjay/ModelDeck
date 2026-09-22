@@ -13,6 +13,7 @@
     button:hover { background: #e7eef3; }
     button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #1673a7; outline-offset: 2px; }
     button:disabled { opacity: .45; cursor: default; }
+    textarea:disabled { background: #edf0f2; cursor: not-allowed; }
     .primary { background: #12618b; border-color: #12618b; color: white; }
     .primary:hover { background: #0c4e70; }
     header { padding: 1rem 1.5rem; background: #183548; color: white; }
@@ -35,6 +36,7 @@
     #progress { margin-left: auto; font-weight: 600; }
     .editor h2 { margin: 0 0 .2rem; font-size: 1.2rem; }
     .editor > p { margin: 0 0 .8rem; }
+    .load-hint { padding: .7rem; border-radius: .4rem; background: #fff0c9; color: #553b00; }
     .field { display: block; margin: .8rem 0; font-weight: 600; }
     .field span { display: block; margin-bottom: .25rem; }
     textarea { display: block; width: 100%; min-height: 4.5rem; resize: vertical; border: 1px solid #9baab2; border-radius: .4rem; padding: .5rem; font-weight: 400; }
@@ -71,6 +73,7 @@
     </section>
     <section class="editor" aria-label="Factual labels">
       <h2>Review the facts</h2>
+      <p id="load-hint" class="load-hint">First click <strong>Open review JSON</strong> above and choose <strong>review-by-jase.json</strong> from this corpus folder. The fields will unlock when it loads.</p>
       <p class="muted">Put each separate fact on its own line. Leave uncertainty explicit. Editing an approved image removes its approval until you check it again.</p>
       <div id="fields"></div>
       <div class="approval">
@@ -146,6 +149,7 @@
       function render() {
         const candidate = metadata.images[index];
         const image = review?.images[index];
+        $("#load-hint").hidden = Boolean(review);
         $("#image-id").textContent = candidate.id;
         $("#image-meta").textContent = `${candidate.category.replaceAll("_", " ")} · ${candidate.split}`;
         $("#image").src = candidate.path;
@@ -166,11 +170,11 @@
         notice(image?.approved ? "Approved by " + image.approved_by : "Approval pending.", Boolean(image?.approved));
         updateStatus();
       }
-      async function loadFile(file, handle = null) {
+      async function loadFile(file) {
         if (dirty && !window.confirm("Discard unsaved changes and open another review file?")) return;
         const data = validate(JSON.parse(await file.text()));
         review = data;
-        fileHandle = handle;
+        fileHandle = null;
         fileName = file.name;
         reviewerName = data.images.find(image => image.approved_by)?.approved_by || "";
         index = Math.max(0, data.images.findIndex(image => !image.approved));
@@ -178,21 +182,7 @@
         render();
         notice(`Loaded ${file.name}. Review each image before approving.`, true);
       }
-      async function openReview() {
-        try {
-          if (window.showOpenFilePicker) {
-            const [handle] = await window.showOpenFilePicker({
-              types: [{ description: "Review JSON", accept: { "application/json": [".json"] } }],
-              multiple: false
-            });
-            await loadFile(await handle.getFile(), handle);
-          } else {
-            $("#file").click();
-          }
-        } catch (error) {
-          if (error.name !== "AbortError") notice(error.message);
-        }
-      }
+      function openReview() { $("#file").click(); }
       async function saveReview() {
         if (!review) return;
         try {
@@ -232,6 +222,7 @@
         heading.textContent = `${key.toUpperCase()} · ${title}`;
         const area = document.createElement("textarea");
         area.setAttribute("aria-label", heading.textContent);
+        area.placeholder = "Open review JSON to edit";
         area.disabled = true;
         area.addEventListener("input", () => {
           const image = review.images[index];

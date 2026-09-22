@@ -15,9 +15,10 @@ does not establish accuracy on all real-world camera scenes.
 For a visual editing workflow, open `var/corpora/scenechat-synthetic-v1/review-editor.html`
 in a Chromium-family browser, then open `review-by-jase.json` in the page. Edit the seven
 plain-language answer fields, enter your name, and approve each image after checking it.
-Save the review JSON regularly. Where the browser supports direct file access, Save writes
-to the opened file; otherwise it downloads a replacement JSON file which must be moved
-beside the candidate manifest and images. The editor checks the candidate and image hashes
+Save the review JSON regularly. Where the browser supports direct file access, choose the
+review JSON as the save destination the first time; later saves use that file. Otherwise
+the browser downloads a replacement JSON file which must be moved beside the candidate
+manifest and images. The editor checks the candidate and image hashes
 before opening a review. It does not submit data to a service or import an approved corpus.
 
 The preparation script creates this editor for new candidate sets. To recreate the editor
